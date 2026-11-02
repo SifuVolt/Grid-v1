@@ -155,17 +155,19 @@ def _support_target(
     state: GameState,
     player: PlayerState,
 ) -> Vec3:
-    """Position behind and slightly to the side of the active challenge."""
+    """Keep second man behind and offset from the active challenge."""
     ball = state.ball.location
     attack = _attack_direction(state.team)
 
-    behind = ball - attack * SUPPORT_DISTANCE
+    # Stay behind the ball rather than driving directly toward it.
+    behind = ball - attack * 2200.0
 
-    side = -1.0 if player.location.x >= ball.x else 1.0
+    # Keep the support player on their existing side of the play.
+    side = 1.0 if player.location.x >= ball.x else -1.0
 
     return Vec3(
-        clamp(behind.x + side * 450.0, -3500.0, 3500.0),
-        behind.y,
+        clamp(behind.x + side * 1100.0, -3500.0, 3500.0),
+        clamp(behind.y, -4700.0, 4700.0),
         17.0,
     )
 
