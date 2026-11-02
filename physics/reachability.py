@@ -29,13 +29,12 @@ from .vehicle import (
     BOOST_CONSUMPTION,
     THROTTLE_ACCELERATION,
     BRAKE_ACCELERATION,
+    estimate_turn_time,
 )
 from .steering import (
     signed_angle_to,
-    turning_radius,
-    estimate_turn_time,
 )
-
+from .turning import turn_radius as turning_radius
 
 # ---------------------------------------------------------------------------
 # Reachability constants
@@ -368,7 +367,7 @@ def estimate_reachability(
 
     turn_time = 0.0
     if include_turn:
-        turn_time = estimate_turn_time(vehicle, angle)
+        turn_time = estimate_turn_time(angle, vehicle.flat_speed)
         turn_time *= TURN_TIME_MULTIPLIER
 
     # When the target is substantially behind the car, account for the
