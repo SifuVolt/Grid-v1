@@ -81,6 +81,7 @@ class Debug:
         key: str,
         message: str,
         interval: float | None = None,
+        force: bool = False,
     ) -> None:
         """Print a repeated event at most once per interval."""
         if not self.config.enabled:
@@ -95,9 +96,8 @@ class Debug:
 
         previous = self._last_events.get(key, 0.0)
 
-        if now - previous < interval:
+        if not force and now - previous < interval:
             return
-
         self._last_events[key] = now
         self._print("EVENT", message)
 
