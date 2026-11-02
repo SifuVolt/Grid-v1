@@ -420,7 +420,7 @@ class Save:
                 dt=dt,
             )
 
-            if aerial_output.finished:
+            if not aerial_output.active:
                 self.phase = SavePhase.FINISHED
                 self.active = False
                 self.finished = True
