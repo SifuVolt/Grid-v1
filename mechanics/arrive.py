@@ -26,8 +26,15 @@ class ArrivePhase(Enum):
     FINISHED = "finished"
     FAILED = "failed"
     INTERRUPTED = "interrupted"
+    COMPLETE = "finished"
+    ABORTED = "failed"
 
-
+@dataclass
+class ArriveConfig:
+    allow_flipping: bool = False
+    allow_boost: bool = True
+    recovery_time: float = 0.0
+    arrival_radius: float = 100.0
 @dataclass
 class ArriveOutput:
     throttle: float = 0.0
@@ -93,7 +100,7 @@ class Arrive:
 
     def __init__(
         self,
-        target: Vec3 | None = None,
+        target: Vec3 | ArriveConfig | None = None,
         arrival_time: float | None = None,
         direction: Vec3 | None = None,
         *,
@@ -102,6 +109,15 @@ class Arrive:
         recovery_time: float = 0.0,
         arrival_radius: float = 100.0,
     ):
+        config = target if isinstance(target, ArriveConfig) else None
+
+        if config is not None:
+            target = None
+            allow_flipping = config.allow_flipping
+            allow_boost = config.allow_boost
+            recovery_time = config.recovery_time
+            arrival_radius = config.arrival_radius
+
         self.target = target
         self.direction = direction
         self.arrival_time = arrival_time
@@ -121,10 +137,48 @@ class Arrive:
         self.time_remaining = 0.0
         self.distance_remaining = 0.0
 
-        self.shifted_target: Vec3 | None = None
-        self.drive: Drive | None = None
+        self.shifted_target = None
+        self.drive = None
         self.last_output = ArriveOutput()
+        self._absolute_arrival_time = False
+    @property
 
+    def active(self) -> bool:
+        return self.started and not self.is_finished()
+
+
+    @property
+    def eta(self) -> float:
+        return max(0.0, self.time_remaining)
+
+
+    def reset(self) -> None:
+        self.phase = ArrivePhase.IDLE
+        self.started = False
+        self.finished = False
+        self.failed = False
+        self.interrupted = False
+        self.elapsed = 0.0
+        self.time_remaining = 0.0
+        self.distance_remaining = 0.0
+        self.shifted_target = None
+        self.drive = None
+        self.last_output = ArriveOutput()
+        self._absolute_arrival_time = False
+
+
+    def abort(self, reason: str = "arrival aborted") -> None:
+        self.failed = True
+        self.phase = ArrivePhase.FAILED
+
+        if self.drive is not None:
+            self.drive.interrupt()
+
+        self.last_output = ArriveOutput(
+            failed=True,
+            phase=self.phase,
+            reason=reason,
+        )
     @property
     def interruptible(self) -> bool:
         if self.finished or self.failed or self.interrupted:
@@ -143,12 +197,23 @@ class Arrive:
         direction: Vec3 | None = None,
         *,
         allow_boost: bool | None = None,
+        intercept_time: float | None = None,
     ) -> ArriveOutput:
         """Start or restart the arrival action.
 
         arrival_time is a duration in seconds from now.
         """
+        # Compatibility with shot routines that call:
+        # start(car, target, direction, intercept_time=...)
+        if isinstance(arrival_time, Vec3):
+            if direction is None:
+                direction = arrival_time
+            arrival_time = intercept_time
 
+        elif intercept_time is not None:
+            arrival_time = intercept_time
+
+        self._absolute_arrival_time = False
         if target is not None:
             self.target = target
 
