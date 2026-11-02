@@ -287,7 +287,10 @@ def steering_angle(
     """Return signed flat angle from forward to target direction."""
 
     return _signed_angle(forward, target_direction)
-
+def signed_angle_to(car, target: Vec3) -> float:
+    """Return the signed flat angle from the car's forward direction to a target."""
+    target_direction = Vec3.from_value(target) - car.location
+    return _signed_angle(_get_forward(car), target_direction)
 
 def pd_steer(
     angle: float,
