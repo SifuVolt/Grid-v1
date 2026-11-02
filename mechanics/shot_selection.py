@@ -47,15 +47,15 @@ class ShotSelectionConfig:
 
     contact_offset: float = 165.0
 
-    ground_height: float = 170.0
+    ground_height: float = 60.0
     jump_height: float = 350.0
     double_jump_height: float = 650.0
 
     safety_margin: float = 0.10
     maximum_contact_distance: float = 5000.0
 
-    time_weight: float = 1.0
-    margin_weight: float = 1.5
+    time_weight: float = 1.5
+    margin_weight: float = 0.75
     alignment_weight: float = 0.45
     goal_progress_weight: float = 0.00015
     boost_cost_weight: float = 0.015
