@@ -140,7 +140,7 @@ class JumpShot:
         self.target_location = Vec3(
             target_location.x,
             target_location.y,
-            car.location.z,
+            target_location.z,
         )
         self.shot_direction = direction
         self.dodge_direction = direction
