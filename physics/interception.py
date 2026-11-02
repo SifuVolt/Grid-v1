@@ -1,11 +1,11 @@
-
 """Grid interception and arrival-time estimation.
 
-Inspired by Party Cannon's InterceptCalculator and Noob Black's
-prediction-based interception routines.
+The estimator follows the broad approach used by Party Cannon's
+InterceptCalculator: estimate turn time, integrate acceleration/boost,
+then compare arrival time with sampled ball prediction.
 
-Supports both physics.trajectory.Trajectory and
-physics.ball_prediction.BallPrediction through their shared sample API.
+This module is deliberately self-contained and keeps the public API used
+by Grid's existing mechanics.
 """
 
 from __future__ import annotations
@@ -23,13 +23,13 @@ BOOST_ACCEL = 991.666
 BOOST_CONSUMPTION = 33.333
 THROTTLE_ACCEL = 1600.0
 MAX_THROTTLE_SPEED = 1410.0
+MAX_REVERSE_SPEED = 1400.0
 MAX_TURNING_SPEED = 1800.0
 
+# Speed gain from boost, measured from an initial speed of zero.
+# These are increments, not absolute final speeds.
 BOOST_SPEEDS = (0.0, 500.0, 1000.0, 1410.0, 1800.0, 2000.0, 2300.0)
 BOOST_TIMES = (0.0, 0.5, 1.0, 1.4, 1.8, 2.1, 2.4)
-
-THROTTLE_SPEEDS = (0.0, 500.0, 1000.0, 1410.0)
-THROTTLE_TIMES = (0.0, 0.8, 1.6, 2.5)
 
 
 @dataclass
@@ -86,26 +86,65 @@ class InterceptAdvantage:
         return self.our_best_time < self.opponent_best_time - 0.1
 
 
-def _interpolate_speed(
+def _interpolate_speed_gain(
     times: tuple[float, ...],
-    speeds: tuple[float, ...],
+    gains: tuple[float, ...],
     target_time: float,
-    base_speed: float,
 ) -> float:
-    if target_time <= 0:
-        return base_speed
+    """Interpolate the boost speed-gain curve, clamped to its endpoints."""
+    if not times or not gains:
+        return 0.0
+    if target_time <= times[0]:
+        return gains[0]
+    if target_time >= times[-1]:
+        return gains[-1]
 
     for i in range(len(times) - 1):
         if target_time <= times[i + 1]:
-            fraction = (
-                (target_time - times[i])
-                / (times[i + 1] - times[i])
-            )
-            return base_speed + speeds[i] + fraction * (
-                speeds[i + 1] - speeds[i]
-            )
+            span = max(times[i + 1] - times[i], 1e-6)
+            fraction = (target_time - times[i]) / span
+            return gains[i] + (gains[i + 1] - gains[i]) * fraction
 
-    return base_speed + speeds[-1]
+    return gains[-1]
+
+
+def _speed_after_boost(base_speed: float, boost_time: float) -> float:
+    """Approximate forward speed after boosting for ``boost_time`` seconds."""
+    gain = _interpolate_speed_gain(BOOST_TIMES, BOOST_SPEEDS, boost_time)
+    return clamp(base_speed + gain, 0.0, MAX_SPEED)
+
+
+def _boost_distance(base_speed: float, duration: float) -> float:
+    """Integrate the capped boost-speed curve with trapezoidal samples."""
+    if duration <= 0.0:
+        return 0.0
+
+    # Integrate at no more than 50 ms spacing. Include curve breakpoints so
+    # the piecewise-linear speed model is not sampled across sharp changes.
+    points = {0.0, duration}
+    points.update(t for t in BOOST_TIMES if 0.0 < t < duration)
+    count = max(1, int(duration / 0.05))
+    points.update(duration * i / count for i in range(1, count))
+
+    ordered = sorted(points)
+    distance = 0.0
+    for left, right in zip(ordered, ordered[1:]):
+        v0 = _speed_after_boost(base_speed, left)
+        v1 = _speed_after_boost(base_speed, right)
+        distance += (v0 + v1) * 0.5 * (right - left)
+    return distance
+
+
+def _boost_time_for_distance(base_speed: float, distance: float, max_time: float) -> float:
+    """Find the earliest boost time that covers a given distance."""
+    low, high = 0.0, max_time
+    for _ in range(24):
+        middle = (low + high) * 0.5
+        if _boost_distance(base_speed, middle) >= distance:
+            high = middle
+        else:
+            low = middle
+    return high
 
 
 def _solve_time_for_distance(
@@ -113,28 +152,22 @@ def _solve_time_for_distance(
     acceleration: float,
     distance: float,
 ) -> float:
-    if distance <= 0:
+    if distance <= 0.0:
         return 0.0
-
-    discriminant = initial_speed ** 2 + 2.0 * acceleration * distance
-
-    if discriminant <= 0:
+    if acceleration <= 1e-6:
         return distance / max(initial_speed, 400.0)
 
-    return (
-        -initial_speed + sqrt(discriminant)
-    ) / acceleration
+    discriminant = initial_speed * initial_speed + 2.0 * acceleration * distance
+    if discriminant <= 0.0:
+        return distance / max(initial_speed, 400.0)
+
+    return max(0.0, (-initial_speed + sqrt(discriminant)) / acceleration)
 
 
 def _turning_radius(speed: float) -> float:
+    """Party-Cannon-style speed-dependent turn-radius approximation."""
     speed = clamp(speed, 0.0, MAX_SPEED)
-
-    curvature = (
-        0.0069
-        - 6.19e-6 * speed
-        + 1.1e-8 * speed * speed
-    )
-
+    curvature = 0.0069 - 6.19e-6 * speed + 1.1e-8 * speed * speed
     return 1.0 / max(curvature, 0.001)
 
 
@@ -145,90 +178,66 @@ def estimate_time_directional(
     *,
     use_boost: bool = True,
 ) -> float:
-    """Estimate travel time using turn, boost and throttle phases."""
+    """Estimate travel time in forward or reverse.
 
+    The estimate includes a turn-time penalty, acceleration and a small
+    safety factor. Reverse travel never uses boost.
+    """
     direction = 1 if direction >= 0 else -1
-
     displacement = target - car.location
-    distance = displacement.length()
+    distance = displacement.flat_magnitude
 
     if distance < 100.0:
         return 0.0
 
-    forward = car.orientation.forward * direction
-    speed = max(car.velocity.dot(car.orientation.forward) * direction, 0.0)
-
-    target_direction = displacement.normalized()
+    forward = car.orientation.forward.flatten().normalized() * direction
+    target_direction = displacement.flatten().normalized()
     angle = forward.angle_to(target_direction)
 
-    turning_radius = _turning_radius(max(speed, 500.0))
-    turn_time = angle * turning_radius / MAX_TURNING_SPEED
+    signed_speed = car.velocity.dot(car.orientation.forward)
+    speed = max(signed_speed * direction, 0.0)
+    speed_cap = MAX_SPEED if direction > 0 else MAX_REVERSE_SPEED
+    speed = min(speed, speed_cap)
 
+    turn_time = angle * _turning_radius(max(speed, 500.0)) / MAX_TURNING_SPEED
     if angle < 0.5:
         turn_time = 0.0
 
     total_time = turn_time
     distance_left = max(0.0, distance - 200.0)
+    if distance_left <= 0.0:
+        return total_time
 
-    if distance_left <= 0:
-        return turn_time
-
-    if use_boost and direction > 0 and car.boost > 0:
-        boost_time = min(
-            car.boost / BOOST_CONSUMPTION,
-            BOOST_TIMES[-1],
-        )
-
-        speed_after_boost = _interpolate_speed(
-            BOOST_TIMES,
-            BOOST_SPEEDS,
-            boost_time,
-            speed,
-        )
-
-        boost_distance = (
-            (speed + speed_after_boost) * 0.5 * boost_time
-        )
+    if use_boost and direction > 0 and car.boost > 0.0 and speed < MAX_SPEED:
+        boost_time = min(car.boost / BOOST_CONSUMPTION, BOOST_TIMES[-1])
+        boost_distance = _boost_distance(speed, boost_time)
 
         if boost_distance >= distance_left:
-            return (
-                total_time
-                + _solve_time_for_distance(
-                    speed,
-                    BOOST_ACCEL,
-                    distance_left,
-                )
-            ) * 1.05
+            exact_time = _boost_time_for_distance(speed, distance_left, boost_time)
+            return (total_time + exact_time) * 1.05
 
         total_time += boost_time
         distance_left -= boost_distance
-        speed = speed_after_boost
+        speed = _speed_after_boost(speed, boost_time)
 
-    if speed < MAX_THROTTLE_SPEED and distance_left > 0:
-        throttle_time = (
-            MAX_THROTTLE_SPEED - speed
-        ) / THROTTLE_ACCEL
+    acceleration = THROTTLE_ACCEL
+    if direction > 0:
+        target_speed = MAX_THROTTLE_SPEED
+    else:
+        target_speed = MAX_REVERSE_SPEED
 
-        throttle_distance = (
-            speed * throttle_time
-            + 0.5 * THROTTLE_ACCEL * throttle_time ** 2
-        )
+    if speed < target_speed and distance_left > 0.0:
+        accel_time = (target_speed - speed) / acceleration
+        accel_distance = speed * accel_time + 0.5 * acceleration * accel_time * accel_time
 
-        if throttle_distance >= distance_left:
-            return (
-                total_time
-                + _solve_time_for_distance(
-                    speed,
-                    THROTTLE_ACCEL,
-                    distance_left,
-                )
-            ) * 1.05
+        if accel_distance >= distance_left:
+            return (total_time + _solve_time_for_distance(speed, acceleration, distance_left)) * 1.05
 
-        total_time += throttle_time
-        distance_left -= throttle_distance
-        speed = MAX_THROTTLE_SPEED
+        total_time += accel_time
+        distance_left -= accel_distance
+        speed = target_speed
 
-    if distance_left > 0:
+    if distance_left > 0.0:
         total_time += distance_left / max(speed, 800.0)
 
     return total_time * 1.05
@@ -241,37 +250,18 @@ def estimate_arrival_time(
     allow_backwards: bool = True,
     use_boost: bool = True,
 ) -> float:
-    """Estimate the fastest reasonable forward or reverse arrival."""
-
-    forward_eta = estimate_time_directional(
-        car,
-        target,
-        1,
-        use_boost=use_boost,
-    )
-
+    """Return the quickest sensible forward/reverse arrival estimate."""
+    forward_eta = estimate_time_directional(car, target, 1, use_boost=use_boost)
     if not allow_backwards:
         return forward_eta
 
-    reverse_speed = max(
-        -car.velocity.dot(car.orientation.forward),
-        0.0,
-    )
+    reverse_speed = max(-car.velocity.dot(car.orientation.forward), 0.0)
+    distance = (target - car.location).flat_magnitude
 
-    distance = (target - car.location).length()
-
-    if (
-        reverse_speed > 500.0
-        or distance < 300.0
-        or distance > 3000.0
-    ):
-        reverse_eta = estimate_time_directional(
-            car,
-            target,
-            -1,
-            use_boost=False,
-        ) + 0.5
-
+    # Only consider reverse when already moving backwards or when the target
+    # is close enough that a reverse turn can genuinely be competitive.
+    if reverse_speed > 500.0 or (300.0 <= distance <= 3000.0):
+        reverse_eta = estimate_time_directional(car, target, -1, use_boost=False) + 0.5
         return min(forward_eta, reverse_eta)
 
     return forward_eta
@@ -285,57 +275,43 @@ def sample_trajectory(
     minimum_height: float = BALL_RADIUS,
 ) -> list[tuple[float, Vec3, Vec3]]:
     """Sample predicted ball states at regular time intervals."""
-
     if trajectory is None:
         return []
 
-    duration = min(
-        float(getattr(trajectory, "duration", maximum_time)),
-        maximum_time,
-    )
-
-    if duration <= 0:
+    duration = min(float(getattr(trajectory, "duration", maximum_time)), maximum_time)
+    if duration <= 0.0:
         return []
 
-    samples = []
+    samples: list[tuple[float, Vec3, Vec3]] = []
+    sample_step = max(0.02, step)
     t = 0.0
 
     while t <= duration + 1e-6:
         position = trajectory.position_at(t)
         velocity = trajectory.velocity_at(t)
-
         if position is not None and velocity is not None:
             position = Vec3.from_value(position)
             velocity = Vec3.from_value(velocity)
-
             position = Vec3(
                 clamp(position.x, -FIELD_HALF_WIDTH, FIELD_HALF_WIDTH),
                 clamp(position.y, -FIELD_HALF_LENGTH, FIELD_HALF_LENGTH),
                 max(minimum_height, position.z),
             )
-
             samples.append((t, position, velocity))
-
-        t += max(0.02, step)
+        t += sample_step
 
     return samples
 
 
-def _contact_target(
-    position: Vec3,
-    car: VehicleState,
-) -> Vec3:
-    """Estimate a car-centre contact position behind the ball."""
-
-    direction = position - car.location
-
-    if direction.length() < 1e-5:
-        direction = car.orientation.forward
-
+def _contact_target(position: Vec3, car: VehicleState) -> Vec3:
+    """Estimate a car-centre contact point behind the ball."""
+    direction = (position - car.location).flatten()
+    if direction.flat_magnitude < 1e-5:
+        direction = car.orientation.forward.flatten()
     direction = direction.normalized()
-
-    # Approximate front-of-car contact offset.
-    return position - direction * 120.0
+    return Vec3(position.x - direction.x * 120.0,
+                position.y - direction.y * 120.0,
+                max(17.0, position.z - 35.0))
 
 
 def find_intercepts(
@@ -348,96 +324,57 @@ def find_intercepts(
     maximum_height: float = 1200.0,
     allow_aerial: bool = False,
 ) -> list[InterceptCandidate]:
-    """Find predicted ball samples the car can arrive at in time."""
-
+    """Find reachable predicted ball contacts and rank useful windows."""
     candidates: list[InterceptCandidate] = []
-
     for t, position, velocity in sample_trajectory(
-        trajectory,
-        step=step,
-        maximum_time=maximum_time,
+        trajectory, step=step, maximum_time=maximum_time
     ):
         if position.z > maximum_height and not allow_aerial:
             continue
 
         target = _contact_target(position, car)
         eta = estimate_arrival_time(car, target)
-
         margin = t - eta
-
         if margin < minimum_margin:
             continue
 
         aerial = position.z > 300.0
+        # Prefer an early usable touch, but value a modest setup margin.
+        # This avoids selecting an impossible razor-thin first contact.
+        useful_margin = min(max(margin, 0.0), 0.75)
+        score = t - useful_margin * 0.35 + max(0.0, position.z - 300.0) / 10000.0
 
-        # Prefer earlier contacts, but reward a useful arrival margin.
-        score = (
-            t
-            - min(max(margin, 0.0), 0.75) * 0.35
-            + max(0.0, position.z - 300.0) / 10000.0
-        )
-
-        candidates.append(
-            InterceptCandidate(
-                time=t,
-                position=position,
-                velocity=velocity,
-                arrival_time=eta,
-                margin=margin,
-                score=score,
-                aerial=aerial,
-                reachable=True,
-            )
-        )
+        candidates.append(InterceptCandidate(
+            time=t,
+            position=position,
+            velocity=velocity,
+            arrival_time=eta,
+            margin=margin,
+            score=score,
+            aerial=aerial,
+            reachable=True,
+        ))
 
     candidates.sort(key=lambda candidate: candidate.score)
     return candidates
 
 
-def find_earliest_intercept(
-    car: VehicleState,
-    trajectory,
-    **kwargs,
-) -> InterceptResult:
+def find_earliest_intercept(car: VehicleState, trajectory, **kwargs) -> InterceptResult:
     candidates = find_intercepts(car, trajectory, **kwargs)
-
     if not candidates:
-        return InterceptResult(
-            valid=False,
-            candidates=[],
-            reason="no reachable intercept",
-        )
-
-    return InterceptResult(
-        valid=True,
-        candidate=candidates[0],
-        candidates=candidates,
-        reason="earliest reachable intercept",
-    )
+        return InterceptResult(valid=False, candidates=[], reason="no reachable intercept")
+    best = min(candidates, key=lambda candidate: candidate.time)
+    return InterceptResult(valid=True, candidate=best, candidates=candidates,
+                           reason="earliest reachable intercept")
 
 
-def find_best_intercept(
-    car: VehicleState,
-    trajectory,
-    **kwargs,
-) -> InterceptResult:
+def find_best_intercept(car: VehicleState, trajectory, **kwargs) -> InterceptResult:
     candidates = find_intercepts(car, trajectory, **kwargs)
-
     if not candidates:
-        return InterceptResult(
-            valid=False,
-            candidates=[],
-            reason="no reachable intercept",
-        )
-
+        return InterceptResult(valid=False, candidates=[], reason="no reachable intercept")
     best = min(candidates, key=lambda candidate: candidate.score)
-
-    return InterceptResult(
-        valid=True,
-        candidate=best,
-        candidates=candidates,
-        reason="best scored intercept",
-    )
+    return InterceptResult(valid=True, candidate=best, candidates=candidates,
+                           reason="best scored intercept")
 
 
 def intercept_advantage(
@@ -448,43 +385,26 @@ def intercept_advantage(
     maximum_time: float = 3.0,
     step: float = 0.1,
 ) -> InterceptAdvantage:
-    """Compare the earliest reachable ball arrival for both teams."""
-
+    """Compare both teams' best arrival times over the same prediction samples."""
     result = InterceptAdvantage()
-
-    samples = sample_trajectory(
-        trajectory,
-        step=step,
-        maximum_time=maximum_time,
-    )
+    samples = sample_trajectory(trajectory, step=step, maximum_time=maximum_time)
 
     for t, position, _ in samples:
         for car in our_team:
-            eta = estimate_arrival_time(
-                car,
-                _contact_target(position, car),
-            )
-
+            eta = estimate_arrival_time(car, _contact_target(position, car))
             if eta <= t + 0.05 and eta < result.our_best_time:
                 result.our_best_time = eta
                 result.our_best_car = car
                 result.our_best_position = position
 
         for car in opponents:
-            eta = estimate_arrival_time(
-                car,
-                _contact_target(position, car),
-            )
-
+            eta = estimate_arrival_time(car, _contact_target(position, car))
             if eta <= t + 0.05 and eta < result.opponent_best_time:
                 result.opponent_best_time = eta
                 result.opponent_best_car = car
                 result.opponent_best_position = position
 
-        if (
-            result.our_best_car is not None
-            and result.opponent_best_car is not None
-        ):
+        if result.our_best_car is not None and result.opponent_best_car is not None:
             break
 
     return result
