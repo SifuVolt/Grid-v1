@@ -45,7 +45,7 @@ class GroundShotConfig:
     maximum_prediction_time: float = 2.5
     prediction_step: float = 0.10
 
-    maximum_ball_height: float = 300.0
+    maximum_ball_height: float = 170.0
     minimum_intercept_margin: float = -0.05
 
     contact_offset: float = 125.0
