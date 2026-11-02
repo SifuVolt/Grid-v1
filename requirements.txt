@@ -1,0 +1,2 @@
+# RLBot v5 Python interface. Install in the bot's virtual environment.
+rlbot==2.0.0b56
