@@ -120,6 +120,7 @@ class Aerial:
 
         self.start_boost = 0.0
         self.time_remaining = 0.0
+        self.deadline_active = False
         self.double_jump = False
         self.committed = False
 
@@ -190,6 +191,7 @@ class Aerial:
         self.start_location = car.location
         self.start_boost = car.boost
         self.time_remaining = max(0.0, float(time_remaining))
+        self.deadline_active = self.time_remaining > 0.0
 
         self.double_jump = (
             self.config.double_jump_enabled
@@ -228,6 +230,10 @@ class Aerial:
 
     def _approach(self, car: VehicleState) -> AerialOutput:
         assert self.target is not None
+
+        if self.deadline_active and self.time_remaining <= 0.08:
+            self.abort("not enough time left to launch")
+            return self._inactive_output()
 
         direction = self._target_direction(car)
         local = car.orientation.world_to_local(direction)
@@ -330,6 +336,10 @@ class Aerial:
     def _flight(self, car: VehicleState) -> AerialOutput:
         if self.target is None:
             self.abort("missing aerial target")
+            return self._inactive_output()
+
+        if self.deadline_active and self.time_remaining <= 0.0:
+            self.finish("aerial contact time expired")
             return self._inactive_output()
 
         direction = self._target_direction(car)
