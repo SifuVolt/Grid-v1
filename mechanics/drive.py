@@ -59,11 +59,11 @@ class DriveConfig:
     target_lock_time: float = 0.18
     max_speed: float = 2300.0
     min_speed: float = 400.0
-    boost_threshold: float = 80.0
-    boost_angle: float = 0.30
+    boost_threshold: float = 33
+    boost_angle: float = 0.38
     allow_boost: bool = True
     allow_handbrake: bool = True
-    allow_reverse: bool = True
+    allow_reverse: bool = False
     stop_on_arrival: bool = True
     target_speed: float | None = None
 
