@@ -40,7 +40,7 @@ from util.action_manager import (
 from util.debug import Debug, DebugConfig
 from util.game_state import GameState
 from util.teamplay import TeamRole, get_team_decision
-
+import traceback
 
 SHOT_SCAN_INTERVAL = 0.22
 SHOT_COOLDOWN = 0.30
@@ -706,11 +706,8 @@ class GridAgent(Bot):
             return self._controls_from_output(drive_output)
 
         except Exception as exc:
-            self.debug.exception("Grid agent tick failed", exc)
-            print(
-                f"[GRID][ERROR] frame={self.frame}: {exc}",
-                flush=True,
-            )
+            print(f"[GRID][ERROR] Grid agent tick failed: {type(exc).__name__}: {exc}", flush=True)
+            traceback.print_exc()
             return self._controller()
 
 
