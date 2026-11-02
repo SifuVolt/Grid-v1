@@ -298,7 +298,6 @@ class Save:
             started = self.aerial.start(
                 car,
                 target=self.target,
-                intercept_time=max(0.2, self.threat.time),
             )
 
             if started:
