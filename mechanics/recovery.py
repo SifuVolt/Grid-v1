@@ -122,8 +122,14 @@ class Recovery:
     @staticmethod
     def _upright_error(car: VehicleState) -> Vec3:
         """World-space rotation axis needed to make the car upright."""
-
         current_up = car.orientation.up.normalized()
+        alignment = current_up.dot(UP)
+
+        # The cross product is zero at exactly 180 degrees.
+        # Force a roll around the car's forward axis in that case.
+        if alignment < -0.95:
+            return car.orientation.forward.normalized() * pi
+
         return current_up.cross(UP)
 
     @staticmethod
