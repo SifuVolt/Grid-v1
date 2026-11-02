@@ -462,7 +462,7 @@ class Drive:
             target_speed=desired_speed,
             reason=(
                 "reverse approach" if self.backwards
-                else slide.reason if handbrake
+                else "powersliding" if handbrake
                 else "turning" if angle > 0.5
                 else "driving toward target"
             ),
