@@ -111,27 +111,25 @@ def _predict_car_state(
 ) -> tuple[Vec3, Vec3]:
     """Predict car position and velocity before aerial acceleration."""
 
-    gravity = Vec3(0.0, 0.0, -config.gravity)
-
-    position = (
-        car.location
-        + car.velocity * time_remaining
-        + gravity * (0.5 * time_remaining * time_remaining)
-    )
-
-    velocity = car.velocity + gravity * time_remaining
-
     if car.on_ground:
+        # simulate_jump already integrates gravity. Do not add a second
+        # world-gravity trajectory on top of the jump trajectory.
         jump_height, jump_velocity = _jump_displacement(
             time_remaining,
             double_jump,
             config,
         )
-
         up = car.orientation.up
-
-        position = position + up * jump_height
-        velocity = velocity + up * jump_velocity
+        position = car.location + car.velocity * time_remaining + up * jump_height
+        velocity = car.velocity + up * jump_velocity
+    else:
+        gravity = Vec3(0.0, 0.0, -config.gravity)
+        position = (
+            car.location
+            + car.velocity * time_remaining
+            + gravity * (0.5 * time_remaining * time_remaining)
+        )
+        velocity = car.velocity + gravity * time_remaining
 
     return position, velocity
 

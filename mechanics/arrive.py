@@ -257,7 +257,7 @@ class Arrive:
                 target_speed=2300.0,
                 allow_boost=self.allow_boost,
                 allow_handbrake=True,
-                allow_reverse=True,
+                allow_reverse=False,
             ),
             self.shifted_target,
         )
@@ -464,7 +464,7 @@ class Arrive:
             dt=dt,
             allow_boost=self.allow_boost,
             target_speed=desired_speed,
-            force_target=True,
+            force_target=False,
         )
 
         self.last_output = ArriveOutput.from_drive(

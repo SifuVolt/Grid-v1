@@ -21,11 +21,11 @@ from math import acos, atan2, cos, hypot, pi, sin
 from physics.math3d import Vec3, clamp
 from physics.turning import (
     calculate_turn,
-    powerslide_decision,
     speed_after_turn,
     speed_from_turn_radius,
     turn_radius,
 )
+from physics.noob_black_drive import steer_toward_target
 
 
 class DriveStatus(Enum):
@@ -370,67 +370,36 @@ class Drive:
             speed_cap,
         )
 
-        # Estimate a practical speed for the required turn.
-        # Short, sharp turns require a smaller radius and lower speed.
-        sine = abs(sin(angle * 0.5))
-
-        if sine > 0.05:
-            required_radius = distance / (2.0 * sine)
-        else:
-            required_radius = turn_radius(speed)
-
-        required_radius = clamp(
-            required_radius,
-            145.0,
-            1136.0,
-        )
-
-        corner_speed = speed_from_turn_radius(required_radius)
-
-        if angle > 0.35:
-            corner_speed = min(
-                corner_speed,
-                speed_after_turn(
-                    speed,
-                    angle,
-                    0.65,
-                ),
-            )
-
-        desired_speed = min(
-            requested_speed,
-            max(self.config.min_speed, corner_speed),
-        )
-
-        # Avoid slowing down unnecessarily for a distant,
-        # shallow adjustment.
-        if angle < 0.25:
-            desired_speed = requested_speed
-
+        # Noob Black drives toward the car-relative target instead of
+        # braking simply because the target is at a large steering angle.
+        desired_speed = requested_speed
         if self.backwards:
             desired_speed = min(desired_speed, 1000.0)
 
-        # Steering proportional to angular error.
-        steer = _command_value(
-            signed_steering_angle * 2.5
-        )
+        # Port of Noob Black 425's relative-location steering:
+        # atan2(local_y, local_x) * 5, clamped to controller range.
+        steer = steer_toward_target(car, target)
 
-        # Bumblebee-inspired powerslide conditions, with the
-        # additional restriction that the car must be grounded.
-        slide = powerslide_decision(
-            forward=forward,
-            velocity=velocity,
-            target_direction=direction,
-            grounded=grounded,
-            height=height,
-            distance_to_target=distance,
-            steer=steer,
+        # Noob Black only powerslides while already rotating, moving
+        # toward the target, and making a close/sharp approach.
+        angular_velocity = getattr(car, "angular_velocity", Vec3())
+        angular_speed = angular_velocity.length()
+        velocity_direction = _unit(velocity)
+        velocity_alignment = clamp(velocity_direction.dot(forward), -1.0, 1.0)
+        velocity_angle = acos(velocity_alignment)
+        moving_toward_target = velocity_direction.dot(direction) >= 0.0
+        slide_condition = (
+            angle > pi / 4.0
+            and distance <= 1000.0 + speed
+            and moving_toward_target
         )
-
         handbrake = (
             self.config.allow_handbrake
             and not self.backwards
-            and slide.allowed
+            and slide_condition
+            and velocity_angle <= pi / 4.0
+            and angular_speed > min(1.5, speed / 700.0)
+            and grounded
         )
 
         # Speed controller.
@@ -450,17 +419,16 @@ class Drive:
         elif speed_error > 70.0:
             throttle = 1.0
         elif speed_error < -400.0:
-            throttle = -1.0
+            # Negative throttle brakes at speed; do not keep reversing
+            # through a turn after the car has already slowed down.
+            throttle = -0.5 if speed > 700.0 else 0.0
         elif speed_error < -100.0:
             throttle = 0.0
         else:
             throttle = 0.15 if speed_error > 0.0 else 0.0
 
-        # When a sharp turn is required, brake rather than
-        # continuing to accelerate into the corner.
-        if not self.backwards and angle > 1.1:
-            if speed > desired_speed + 100.0:
-                throttle = -1.0
+        # Steering angle alone is not a reason to brake. Only brake
+        # when actually over the requested speed.
 
         can_boost = (
             self.config.allow_boost

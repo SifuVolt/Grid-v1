@@ -222,8 +222,9 @@ def _select_reachable_mechanic(
                 "ground contact reachable",
             )
 
-    # Jump and double-jump need time after the ground approach.
-    if jump_time_budget > 0:
+    # Use the configured height bands, as Party Cannon does when
+    # deciding which aerial/jump family should be considered.
+    if jump_time_budget > 0 and height <= config.jump_height:
         single = estimate_jump_reachability(
             car.location,
             contact,
@@ -231,7 +232,6 @@ def _select_reachable_mechanic(
             available_time=jump_time_budget,
             double_jump=False,
         )
-
         if single.reachable:
             return (
                 ShotType.JUMP,
@@ -239,6 +239,7 @@ def _select_reachable_mechanic(
                 "single jump contact reachable",
             )
 
+    if jump_time_budget > 0 and height <= config.double_jump_height:
         double = estimate_jump_reachability(
             car.location,
             contact,
@@ -246,7 +247,6 @@ def _select_reachable_mechanic(
             available_time=jump_time_budget,
             double_jump=True,
         )
-
         if double.reachable:
             return (
                 ShotType.DOUBLE_JUMP,
@@ -254,21 +254,22 @@ def _select_reachable_mechanic(
                 "double jump contact reachable",
             )
 
-    # For higher contacts, use the full 3D aerial estimate.
+    # Party Cannon checks the aerial as its own mechanic rather than
+    # requiring a failed ground-height heuristic to decide the target type.
     aerial = estimate_aerial_reachability(
         car,
         contact,
         sample_time,
         double_jump=False,
     )
-
-    if aerial.reachable:
-        if aerial.estimated_boost + config.minimum_boost_reserve <= car.boost:
-            return (
-                ShotType.AERIAL,
-                aerial.estimated_boost,
-                "aerial contact reachable",
-            )
+    if aerial.reachable and (
+        aerial.estimated_boost + config.minimum_boost_reserve <= car.boost
+    ):
+        return (
+            ShotType.AERIAL,
+            aerial.estimated_boost,
+            "aerial contact reachable",
+        )
 
     double_aerial = estimate_aerial_reachability(
         car,
@@ -276,18 +277,14 @@ def _select_reachable_mechanic(
         sample_time,
         double_jump=True,
     )
-
-    if double_aerial.reachable:
-        if (
-            double_aerial.estimated_boost
-            + config.minimum_boost_reserve
-            <= car.boost
-        ):
-            return (
-                ShotType.AERIAL,
-                double_aerial.estimated_boost,
-                "double-jump aerial contact reachable",
-            )
+    if double_aerial.reachable and (
+        double_aerial.estimated_boost + config.minimum_boost_reserve <= car.boost
+    ):
+        return (
+            ShotType.AERIAL,
+            double_aerial.estimated_boost,
+            "double-jump aerial contact reachable",
+        )
 
     return None
 

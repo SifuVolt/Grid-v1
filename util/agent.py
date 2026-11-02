@@ -466,6 +466,7 @@ class GridAgent(Bot):
         candidate = plan.best
         if not plan.valid or candidate is None:
             self.last_shot_reason = plan.reason
+            print(f"[GRID SHOT] no candidate: {plan.reason}", flush=True)
             return False
 
         target = candidate.contact_position
@@ -504,7 +505,13 @@ class GridAgent(Bot):
 
         elif candidate.shot_type == ShotType.AERIAL:
             action = self.aerial
-            if not action.start(car, target):
+            is_double_jump_aerial = candidate.reason.startswith("double-jump aerial")
+            if not action.start(
+                car,
+                target,
+                double_jump=is_double_jump_aerial,
+                time_remaining=candidate.contact_time,
+            ):
                 self.last_shot_reason = action.reason
                 return False
             updater = lambda c, step: action.update(c, step)
@@ -529,6 +536,13 @@ class GridAgent(Bot):
         self.last_shot_reason = candidate.reason
         self.last_action = name
         self.last_target = target
+        print(
+            f"[GRID SHOT] selected={name} t={candidate.contact_time:.2f}s "
+            f"approach={candidate.arrival_time:.2f}s "
+            f"margin={candidate.arrival_margin:.2f}s "
+            f"boost={candidate.estimated_boost:.1f} reason={candidate.reason}",
+            flush=True,
+        )
         self.debug.event(
             "shot",
             f"Started {name}: t={candidate.contact_time:.2f}s "

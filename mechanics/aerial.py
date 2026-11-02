@@ -51,6 +51,8 @@ class AerialConfig:
 
     minimum_launch_height: float = 250.0
     minimum_boost: float = 8.0
+    boost_acceleration: float = 991.667
+    air_throttle_acceleration: float = 66.667
 
     boost_alignment_dot: float = 0.82
     boost_distance: float = 250.0
@@ -117,10 +119,16 @@ class Aerial:
         self.second_jump_frames = 0
 
         self.start_boost = 0.0
+        self.time_remaining = 0.0
         self.double_jump = False
         self.committed = False
 
         self.reason = ""
+
+    @property
+    def interruptible(self) -> bool:
+        # Party Cannon locks the action once it commits to the aerial phase.
+        return not self.committed
 
     @property
     def active(self) -> bool:
@@ -154,6 +162,7 @@ class Aerial:
         target: Vec3,
         *,
         double_jump: bool | None = None,
+        time_remaining: float = 0.0,
     ) -> bool:
         """Begin an aerial attempt."""
 
@@ -180,6 +189,7 @@ class Aerial:
         self.target = target
         self.start_location = car.location
         self.start_boost = car.boost
+        self.time_remaining = max(0.0, float(time_remaining))
 
         self.double_jump = (
             self.config.double_jump_enabled
@@ -344,18 +354,27 @@ class Aerial:
             config=self.air_config,
         )
 
-        alignment = car.orientation.forward.dot(direction)
+        forward = car.orientation.forward.normalized()
+        offset = self.target - car.location
+        remaining = max(self.time_remaining, 1.0 / 120.0)
+        forward_demand = offset.dot(forward) / remaining
+        forward_angle = direction.angle_to(forward)
 
+        # Party Cannon AerialShot: boost only when the required forward
+        # acceleration exceeds boost+air-throttle and the target is aligned.
         boost = (
             car.boost > 0.0
-            and distance > self.config.boost_distance
-            and alignment >= self.config.boost_alignment_dot
-            and distance < self.config.boost_error_threshold
+            and forward_demand
+            >= (self.config.boost_acceleration + self.config.air_throttle_acceleration)
+            * (13.0 / 120.0)
+            and forward_angle < 0.4
         )
-
-        # A small amount of throttle is useful in the air, but boost is
-        # the primary acceleration source during a properly aligned flight.
-        throttle = clamp(alignment, -1.0, 1.0)
+        throttle = clamp(
+            forward_demand
+            / (self.config.air_throttle_acceleration * (1.0 / 120.0)),
+            -1.0,
+            1.0,
+        )
 
         if (
             self.config.dodge_enabled
@@ -432,6 +451,7 @@ class Aerial:
 
         self.elapsed += dt
         self.phase_elapsed += dt
+        self.time_remaining = max(0.0, self.time_remaining - dt)
 
         if self.phase in (
             AerialPhase.JUMP,
