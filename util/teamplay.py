@@ -125,25 +125,20 @@ def _defensive_depth(
     player: PlayerState,
     team: int,
 ) -> float:
-    """Positive depth means the player is on their own side of the field."""
-    own_goal = goal_for_team(team)
-
+    """Positive means the player is in their own half."""
     if team == 0:
-        return own_goal.center.y - player.location.y
-
-    return player.location.y - own_goal.center.y
+        return -player.location.y
+    return player.location.y
 
 
 def _ball_defensive_depth(
     ball_position: Vec3,
     team: int,
 ) -> float:
-    own_goal = goal_for_team(team)
-
+    """Positive means the ball is in our half."""
     if team == 0:
-        return own_goal.center.y - ball_position.y
-
-    return ball_position.y - own_goal.center.y
+        return -ball_position.y
+    return ball_position.y
 
 
 def _attack_direction(team: int) -> Vec3:
