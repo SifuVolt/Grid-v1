@@ -254,6 +254,11 @@ def _select_reachable_mechanic(
                 "double jump contact reachable",
             )
 
+    # Party Cannon requires an aerial target above 300 uu. Grid's
+    # configured minimum launch target is 250 uu.
+    if contact.z < 250.0:
+        return None
+
     # Party Cannon checks the aerial as its own mechanic rather than
     # requiring a failed ground-height heuristic to decide the target type.
     aerial = estimate_aerial_reachability(
