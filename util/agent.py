@@ -503,7 +503,7 @@ class GridAgent(Bot):
             name = "double_jump_shot"
 
         elif candidate.shot_type == ShotType.AERIAL:
-            action = self.aerial.start(car, target)
+            action = self.aerial
             if not action.start(car, target):
                 self.last_shot_reason = action.reason
                 return False
