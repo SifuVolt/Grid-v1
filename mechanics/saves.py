@@ -418,7 +418,6 @@ class Save:
         if self.phase == SavePhase.AERIAL:
             aerial_output: AerialOutput = self.aerial.update(
                 car,
-                trajectory=None,
                 dt=dt,
             )
 
