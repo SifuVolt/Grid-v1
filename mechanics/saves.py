@@ -379,7 +379,6 @@ class Save:
                     if self.aerial.start(
                         car,
                         target=self.target,
-                        intercept_time=max(0.2, self.threat.time),
                     ):
                         self.phase = SavePhase.AERIAL
                         self.reason = "transitioning to aerial save"
