@@ -114,7 +114,7 @@ class GridAgent(Bot):
             self.debug.exception("Boost pad initialization failed", exc)
 
         self.initialized = True
-        self.debug.event("agent", "Grid RLBot v5 initialized", force=True)
+        self.debug.event("agent", "Grid RLBot v5 initialized")
         print(
             f"[GRID] Initialized | index={self.index} | team={self.team}",
             flush=True,
