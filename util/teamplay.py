@@ -309,7 +309,7 @@ def defensive_emergency(state: GameState) -> bool:
     depth = _ball_defensive_depth(ball, state.team)
 
     moving_toward_goal = (
-        ball.velocity.dot(
+        state.ball.velocity.dot(
             own_goal.center.flat_direction_to(ball).normalized()
         ) < -150.0
     )
