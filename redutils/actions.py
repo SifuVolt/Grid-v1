@@ -141,22 +141,79 @@ class Drive(IAction):
             if Field.NearestSurface(p).normal.Dot(start_surface.normal)<.95:return Field.NearestSurface(p)
         return Field.NearestSurface(target)
     @staticmethod
-    def FindTargetAroundCorner(bot,final_target,next_surface):
-        car=bot.me; s=Field.NearestSurface(car.location); goal=bot.our_goal if Field.side(bot.team)==(1 if final_target.y>=0 else -1) else bot.their_goal
-        dist=car.location.Dist(final_target)
-        if s.key=="Ground":
-            enter_l=car.location.Direction(goal.left_post-Vec3((1 if goal.left_post.x>=0 else -1)*100,(1 if goal.left_post.y>=0 else -1)*50,0)); enter_r=car.location.Direction(goal.right_post-Vec3((1 if goal.right_post.x>=0 else -1)*100,(1 if goal.right_post.y>=0 else -1)*50,0))
-            exit_l=car.location.Direction(goal.left_post+Vec3((1 if goal.left_post.x>=0 else -1)*60,-(1 if goal.left_post.y>=0 else -1)*50,0)); exit_r=car.location.Direction(goal.right_post+Vec3((1 if goal.right_post.x>=0 else -1)*60,-(1 if goal.right_post.y>=0 else -1)*50,0))
-            d=car.location.Direction(final_target).Clamp(enter_l,enter_r,s.normal) if "Goal Ground" in next_surface.key else car.location.Direction(final_target).Clamp(exit_r,exit_l,s.normal)
-            return car.location+d.Rescale(dist)
-        if "Goal Ground" in s.key:
-            l=car.location.Direction(goal.left_post-Vec3(100,50,0)); r=car.location.Direction(goal.right_post-Vec3(-100,50,0)); return car.location+car.location.Direction(final_target).Clamp(r,l,s.normal).Rescale(dist)
-        if "Backboard" in s.key or "Backwall" in s.key:
-            if "Left Backwall" in s.key:l=car.location.Direction(goal.top_right_corner+Vec3(50,0,50)); r=car.location.Direction(goal.bottom_right_corner+Vec3(50,0,-50))
-            elif "Right Backwall" in s.key:l=car.location.Direction(goal.bottom_left_corner+Vec3(-50,0,-50)); r=car.location.Direction(goal.top_left_corner+Vec3(-50,0,50))
-            else:l=car.location.Direction(goal.top_left_corner+Vec3(50,0,50)); r=car.location.Direction(goal.top_right_corner+Vec3(-50,0,50))
-            return car.location+car.location.Direction(final_target).Clamp(l,r,s.normal).Rescale(dist)
+    def FindTargetAroundCorner(bot, final_target, next_surface):
+        car = bot.me
+        my_surface = Field.NearestSurface(car.location)
+
+        def sign(value):
+            return (value > 0) - (value < 0)
+
+        goal = bot.our_goal if Field.side(bot.team) == sign(final_target.y) else bot.their_goal
+        distance = car.location.Dist(final_target)
+
+        if my_surface.key == "Ground":
+            enter_left_direction = car.location.Direction(
+                goal.left_post - Vec3(sign(goal.left_post.x) * 100, sign(goal.left_post.y) * 50, 0)
+            )
+            enter_right_direction = car.location.Direction(
+                goal.right_post - Vec3(sign(goal.right_post.x) * 100, sign(goal.right_post.y) * 50, 0)
+            )
+            exit_left_direction = car.location.Direction(
+                goal.left_post + Vec3(sign(goal.left_post.x) * 60, -sign(goal.left_post.y) * 50, 0)
+            )
+            exit_right_direction = car.location.Direction(
+                goal.right_post + Vec3(sign(goal.right_post.x) * 60, -sign(goal.right_post.y) * 50, 0)
+            )
+
+            target_direction = (
+                car.location.Direction(final_target).Clamp(enter_left_direction, enter_right_direction, my_surface.normal)
+                if "Goal Ground" in next_surface.key
+                else car.location.Direction(final_target).Clamp(exit_right_direction, exit_left_direction, my_surface.normal)
+            )
+            return car.location + target_direction.Rescale(distance)
+
+        elif "Goal Ground" in my_surface.key:
+            left_direction = car.location.Direction(
+                goal.left_post - Vec3(sign(goal.left_post.x) * 100, sign(goal.left_post.y) * 50, 0)
+            )
+            right_direction = car.location.Direction(
+                goal.right_post - Vec3(sign(goal.right_post.x) * 100, sign(goal.right_post.y) * 50, 0)
+            )
+            target_direction = car.location.Direction(final_target).Clamp(
+                right_direction, left_direction, my_surface.normal
+            )
+            return car.location + target_direction.Rescale(distance)
+
+        elif "Backboard" in my_surface.key or "Backwall" in my_surface.key:
+            if "Left Backwall" in my_surface.key:
+                left_direction = car.location.Direction(
+                    goal.top_right_corner + Vec3(sign(goal.top_right_corner.x) * 50, 0, 50)
+                )
+                right_direction = car.location.Direction(
+                    goal.bottom_right_corner + Vec3(sign(goal.bottom_right_corner.x) * 50, 0, -50)
+                )
+            elif "Right Backwall" in my_surface.key:
+                left_direction = car.location.Direction(
+                    goal.bottom_left_corner + Vec3(sign(goal.bottom_left_corner.x) * 50, 0, -50)
+                )
+                right_direction = car.location.Direction(
+                    goal.top_left_corner + Vec3(sign(goal.top_left_corner.x) * 50, 0, 50)
+                )
+            else:
+                left_direction = car.location.Direction(
+                    goal.top_left_corner + Vec3(sign(goal.top_left_corner.x) * 50, 0, 50)
+                )
+                right_direction = car.location.Direction(
+                    goal.top_right_corner + Vec3(sign(goal.top_right_corner.x) * 50, 0, 50)
+                )
+
+            target_direction = car.location.Direction(final_target).Clamp(
+                left_direction, right_direction, my_surface.normal
+            )
+            return car.location + target_direction.Rescale(distance)
+
         return final_target
+
     @staticmethod
     def GetDistance(car,target,backwards=None,with_turn=False):
         if backwards is None:
