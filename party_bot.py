@@ -19,7 +19,7 @@ class PartyBot(RUBot):
 
         car_location = self.me.location
         front_direction = self.me.forward
-        goal_location = self.our_goal.location
+        goal_location = self.their_goal.location
         ball_location = Ball.location
 
         if (
