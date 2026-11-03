@@ -22,7 +22,11 @@ def sign(value: float, pref: float = 0.0) -> int:
 
 def get_angle(a: Vec3, b: Vec3) -> float:
     try:
-        return Vec3.from_value(a).Angle(b)
+        a = Vec3.from_value(a)
+        b = Vec3.from_value(b)
+        if a.length == 0 or b.length == 0:
+            return 0.0
+        return a.Angle(b)
     except Exception:
         return 0.0
 
