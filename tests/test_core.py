@@ -1,5 +1,6 @@
 import math
 import unittest
+from types import SimpleNamespace
 
 from redutils.math3d import Mat3x3, Vec3
 from redutils.objects import Ball, BallPrediction, BallSlice, Car, Field, Game, Target
@@ -47,6 +48,23 @@ class PartyCannonPortTests(unittest.TestCase):
         slice_ = BallSlice(location=Vec3(0, 0, 500), velocity=Vec3(0, 0, 0), time=1.0)
         action = AerialShot(car, slice_, Vec3(0, 5120, 320))
         self.assertIsNotNone(action.drive_action)
+
+    def test_rotator_packet_conversion(self):
+        rotation = Vec3.from_value(SimpleNamespace(pitch=0.1, yaw=0.2, roll=0.3))
+        self.assertAlmostEqual(rotation.x, 0.1)
+        self.assertAlmostEqual(rotation.y, 0.2)
+        self.assertAlmostEqual(rotation.z, 0.3)
+
+    def test_car_keeps_packet_array_index(self):
+        player = SimpleNamespace(
+            physics=SimpleNamespace(location=Vec3(0, 0, 17), velocity=Vec3(), angular_velocity=Vec3(), rotation=SimpleNamespace(pitch=0.0, yaw=0.0, roll=0.0)),
+            name="test", player_id=987, team=0, boost=0.0, is_bot=True,
+            air_state="on_ground", demolished_timeout=0.0, is_supersonic=False,
+            score_info=SimpleNamespace(score=0, goals=0, own_goals=0, assists=0, saves=0, shots=0, demolitions=0),
+            latest_touch=None, hitbox=SimpleNamespace(length=118, width=84, height=36), hitbox_offset=Vec3()
+        )
+        car = Car(3, player)
+        self.assertEqual(car.index, 3)
 
     def test_orientation_matrix(self):
         orientation = Mat3x3(Vec3(0, 0, 0))
