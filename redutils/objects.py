@@ -291,6 +291,16 @@ class Cars:
         players=_get(packet,"players",default=[])
         if len(players)!=len(cls.all_cars): return cls.Initialize(packet)
         for c,p in zip(cls.all_cars,players): c.update(p)
+    @classmethod
+    def all_living_cars(cls): return [c for c in cls.all_cars if not c.is_demolished]
+    @classmethod
+    def blue_cars(cls): return [c for c in cls.all_cars if c.team==0]
+    @classmethod
+    def living_blue_cars(cls): return [c for c in cls.all_cars if c.team==0 and not c.is_demolished]
+    @classmethod
+    def orange_cars(cls): return [c for c in cls.all_cars if c.team==1]
+    @classmethod
+    def living_orange_cars(cls): return [c for c in cls.all_cars if c.team==1 and not c.is_demolished]
     Count=classmethod(lambda cls:len(cls.all_cars))
 
 
