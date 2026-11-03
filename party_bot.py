@@ -10,7 +10,7 @@ from intercept_calculator import InterceptCalculator
 class PartyBot(RUBot):
     def Run(self):
         if self.me is None or not Ball.prediction.slices:return
-        self.renderer.Text3D(str(self.action) if self.action is not None else "",self.me.location+Vec3.Up*30,1,"red")
+        "",self.me.location+Vec3.Up*30,1,"red"
         opp_beats=False
         if self.living_opponents:
             team=[self.me]+self.living_teammates
