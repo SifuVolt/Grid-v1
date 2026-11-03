@@ -126,13 +126,12 @@ class Field:
     def InGoal(cls,pos,radius):
         p=Vec3.Abs(pos); return p.x<Goal.WIDTH/2+radius and cls.LENGTH/2-radius<p.y<cls.LENGTH/2+Goal.DEPTH+radius and p.z<Goal.HEIGHT+radius
     @classmethod
-    def NearestSurface(cls,pos,excluded=()):
+    def NearestSurface(cls,pos,excluded=None):
         if not cls.drivable_surfaces: cls._make_surfaces()
-        values=[v for v in cls.surfaces.values() if v not in excluded]
-        if not excluded: values=list(cls.drivable_surfaces.values())
+        values=list(cls.drivable_surfaces.values()) if excluded is None else [v for v in cls.surfaces.values() if v not in excluded]
         return min(values,key=lambda s:Vec3.from_value(pos).Dist(s.limit(pos)))
     @classmethod
-    def LimitToNearestSurface(cls,pos,excluded=()): return cls.NearestSurface(pos,excluded).limit(pos)
+    def LimitToNearestSurface(cls,pos,excluded=None): return cls.NearestSurface(pos,excluded).limit(pos)
     @classmethod
     def FindLandingSurface(cls,car):
         if car.is_grounded: return cls.NearestSurface(car.location,())
