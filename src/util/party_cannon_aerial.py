@@ -89,6 +89,11 @@ class AerialShot:
         self.jumped = False
         self.elapsed_time = 0.0
         self.step = 0
+        self.dodging = False
+        self.dodge_elapsed = 0.0
+        self.dodge_step = 0
+        self.dodge_input = None
+        self.dodge_jump = True
 
         self.shot_direction = Vec3(0, 0, 1)
         self.target_location = Vec3(self.slice_location)
@@ -242,10 +247,46 @@ class AerialShot:
         cp = math.cos(rotation.pitch)
         return Vec3(cp * math.cos(rotation.yaw), cp * math.sin(rotation.yaw), math.sin(rotation.pitch))
 
+    def _run_dodge(self, car, controls, delta_time):
+        self.interruptible = False
+        self.dodge_elapsed += max(delta_time, 1 / 120)
+        if _grounded(car) and self.dodge_elapsed > (0.1 if self.dodge_jump else 0) + 0.1:
+            self.finished = True
+        elif self.dodge_elapsed < 0.1 and self.dodge_jump:
+            controls.jump = True
+        elif self.dodge_step < 3 and self.dodge_jump:
+            controls.jump = False
+            self.dodge_step += 1
+        elif self.dodge_elapsed < (0.1 if self.dodge_jump else 0) + 0.6:
+            if self.dodge_input is None:
+                forward = self._forward(car)
+                flat_forward = _unit(forward.flat())
+                direction = _unit(self.shot_direction.flat())
+                perpendicular = Vec3(flat_forward.y, -flat_forward.x, 0)
+                local = Vec3(-perpendicular.dot(direction), -flat_forward.dot(direction), 0)
+                forward_velocity = forward.dot(Vec3(car.physics.velocity))
+                speed_fraction = abs(forward_velocity) / MAX_SPEED
+                backwards = (
+                    local.x < 0
+                    if abs(forward_velocity) < 100
+                    else ((local.x >= 0) != (forward_velocity > 0))
+                )
+                local.x /= ((16 / 15) * (1 + 1.5 * speed_fraction)) if backwards else 1
+                local.y /= 1 + 0.9 * speed_fraction
+                self.dodge_input = _unit(local)
+            controls.yaw = self.dodge_input.x
+            controls.pitch = self.dodge_input.y
+            controls.jump = True
+        else:
+            self.finished = True
+
     def run(self, car, controls, point_toward, time_remaining, delta_time, steer, up=None):
         if up is not None:
             self.up = Vec3(up)
         if self.finished:
+            return
+        if self.dodging:
+            self._run_dodge(car, controls, delta_time)
             return
 
         if not self.aerialing:
@@ -325,9 +366,22 @@ class AerialShot:
                     or required_accel * 0.8 > BOOST_ACCEL + AIR_THROTTLE_ACCEL
                 )
             )
-            or (float(car.boost) <= 0 and time_remaining > 0.5)
             or (_grounded(car) and self.jumped)
         ):
             self.finished = True
+        elif (
+            (
+                (not self.double_jumping and self.elapsed_time < 1.45)
+                or (not car.has_jumped and self.jumped)
+            )
+            and time_remaining < 0.1
+            and offset.length() < 100
+        ):
+            self.dodging = True
+            self.dodge_elapsed = 0.0
+            self.dodge_step = 0
+            self.dodge_input = None
+            self.dodge_jump = _grounded(car)
+            self._run_dodge(car, controls, delta_time)
         elif offset.length() < 50 and not self.currently_double_jumping:
             point_toward(self.shot_direction)
