@@ -148,10 +148,10 @@ class Drive(IAction):
         def sign(value):
             return (value > 0) - (value < 0)
 
-        goal = bot.our_goal if Field.side(bot.team) == sign(final_target.y) else bot.their_goal
         distance = car.location.Dist(final_target)
 
         if my_surface.key == "Ground":
+            goal = bot.our_goal if Field.side(bot.team) == sign(final_target.y) else bot.their_goal
             enter_left_direction = car.location.Direction(
                 goal.left_post - Vec3(sign(goal.left_post.x) * 100, sign(goal.left_post.y) * 50, 0)
             )
@@ -173,6 +173,7 @@ class Drive(IAction):
             return car.location + target_direction.Rescale(distance)
 
         elif "Goal Ground" in my_surface.key:
+            goal = bot.our_goal if Field.side(bot.team) == sign(car.location.y) else bot.their_goal
             left_direction = car.location.Direction(
                 goal.left_post - Vec3(sign(goal.left_post.x) * 100, sign(goal.left_post.y) * 50, 0)
             )
@@ -185,6 +186,7 @@ class Drive(IAction):
             return car.location + target_direction.Rescale(distance)
 
         elif "Backboard" in my_surface.key or "Backwall" in my_surface.key:
+            goal = bot.our_goal if Field.side(bot.team) == sign(car.location.y) else bot.their_goal
             if "Left Backwall" in my_surface.key:
                 left_direction = car.location.Direction(
                     goal.top_right_corner + Vec3(sign(goal.top_right_corner.x) * 50, 0, 50)
