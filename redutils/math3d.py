@@ -63,7 +63,9 @@ class Vec3:
     @property
     def length(self) -> float: return sqrt(self.x*self.x+self.y*self.y+self.z*self.z)
     def Length(self) -> float: return self.length
-    def Dot(self, v: Any) -> float:
+    def Dot(self, v: Any):
+        if isinstance(v, Mat3x3):
+            return v.Forward*self.x + v.Right*self.y + v.Up*self.z
         v=Vec3.from_value(v); return self.x*v.x+self.y*v.y+self.z*v.z
     def Cross(self, v: Any = None) -> "Vec3":
         if v is None: return Vec3(self.y, -self.x, 0.0)
@@ -128,6 +130,10 @@ class Mat3x3:
             self.data=[Vec3(cp*cy,cp*sy,sp),
                        Vec3(cy*sp*sr-cr*sy,sy*sp*sr+cr*cy,-cp*sr),
                        Vec3(-cr*cy*sp-sr*sy,-cr*sy*sp+sr*cy,cp*cr)]
+    @property
+    def Data(self): return self.data
+    @Data.setter
+    def Data(self, values): self.data=[Vec3.from_value(v) for v in values]
     @property
     def Forward(self): return self.data[0]
     @property
