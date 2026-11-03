@@ -4,10 +4,48 @@ from math import fabs
 from redutils.bot import RUBot
 from redutils.actions import Kickoff, GetBoost, Drive, Arrive
 from redutils.objects import Ball, Car, Target
+from redutils.noob_black_strategy import NoobBlackGroundStrategy, sign
 from redutils.math3d import Vec3
 from intercept_calculator import InterceptCalculator
 
 class PartyBot(RUBot):
+    def __init__(self, default_agent_id=None):
+        super().__init__(default_agent_id)
+        self.noob_black_ground_strategy = NoobBlackGroundStrategy()
+
+    def _run_noob_black_positioning(self):
+        if self.me is None or not self.me.is_grounded:
+            return False
+
+        car_location = self.me.location
+        front_direction = self.me.forward
+        goal_location = self.our_goal.location
+        ball_location = Ball.location
+
+        if (
+            ball_location.y * sign(goal_location.y) > 0
+            and car_location.y * sign(goal_location.y) <= 50
+            and (
+                sign(front_direction.y * goal_location.y) > 0
+                or car_location.y * sign(goal_location.y) < -4120
+            )
+        ):
+            nearest_opponent = None
+            nearest_distance = float("inf")
+            for opponent in self.living_opponents:
+                distance = opponent.location.Dist(ball_location)
+                if distance < nearest_distance:
+                    nearest_distance = distance
+                    nearest_opponent = opponent
+            side = 0
+            if nearest_opponent is not None:
+                side = sign(ball_location.x - nearest_opponent.location.x) * 0.5
+            self.action = None
+            return self.noob_black_ground_strategy.prepare_for_attack(self, side)
+
+        self.action = None
+        return self.noob_black_ground_strategy.defense(self, goalie=False, fast=False)
+
     def Run(self):
         if self.me is None or not Ball.prediction.slices:return
         "",self.me.location+Vec3.Up*30,1,"red"
@@ -32,10 +70,16 @@ class PartyBot(RUBot):
                 if self.me.boost<0:self.action=GetBoost(self.me);return
                 self.action=shot or self.action or Drive(self.me,Ball.location,2300,allow_dodges=True,waste_boost=True)
             elif self.me.boost<30:self.action=GetBoost(self.me)
-            elif not opp_beats:self.action=shot
+            elif not opp_beats:
+                self.action=shot
+                if shot is None and not self.ShouldBeOffensive():
+                    if not self._run_noob_black_positioning():
+                        target=Ball.location+(self.our_goal.location-Ball.location).Normalize()*2500
+                        self.action=Drive(self.me,target,1500,allow_dodges=False)
             else:
-                target=Ball.location+(self.our_goal.location-Ball.location).Normalize()*2500
-                self.action=Drive(self.me,target,1500,allow_dodges=False)
+                if not self._run_noob_black_positioning():
+                    target=Ball.location+(self.our_goal.location-Ball.location).Normalize()*2500
+                    self.action=Drive(self.me,target,1500,allow_dodges=False)
     def ShouldBeOffensive(self):
         if not self.living_teammates:return True
         biased=self.me.location.FlatDist(Ball.location)-self.me.boost*5
