@@ -32,7 +32,7 @@ class PartyBot(RUBot):
         ):
             nearest_opponent = None
             nearest_distance = float("inf")
-            for opponent in self.living_opponents:
+            for opponent in self.opponents:
                 distance = opponent.location.Dist(ball_location)
                 if distance < nearest_distance:
                     nearest_distance = distance
@@ -43,8 +43,17 @@ class PartyBot(RUBot):
             self.action = None
             return self.noob_black_ground_strategy.prepare_for_attack(self, side)
 
+        team = [self.me] + self.living_teammates
+        furthest_back = min(
+            team,
+            key=lambda car: min(car.location.Dist(-goal_location), 900)
+            + abs(car.location.y + goal_location.y),
+        )
+        goalie = furthest_back.index == self.me.index
+        fast = goalie and abs(car_location.y + goal_location.y) > 1000
+
         self.action = None
-        return self.noob_black_ground_strategy.defense(self, goalie=False, fast=False)
+        return self.noob_black_ground_strategy.defense(self, goalie=goalie, fast=fast)
 
     def Run(self):
         if self.me is None or not Ball.prediction.slices:return
