@@ -8,6 +8,7 @@ from typing import Optional
 from .math3d import Vec3, Mat3x3, clamp
 from .objects import Ball, BallSlice, Car, Cars, Field, Game, Goal, Surface, Target
 from .utils import cap, time_to_jump, predict_rotation, shot_power_modifier
+from .noob_black_drive import NoobBlackDrive
 
 
 class IAction:
