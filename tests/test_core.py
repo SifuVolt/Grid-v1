@@ -3,9 +3,10 @@ import unittest
 
 from redutils.math3d import Mat3x3, Vec3
 from redutils.objects import Ball, BallPrediction, BallSlice, Car, Field, Game, Target
-from redutils.actions import Drive
+from redutils.actions import AerialShot, Drive
 from intercept_calculator import InterceptCalculator
 from redutils.utils import shot_power_modifier, time_to_jump
+from redutils.renderer import ExtendedRenderer
 
 
 class PartyCannonPortTests(unittest.TestCase):
@@ -15,6 +16,37 @@ class PartyCannonPortTests(unittest.TestCase):
         self.assertAlmostEqual(v.Normalize().x, 0.6)
         self.assertAlmostEqual(v.Normalize().y, 0.8)
         self.assertAlmostEqual(Vec3(1, 0, 0).Cross(Vec3(0, 1, 0)).z, 1.0)
+
+    def test_vector_rotation_handedness(self):
+        rotated = Vec3(1, 0, 0).Rotate(math.pi / 2)
+        self.assertAlmostEqual(rotated.x, 0.0, places=6)
+        self.assertAlmostEqual(rotated.y, -1.0, places=6)
+
+    def test_renderer_matches_rlbot_v5_signatures(self):
+        class FakeRenderer:
+            red = object()
+            def draw_string_2d(self, *args): self.string_args = args
+            def draw_rect_3d(self, *args): self.rect_args = args
+            def is_rendering(self): return True
+
+        raw = FakeRenderer()
+        renderer = ExtendedRenderer(raw, 1920, 1080)
+        renderer.Text2D("hello", Vec3(960, 540, 0), 1, "red")
+        renderer.Rect3D(Vec3(1, 2, 3), 192, 108, True, "red")
+        self.assertEqual(raw.string_args[:4], ("hello", 0.5, 0.5, 1))
+        self.assertIs(raw.string_args[4], raw.red)
+        self.assertEqual(len(raw.rect_args), 4)
+        self.assertTrue(renderer.is_rendering())
+
+    def test_aerial_action_can_initialize(self):
+        car = Car()
+        car.location = Vec3(0, 0, 17)
+        car.velocity = Vec3(800, 0, 0)
+        car.orientation = Mat3x3(Vec3(0, 0, 0))
+        car.is_grounded = True
+        slice_ = BallSlice(location=Vec3(0, 0, 500), velocity=Vec3(0, 0, 0), time=1.0)
+        action = AerialShot(car, slice_, Vec3(0, 5120, 320))
+        self.assertIsNotNone(action.drive_action)
 
     def test_orientation_matrix(self):
         orientation = Mat3x3(Vec3(0, 0, 0))
