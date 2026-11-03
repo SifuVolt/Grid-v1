@@ -93,7 +93,7 @@ class Vec3:
     def Rotate(self, angle: float, axis: Any = None) -> "Vec3":
         axis=Vec3.Up if axis is None else Vec3.from_value(axis).Normalize()
         c,s=cos(angle),sin(angle)
-        return self*c + axis.Cross(self)*s + axis*(axis.Dot(self)*(1-c))
+        return self*c + self.Cross(axis)*s + axis*(axis.Dot(self)*(1-c))
 
     @staticmethod
     def Abs(v: Any) -> "Vec3":
