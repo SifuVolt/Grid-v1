@@ -9,6 +9,7 @@ from util.boost_pad_tracker import BoostPadTracker
 from util.drive import steer_toward_target
 from util.sequence import ControlStep, Sequence
 from util.vec import Vec3
+from util.party_cannon_aerial import AerialShot
 
 from util.moremath import *
 import math, random, time
@@ -37,6 +38,8 @@ class MyBot(Bot):
         self.on_wall = False
         # Bot custom vars
         self.defensive_stance = False
+        self.party_cannon_aerial = None
+        self.party_cannon_aerial_start_time = 0.0
 
     @override
     def get_output(self, packet: GamePacket) -> ControllerState:
@@ -417,25 +420,38 @@ class MyBot(Bot):
                     controls.steer = steer_toward_target(my_car, rel_pos)
                     controls.handbrake = get_angle(car_velocity, front_direction) <= math.pi / 4 and Vec3(my_car.physics.angular_velocity).length() > min(1.5, car_velocity.length() / 700) and get_angle(front_direction, rel_pos - car_location) > math.pi / 4 and get_angle(rel_pos - car_location, front_direction) < get_angle(rel_pos - car_location, prev_front)
             # Jumping
-            if will_aerial:
-                offset = bpos - (car_location + car_velocity * target_t[3] + Vec3(0, 0, -325) * target_t[3]**2) + up_direction * 292 * bool(not double_jumped(my_car))
-                if has_wheel_contact(my_car) == False:
-                    if my_car.boost / 100 * 3 >= target_t[3]:
-                        point_toward(offset)
-                        controls.boost = front_direction.ang_to(offset) < math.pi / 4
-                        controls.throttle = 1
-                        controls.jump = double_jumped(my_car) == False and (abs(packet.match_info.frame_num - self.jump_tick) < 24 or self.prev_jump == False)
-                        target_roof_dir = (bpos - car_location)
-                        controls.roll = sign(math.pi / 2 - get_angle(target_roof_dir, right_direction))
-                        if jumped(my_car) == True and controls.jump == True and self.prev_jump == False:
-                            controls.pitch, controls.yaw, controls.roll = 0, 0, 0
-                    else:
-                        recover(bpos)
-                else:
-                    if steer_toward_target(my_car, bpos) <= 0.2:
-                        controls.jump = True
-                    point_toward(offset)
-                self.renderer.draw_string_3d("Aerial", CarAnchor(self.index), 1, self.renderer.white)
+            if will_aerial or (
+                self.party_cannon_aerial is not None
+                and self.party_cannon_aerial.aerialing
+            ):
+                if self.party_cannon_aerial is None:
+                    self.party_cannon_aerial = AerialShot(
+                        my_car,
+                        target_f[3],
+                        target_t[3],
+                        target(og_bpos),
+                        up_direction,
+                    )
+                    self.party_cannon_aerial_start_time = packet.match_info.seconds_elapsed
+
+                aerial_time_remaining = max(
+                    self.party_cannon_aerial.slice_time
+                    - (packet.match_info.seconds_elapsed - self.party_cannon_aerial_start_time),
+                    0.001,
+                )
+                self.party_cannon_aerial.run(
+                    my_car,
+                    controls,
+                    point_toward,
+                    aerial_time_remaining,
+                    1 / 120,
+                    controls.steer,
+                )
+                self.renderer.draw_string_3d("Party Cannon AerialShot", CarAnchor(self.index), 1, self.renderer.white)
+                if self.party_cannon_aerial.finished:
+                    self.party_cannon_aerial = None
+            elif self.party_cannon_aerial is not None:
+                self.party_cannon_aerial = None
             elif flick == True:
                 if abs(self.just_flipped - packet.match_info.frame_num) > 78 and car_velocity.z < -10:
                     recover(bpos)
