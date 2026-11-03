@@ -8,6 +8,7 @@ from typing import Optional
 from .math3d import Vec3, Mat3x3, clamp
 from .objects import Ball, BallSlice, Car, Cars, Field, Game, Goal, Surface, Target
 from .utils import cap, time_to_jump, predict_rotation, shot_power_modifier
+from .noob_black_drive import NoobBlackDrive
 
 
 class IAction:
@@ -41,7 +42,7 @@ class Drive(IAction):
         self.finished=False; self.interruptible=True; self.target=Vec3.from_value(target); self.target_speed=float(target_speed)
         fwd=self.GetEta(car,target,False,False); back=self.GetEta(car,target,True,False)
         self.backwards=(back+.5<fwd and car.forward.Dot(car.velocity)<500 and car.forward.FlatAngle(car.location.Direction(target),car.up)>pi*.6)
-        self.allow_dodges=allow_dodges; self.waste_boost=waste_boost; self.action=None; self.time_on_ground=0.; self.time_remaining=0.
+        self.allow_dodges=allow_dodges; self.waste_boost=waste_boost; self.action=None; self.time_on_ground=0.; self.time_remaining=0.; self.noob_drive=NoobBlackDrive()
     def Run(self,bot):
         car=bot.me
         self.time_remaining=self.Distance(car)/max(self.target_speed,1)
@@ -90,7 +91,8 @@ class Drive(IAction):
                 angle=car.forward.Angle(td)
 
             bot.controller.boost=bool(bot.controller.boost and (angle<.3 or (angle<.8 and not car.is_grounded)) and not self.backwards and self.waste_boost)
-            bot.controller.handbrake=bool((abs(angle)>2 or (Field.DistanceBetweenPoints(turn_center,self.target)<turn_radius-40 and self.SpeedFromTurnRadius(self.TurnRadiusForCar(car,self.target))<400)) and my_surface.normal.Dot(Vec3.Up)>.9 and car.velocity.Normalize().Dot(car.forward)>.9)
+            if car.is_grounded:
+                self.noob_drive.apply_ground_controls(bot,final_target,self.backwards)
 
             predicted=car.LocationAfterDodge()
             time_left=car.location.FlatDist(final_target)/max(car_speed+500,1410)
@@ -497,7 +499,7 @@ class QuickShot(IAction):
 
 
 class Kickoff(IAction):
-    def __init__(self):self.finished=False;self.interruptible=False;self.is_diagonal=False;self.time_on_ground=0;self.speed_flipped=False;self.speed_flip=None
+    def __init__(self):self.finished=False;self.interruptible=False;self.is_diagonal=False;self.time_on_ground=0;self.speed_flipped=False;self.speed_flip=None;self.noob_drive=NoobBlackDrive()
     def Run(self,bot):
         if bot.me.velocity.length<200:self.is_diagonal=abs(bot.me.location.x)>1000
         if self.speed_flipped and bot.me.is_grounded:self.time_on_ground+=bot.delta_time
@@ -506,9 +508,10 @@ class Kickoff(IAction):
         else:
             bot.Throttle(Car.MAX_SPEED)
             if not self.is_diagonal or self.speed_flipped:
-                bot.AimAt(Ball.location-Ball.location.Direction(bot.their_goal.location)*(170 if self.speed_flipped else 2600))
-                if not self.is_diagonal and not self.speed_flipped:bot.controller.steer*=.4
-            elif bot.me.velocity.length>500:bot.AimAt(Ball.location)
+                kickoff_target=Ball.location-Ball.location.Direction(bot.their_goal.location)*(170 if self.speed_flipped else 2600)
+                bot.controller.steer=self.noob_drive.steer_toward_target(bot.me,kickoff_target)
+            elif bot.me.velocity.length>500:
+                bot.controller.steer=self.noob_drive.steer_toward_target(bot.me,Ball.location)
             if not bot.is_kickoff:self.finished=True
             elif bot.me.velocity.length>(600 if self.is_diagonal else 700+abs(bot.me.location.x)*3) and not self.speed_flipped:
                 self.speed_flipped=True;self.speed_flip=SpeedFlip(bot.me.location.FlatDirection(Ball.location-Ball.location.Direction(bot.their_goal.location)*(250 if self.is_diagonal else -1000)))
