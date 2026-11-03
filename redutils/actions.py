@@ -43,54 +43,86 @@ class Drive(IAction):
         self.backwards=(back+.5<fwd and car.forward.Dot(car.velocity)<500 and car.forward.FlatAngle(car.location.Direction(target),car.up)>pi*.6)
         self.allow_dodges=allow_dodges; self.waste_boost=waste_boost; self.action=None; self.time_on_ground=0.; self.time_remaining=0.
     def Run(self,bot):
-        car=bot.me; self.time_remaining=self.Distance(car)/max(self.target_speed,1)
-        target_surface=Field.NearestSurface(self.target); my_surface=Field.NearestSurface(car.location); final_target=Field.LimitToNearestSurface(self.target); next_surface=target_surface
-        car_speed=car.velocity.length; forward_speed=car.velocity.Dot(car.forward)
-        if car.is_grounded:self.time_on_ground+=bot.delta_time
-        if my_surface.normal.Dot(target_surface.normal)<.95:
-            next_surface=self.FindNextSurface(Field.LimitToNearestSurface(car.location),final_target); final_target=next_surface.limit(final_target)
-            closest=my_surface.limit(final_target); final_target=closest-next_surface.normal.FlatNorm(my_surface.normal)*max(closest.Dist(final_target)-75,0)
-        if my_surface.key!=target_surface.key: final_target=self.FindTargetAroundCorner(bot,final_target,next_surface)
-        turn_radius=self.TurnRadius(abs(forward_speed)); turn_center=my_surface.limit(car.location)+car.right.FlatNorm(my_surface.normal)*((1 if car.right.Dot(final_target-car.location)>=0 else -1)*turn_radius)
-        landing_time=car.PredictLandingTime()
-        if Field.DistanceBetweenPoints(turn_center,self.target)>turn_radius-40 and car.is_grounded:
-            bot.Throttle(self.target_speed,self.backwards)
-        elif not car.is_grounded:
-            tr=self.time_remaining if isfinite(self.time_remaining) else .01
-            bot.Throttle(self.Distance(car)/max(tr-landing_time,.01))
-        else:
-            bot.Throttle(max(self.SpeedFromTurnRadius(self.TurnRadiusForCar(car,self.target)),400),self.backwards)
-        if car.is_grounded or car.velocity.FlatLen()<500:
-            angle=bot.AimAt(final_target,backwards=self.backwards)[0]
-        else:
-            landing_normal=Field.FindLandingSurface(car).normal
-            alpha=cap(landing_time*1.5-.6,0,.75)
-            td=car.velocity.FlatNorm(landing_normal)*(1-alpha)+(-Vec3.Up)*alpha
-            bot.AimAt(car.location+td,landing_normal); angle=car.forward.Angle(td)
-        bot.controller.boost=bool(bot.controller.boost and (angle<.3 or (angle<.8 and not car.is_grounded)) and not self.backwards and self.waste_boost)
-        bot.controller.handbrake=bool((abs(angle)>2 or (Field.DistanceBetweenPoints(turn_center,self.target)<turn_radius-40 and self.SpeedFromTurnRadius(self.TurnRadiusForCar(car,self.target))<400)) and my_surface.normal.Dot(Vec3.Up)>.9 and car.velocity.Normalize().Dot(car.forward)>.9)
-        predicted=car.LocationAfterDodge(); time_left=car.location.FlatDist(final_target)/max(car_speed+500,1410)
-        speedflip_left=car.location.FlatDist(final_target)/max(car_speed+500+min(car.boost,40)*Car.BOOST_ACCEL/2,1410)
+        car=bot.me
+        self.time_remaining=self.Distance(car)/max(self.target_speed,1)
+
+        # Match Party Cannon's action ownership: normal Drive controls only
+        # while no sub-action (Dodge, SpeedFlip, Wavedash, etc.) is active.
         if self.action is None:
+            target_surface=Field.NearestSurface(self.target)
+            my_surface=Field.NearestSurface(car.location)
+            final_target=Field.LimitToNearestSurface(self.target)
+            next_surface=target_surface
+            car_speed=car.velocity.length
+            forward_speed=car.velocity.Dot(car.forward)
+
+            if car.is_grounded:
+                self.time_on_ground+=bot.delta_time
+
+            if my_surface.normal.Dot(target_surface.normal)<.95:
+                next_surface=self.FindNextSurface(Field.LimitToNearestSurface(car.location),final_target)
+                final_target=next_surface.limit(final_target)
+                closest=my_surface.limit(final_target)
+                final_target=closest-next_surface.normal.FlatNorm(my_surface.normal)*max(closest.Dist(final_target)-75,0)
+
+            if my_surface.key!=target_surface.key:
+                final_target=self.FindTargetAroundCorner(bot,final_target,next_surface)
+
+            turn_radius=self.TurnRadius(abs(forward_speed))
+            turn_center=my_surface.limit(car.location)+car.right.FlatNorm(my_surface.normal)*((1 if car.right.Dot(final_target-car.location)>=0 else -1)*turn_radius)
+            landing_time=car.PredictLandingTime()
+
+            if Field.DistanceBetweenPoints(turn_center,self.target)>turn_radius-40 and car.is_grounded:
+                bot.Throttle(self.target_speed,self.backwards)
+            elif not car.is_grounded:
+                tr=self.time_remaining if isfinite(self.time_remaining) else .01
+                bot.Throttle(self.Distance(car)/max(tr-landing_time,.01))
+            else:
+                bot.Throttle(max(self.SpeedFromTurnRadius(self.TurnRadiusForCar(car,self.target)),400),self.backwards)
+
+            if car.is_grounded or car.velocity.FlatLen()<500:
+                angle=bot.AimAt(final_target,backwards=self.backwards)[0]
+            else:
+                landing_normal=Field.FindLandingSurface(car).normal
+                alpha=cap(landing_time*1.5-.6,0,.75)
+                td=car.velocity.FlatNorm(landing_normal)*(1-alpha)+(-Vec3.Up)*alpha
+                bot.AimAt(car.location+td,landing_normal)
+                angle=car.forward.Angle(td)
+
+            bot.controller.boost=bool(bot.controller.boost and (angle<.3 or (angle<.8 and not car.is_grounded)) and not self.backwards and self.waste_boost)
+            bot.controller.handbrake=bool((abs(angle)>2 or (Field.DistanceBetweenPoints(turn_center,self.target)<turn_radius-40 and self.SpeedFromTurnRadius(self.TurnRadiusForCar(car,self.target))<400)) and my_surface.normal.Dot(Vec3.Up)>.9 and car.velocity.Normalize().Dot(car.forward)>.9)
+
+            predicted=car.LocationAfterDodge()
+            time_left=car.location.FlatDist(final_target)/max(car_speed+500,1410)
+            speedflip_left=car.location.FlatDist(final_target)/max(car_speed+500+min(car.boost,40)*Car.BOOST_ACCEL/2,1410)
+
             if self.allow_dodges and Field.InField(predicted,50) and car_speed<2000 and car.location.z<600 and Game.gravity.z<-500 and abs(car.velocity.Dot(car.up))<100:
                 if forward_speed>0 and self.target_speed>100+forward_speed:
                     if car.location.z<200 and car.is_grounded and car_speed>1000 and car.forward.FlatAngle(car.location.Direction(final_target))<.1 and self.time_on_ground>.2:
                         dodge=Dodge(car.location.FlatDirection(self.target))
-                        if speedflip_left>SpeedFlip.DURATION and car.boost>0 and Field.InField(predicted,500) and self.waste_boost:self.action=SpeedFlip(car.location.FlatDirection(self.target))
-                        elif time_left>dodge.Duration:self.action=dodge
+                        if speedflip_left>SpeedFlip.DURATION and car.boost>0 and Field.InField(predicted,500) and self.waste_boost:
+                            self.action=SpeedFlip(car.location.FlatDirection(self.target))
+                        elif time_left>dodge.Duration:
+                            self.action=dodge
                     elif car.location.z>100 and not car.has_double_jumped and (not car.is_grounded or car.velocity.Dot(Vec3.Up)<200):
                         wd=Wavedash(car.location.FlatDirection(self.target))
-                        if time_left>wd.Duration:self.action=wd
+                        if time_left>wd.Duration:
+                            self.action=wd
                 elif car.location.z<200 and car.is_grounded and car_speed>800 and self.backwards and (-car.forward).FlatAngle(car.location.Direction(final_target))<.1 and self.time_on_ground>.2 and time_left>HalfFlip.DURATION:
                     self.action=HalfFlip()
+
         elif self.action.finished:
-            self.action=None; self.backwards=False; self.time_on_ground=0
+            self.action=None
+            self.backwards=False
+            self.time_on_ground=0
         else:
             self.action.Run(bot)
-            if isinstance(self.action,SpeedFlip):bot.Throttle(self.target_speed+500,self.backwards)
+            if isinstance(self.action,SpeedFlip):
+                bot.Throttle(self.target_speed+500,self.backwards)
+
         self.interruptible=self.action is None or self.action.interruptible
-        if Field.LimitToNearestSurface(car.location).Dist(final_target) < 100:
-            self.finished = True
+        if Field.LimitToNearestSurface(car.location).Dist(Field.LimitToNearestSurface(self.target))<100:
+            self.finished=True
     def Distance(self,car):return self.GetDistance(car,self.target,self.backwards)
     def Eta(self,car):return self.GetEta(car,self.target,self.backwards,self.allow_dodges)
     @staticmethod
