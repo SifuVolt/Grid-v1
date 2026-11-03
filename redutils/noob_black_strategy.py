@@ -43,6 +43,18 @@ class NoobBlackFrontFlip:
         if self.start_time is None:
             self.start_time = Game.time
         elapsed = Game.time - self.start_time
+
+        # Sequence ControlSteps return a fresh ControllerState each frame.
+        bot.controller.throttle = 0.0
+        bot.controller.steer = 0.0
+        bot.controller.pitch = 0.0
+        bot.controller.yaw = 0.0
+        bot.controller.roll = 0.0
+        bot.controller.jump = False
+        bot.controller.boost = False
+        bot.controller.handbrake = False
+        bot.controller.use_item = False
+
         if elapsed < 0.08:
             bot.controller.jump = True
         elif elapsed < 0.10:
