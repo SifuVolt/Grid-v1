@@ -7,10 +7,10 @@ mechanics remain separate and unchanged.
 """
 from __future__ import annotations
 
-from math import asin, atan2, inf, pi, sin, tan
+from math import asin, inf, pi, tan
 
 from .math3d import Vec3, clamp
-from .objects import Field, Game
+from .objects import Ball, Field, Game
 from .noob_black_drive import NoobBlackDrive
 
 
@@ -70,7 +70,7 @@ class NoobBlackGroundStrategy:
         front_direction = my_car.forward
         prev_front = self.previous_forward if self.previous_forward is not None else front_direction
         goal_location = bot.our_goal.location
-        ball_location = __import__("redutils.objects", fromlist=["Ball"]).Ball.location
+        ball_location = Ball.location
         controls = bot.controller
 
         tpos = Vec3(4000 * side, 0, 0)
