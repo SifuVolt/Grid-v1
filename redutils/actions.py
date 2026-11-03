@@ -90,6 +90,14 @@ class Drive(IAction):
                 angle=car.forward.Angle(td)
 
             bot.controller.boost=bool(bot.controller.boost and (angle<.3 or (angle<.8 and not car.is_grounded)) and not self.backwards and self.waste_boost)
+            bot.controller.handbrake = bool(
+                (abs(angle) > 2 or (
+                    Field.DistanceBetweenPoints(turn_center, self.target) < turn_radius - 40
+                    and self.SpeedFromTurnRadius(self.TurnRadiusForCar(car, self.target)) < 400
+                ))
+                and my_surface.normal.Dot(Vec3.Up) > 0.9
+                and car.velocity.Normalize().Dot(car.forward) > 0.9
+            )
 
             predicted=car.LocationAfterDodge()
             time_left=car.location.FlatDist(final_target)/max(car_speed+500,1410)
