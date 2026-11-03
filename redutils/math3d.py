@@ -26,6 +26,12 @@ class Vec3:
             return cls(float(v[0]) if len(v) > 0 else 0.0,
                        float(v[1]) if len(v) > 1 else 0.0,
                        float(v[2]) if len(v) > 2 else 0.0)
+        if hasattr(value, "pitch") or hasattr(value, "Pitch"):
+            return cls(
+                float(getattr(value, "pitch", getattr(value, "Pitch", 0.0))),
+                float(getattr(value, "yaw", getattr(value, "Yaw", 0.0))),
+                float(getattr(value, "roll", getattr(value, "Roll", 0.0))),
+            )
         return cls(float(getattr(value, "x", getattr(value, "X", 0.0))),
                    float(getattr(value, "y", getattr(value, "Y", 0.0))),
                    float(getattr(value, "z", getattr(value, "Z", 0.0))))
