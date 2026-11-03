@@ -69,7 +69,6 @@ class Drive(IAction):
             bot.AimAt(car.location+td,landing_normal); angle=car.forward.Angle(td)
         bot.controller.boost=bool(bot.controller.boost and (angle<.3 or (angle<.8 and not car.is_grounded)) and not self.backwards and self.waste_boost)
         bot.controller.handbrake=bool((abs(angle)>2 or (Field.DistanceBetweenPoints(turn_center,self.target)<turn_radius-40 and self.SpeedFromTurnRadius(self.TurnRadiusForCar(car,self.target))<400)) and my_surface.normal.Dot(Vec3.Up)>.9 and car.velocity.Normalize().Dot(car.forward)>.9)
-        bot.renderer.Line3D(final_target,final_target+Field.NearestSurface(final_target).normal*200,"lime")
         predicted=car.LocationAfterDodge(); time_left=car.location.FlatDist(final_target)/max(car_speed+500,1410)
         speedflip_left=car.location.FlatDist(final_target)/max(car_speed+500+min(car.boost,40)*Car.BOOST_ACCEL/2,1410)
         if self.action is None:
@@ -89,9 +88,9 @@ class Drive(IAction):
         else:
             self.action.Run(bot)
             if isinstance(self.action,SpeedFlip):bot.Throttle(self.target_speed+500,self.backwards)
-        point=Field.LimitToNearestSurface(self.target); bot.renderer.Line3D(point,point+target_surface.normal*200,"lime")
         self.interruptible=self.action is None or self.action.interruptible
-        if Field.LimitToNearestSurface(car.location).Dist(point)<100:self.finished=True
+        if Field.LimitToNearestSurface(car.location).Dist(final_target) < 100:
+            self.finished = True
     def Distance(self,car):return self.GetDistance(car,self.target,self.backwards)
     def Eta(self,car):return self.GetEta(car,self.target,self.backwards,self.allow_dodges)
     @staticmethod
