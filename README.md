@@ -28,6 +28,7 @@ Start it through RLBot v5 using `bot.toml`, or directly run:
 python main.py
 ```
 
-The bot has been syntax-compiled and its pure-Python physics/strategy helpers
-have been smoke-tested. A local Rocket League match has not yet been run; live
+The bot has been syntax-compiled and its pure-Python suite currently passes 10
+unit tests covering vectors, field geometry, drive ETA, prediction search,
+aerial initialization, renderer API compatibility, and interception helpers. A local Rocket League match has not yet been run; live
 behaviour and RLBot installation compatibility still need in-game validation.
