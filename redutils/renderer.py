@@ -27,13 +27,9 @@ class ExtendedRenderer:
     def Text2D(self,text,upper_left,scale=1,color=None):
         if self.renderer is None:return
         p=self._vec(upper_left); self.renderer.draw_string_2d(str(text),p.x*self.screen_width_scale,p.y*self.screen_height_scale,scale,self._color(color))
-    def Text3D(self,text,pos,scale=1,color=None):
-        if self.renderer is not None:self.renderer.draw_string_3d(str(text),self._vec(pos),scale,self._color(color))
     def Rect3D(self,pos,width,height,fill=True,color=None):
         fn=getattr(self.renderer,"draw_rect_3d",None) if self.renderer is not None else None
         if fn: fn(self._vec(pos),width*self.screen_width_scale,height*self.screen_height_scale,self._color(color))
-    def Line3D(self,start,end,color=None):
-        if self.renderer is not None:self.renderer.draw_line_3d(self._vec(start),self._vec(end),self._color(color))
     def Polyline3D(self,points,color=None):
         pts=[self._vec(p) for p in points]
         for a,b in zip(pts,pts[1:]):self.Line3D(a,b,color)
