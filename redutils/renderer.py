@@ -11,6 +11,11 @@ class ExtendedRenderer:
         if self.renderer is not None:return self.renderer.begin_rendering()
     def end_rendering(self):
         if self.renderer is not None:return self.renderer.end_rendering()
+    def is_rendering(self):
+        return bool(self.renderer is not None and self.renderer.is_rendering())
+    @property
+    def can_render(self):
+        return bool(self.renderer is not None and getattr(self.renderer, "can_render", True))
     def _color(self,color=None):
         name=str(color or self.color).lower()
         aliases={"limegreen":"lime", "green":"lime"}
@@ -21,12 +26,12 @@ class ExtendedRenderer:
     def _vec(self,v): return Vec3.from_value(v)
     def Text2D(self,text,upper_left,scale=1,color=None):
         if self.renderer is None:return
-        p=self._vec(upper_left); self.renderer.draw_string_2d(p.x*self.screen_width_scale,p.y*self.screen_height_scale,scale,scale,str(text),self._color(color))
+        p=self._vec(upper_left); self.renderer.draw_string_2d(str(text),p.x*self.screen_width_scale,p.y*self.screen_height_scale,scale,self._color(color))
     def Text3D(self,text,pos,scale=1,color=None):
         if self.renderer is not None:self.renderer.draw_string_3d(str(text),self._vec(pos),scale,self._color(color))
     def Rect3D(self,pos,width,height,fill=True,color=None):
         fn=getattr(self.renderer,"draw_rect_3d",None) if self.renderer is not None else None
-        if fn: fn(self._vec(pos),width*self.screen_width_scale,height*self.screen_height_scale,fill,self._color(color))
+        if fn: fn(self._vec(pos),width*self.screen_width_scale,height*self.screen_height_scale,self._color(color))
     def Line3D(self,start,end,color=None):
         if self.renderer is not None:self.renderer.draw_line_3d(self._vec(start),self._vec(end),self._color(color))
     def Polyline3D(self,points,color=None):
