@@ -163,8 +163,16 @@ class MyBot(Bot):
             return pos + vel * t + Vec3(0, 0, -325) * t**2
         
         def goal_time():
-            for i in range(1, 301):
-                if abs(ball_states[i].physics.location.y) >= 5235:
+            # Prediction buffers can contain empty slices (including physics=None),
+            # especially near packet boundaries. Only inspect valid samples.
+            for i in range(1, min(301, len(ball_states))):
+                prediction = ball_states[i]
+                if prediction is None or prediction.physics is None:
+                    continue
+                location = prediction.physics.location
+                if location is None:
+                    continue
+                if abs(location.y) >= 5235:
                     return i / 60
             return -1
         
