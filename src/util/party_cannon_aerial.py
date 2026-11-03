@@ -206,8 +206,8 @@ class AerialShot:
             result = result + self.up * JUMP_VEL
         return result
 
-    def _get_boost_estimate(self, car, double_jump, elapsed):
-        time_remaining = max(self.slice_time - 0.0, 0.001)
+    def _get_boost_estimate(self, car, double_jump, elapsed, time_remaining=None):
+        time_remaining = max(self.slice_time if time_remaining is None else time_remaining, 0.001)
         if _grounded(car):
             final_position = self._jump_location(car, time_remaining, elapsed, double_jump)
             final_velocity = self._jump_velocity(car, time_remaining, elapsed, double_jump)
@@ -242,7 +242,9 @@ class AerialShot:
         cp = math.cos(rotation.pitch)
         return Vec3(cp * math.cos(rotation.yaw), cp * math.sin(rotation.yaw), math.sin(rotation.pitch))
 
-    def run(self, car, controls, point_toward, time_remaining, delta_time, steer):
+    def run(self, car, controls, point_toward, time_remaining, delta_time, steer, up=None):
+        if up is not None:
+            self.up = Vec3(up)
         if self.finished:
             return
 
@@ -251,8 +253,8 @@ class AerialShot:
                 self.finished = True
                 return
             if self.jump_immediately or abs(steer) < 0.2:
-                single = self._get_boost_estimate(car, False, 0.0)
-                double = self._get_boost_estimate(car, True, 0.0)
+                single = self._get_boost_estimate(car, False, self.elapsed_time, time_remaining)
+                double = self._get_boost_estimate(car, True, self.elapsed_time, time_remaining)
                 if single >= 0 or double >= 0:
                     self.double_jumping = double >= 0 and (double < single or single < 0)
                     self.aerialing = True

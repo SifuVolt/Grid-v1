@@ -446,6 +446,7 @@ class MyBot(Bot):
                     aerial_time_remaining,
                     1 / 120,
                     controls.steer,
+                    up_direction,
                 )
                 self.renderer.draw_string_3d("Party Cannon AerialShot", CarAnchor(self.index), 1, self.renderer.white)
                 if self.party_cannon_aerial.finished:
