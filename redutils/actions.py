@@ -401,7 +401,7 @@ class DoubleJumpShot(Shot):
 class AerialShot(Shot):
     def __init__(self,car,slice_,shot_target):
         super().__init__(slice_,shot_target);self.start_boost=car.boost;self.double_jumping=False;self.drive_action=None;self.drive_location=Vec3();self.jump_immediately=False;self.currently_double=False;self.aerialing=False;self.jumped=False;self.elapsed=0;self.step=0
-        self.SetTargetLocation(car);self.jump_immediately=car.Velocity.FlatAngle(car.location.Direction(self.target_location),car.up)<.6 or car.velocity.FlatLen(car.up)<500 or not car.is_grounded
+        self.SetTargetLocation(car);self.jump_immediately=car.velocity.FlatAngle(car.location.Direction(self.target_location),car.up)<.6 or car.velocity.FlatLen(car.up)<500 or not car.is_grounded
         flat=self.target_location.Flatten();self.drive_location=flat if Drive.GetEta(car,flat,False)<=Drive.GetEta(car,self.target_location,False) else self.target_location
         self.drive_action=Drive(car,self.drive_location,Drive.GetDistance(car,self.drive_location)/max(slice_.time-Game.time,.001))
     def SetTargetLocation(self,car):
