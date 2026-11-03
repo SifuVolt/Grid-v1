@@ -1,34 +1,19 @@
-# PARTY CANNON V@ — Python port
+# Noob Black
 
-A Python/RLBot v5 port of the Party Cannon bot and its RedUtils support library.
-The port follows the upstream C# source at the pinned revision below and keeps
-its core strategy, interception calculations, vehicle/field models, action
-system, shot planning, math utilities, and debug renderer.
+A Rocket League bot made with [RLBot](https://rlbot.org/).
+This is Noob Bot V3, made with code from the black market.
+As always, mainly designed for 3s.
 
-- **Upstream:** [NicEastvillage/PartyCannon](https://github.com/NicEastvillage/PartyCannon)
-- **Source revision:** `ea84e4325ddb60565bbac6fb9766dc45f38b58cb`
-- **Python runtime:** RLBot v5 (`rlbot==2.0.0b56`)
-- **Agent entry point:** `main.py`
+## Quick Start
 
-The C# project and solution files are intentionally replaced by Python
-modules and RLBot v5 configuration. See [PORTING_NOTES.md](PORTING_NOTES.md)
-for the source-to-Python file map.
-
-## Setup
-
-Create/activate the bot's virtual environment, then install:
-
-```bash
-python -m pip install -r requirements.txt
-```
-
-Start it through RLBot v5 using `bot.toml`, or directly run:
-
-```bash
-python main.py
-```
-
-The bot has been syntax-compiled and its pure-Python suite currently passes 13
-unit tests covering vectors, field geometry, drive ETA, prediction search,
-aerial initialization, renderer API compatibility, and interception helpers. A local Rocket League match has not yet been run; live
-behaviour and RLBot installation compatibility still need in-game validation.
+1. Install [Python 3.12 or later](https://www.python.org/)
+1. Create a Python virtual environment
+   - `python -m venv venv`
+1. Activate the virtual environment
+   - Windows: `.\venv\Scripts\activate`
+   - Linux: `source venv/bin/activate`
+1. Install the required packages
+   - `pip install -r requirements.txt`
+1. Modify `rlbot.toml` to your liking
+   - Note: `dev.toml` also exists with a few changed settings that might be useful for development
+1. Start a match with `python run.py`
