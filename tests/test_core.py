@@ -66,6 +66,12 @@ class PartyCannonPortTests(unittest.TestCase):
         car = Car(3, player)
         self.assertEqual(car.index, 3)
 
+    def test_vector_dot_matrix(self):
+        matrix = Mat3x3(Vec3(1, 0, 0), Vec3(0, 1, 0), Vec3(0, 0, 1))
+        result = Vec3(2, 3, 4).Dot(matrix)
+        self.assertEqual(result, Vec3(2, 3, 4))
+        self.assertIs(matrix.Data, matrix.data)
+
     def test_orientation_matrix(self):
         orientation = Mat3x3(Vec3(0, 0, 0))
         self.assertAlmostEqual(orientation.Forward.x, 1.0)
