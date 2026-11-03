@@ -175,6 +175,11 @@ class MyBot(Bot):
             dev = abs(pos.y - goal_location.y)
             y_offset = dev * math.tan(min(dev / 5120, 1) * math.pi / 4)
             return Vec3(0, goal_location.y, y_offset)
+
+        def target_func_chip(pos):
+            # Aim the contact normal upward so the planned contact point is
+            # below the ball. This creates a controlled lift for a teammate.
+            return pos + Vec3(0, 0, 1000)
         
         def shot_variables_2(target):
             def closest_check(bpos, t):
@@ -345,7 +350,7 @@ class MyBot(Bot):
             mode_index = 3 * bool(aerial) + (1 + bool(double_jump)) * bool(not flick and not aerial)
             grounded_mode_index = (1 + bool(double_jump)) * bool(not flick)
             # Drive
-            will_aerial = aerial == True and my_car.boost / 100 * 3 >= target_t[3] + 0.1 * bool(has_wheel_contact(my_car)) and wait_for_fall[grounded_mode_index] >= 0
+            will_aerial = (aerial == True and 0 < target_t[3] < 5 and wait_for_fall[grounded_mode_index] >= 0)
             if will_aerial:
                 og_bpos = Vec3(target_f[3].physics.location)
                 bpos = og_bpos - (target(og_bpos) - og_bpos).rescale(92.75)
@@ -760,35 +765,88 @@ class MyBot(Bot):
                             furthest_back = [i, furthest_score]
                         if (closest_score <= closest_to_ball[1] and bool(biggest_dependency) >= closest_to_ball[2]) or bool(biggest_dependency) > closest_to_ball[2]:
                             closest_to_ball = [i, closest_score, bool(biggest_dependency)]
-            if closest_to_ball[0] == self.index:
-                x_wall_to_use = 4096 - abs(ball_location.x) < 5120 - abs(ball_location.y)
-                y_wall_to_use = not x_wall_to_use
-                roll_up_wall_condition = ball_location.z + ball_velocity.z**2 / 1300 <= 92.75 + 36.25 - 18.125 * bool(abs(air_nbw.y) >= 5120) and str(nbw) != "nan" and car_location.flat().dist(air_nbw) > travel_d[min(round(nbw) * 120, 599)] and ((x_wall_to_use and abs(ball_velocity.x)**2 / 1300 >= 400) or (y_wall_to_use and abs(ball_velocity.y)**2 / 1300 >= 400 and abs(car_rotation.roll) > math.pi / 4 and ball_location.y * goal_location.y < 0))
-                stable_up_wall_condition = new_jump_time_wall(min(4096 - abs(ball_location.x), 5120 - abs(ball_location.y)), 0)[0] <= 1.45 and ((x_wall_to_use and abs(ball_velocity.x) < 150) or (y_wall_to_use and abs(ball_velocity.y) < 150 and abs(car_rotation.roll) > math.pi / 4 and ball_location.y * goal_location.y < 0)) and ball_location.z + ball_velocity.z**2 / 1300 <= 1900 and (ball_velocity.z > 0 and ball_location.z + ball_velocity.z**2 / 1300 >= 400 or ball_location.z >= 400)
-                go_up_wall = (roll_up_wall_condition or stable_up_wall_condition) and abs(air_nbw.y - goal_location.y) > 50
-                if has_wheel_contact(my_car) == False:
-                    go_up_wall = self.on_wall
-                if go_up_wall == True:
-                    li = shot_variables_wall(target_func)
-                    wall_shot(target_func, li, 0, True)
-                    txt = "Shoot (Wall)"
-                    if x_wall_to_use:
-                        txt += ", X"
-                    if y_wall_to_use:
-                        txt += ", Y"
-                    # self.renderer.draw_string_3d(car_location, 1, 1, txt, self.renderer.green())
+            # A pass aerial is only attempted when the ball is already rising
+            # from a recent teammate touch and this bot is behind the challenger.
+            challenger_index = closest_to_ball[0]
+            pass_receiver = False
+            if challenger_index is not None and challenger_index != self.index:
+                challenger = packet.players[challenger_index]
+                touch = challenger.latest_touch
+                recent_touch = (
+                    touch is not None
+                    and 0 <= packet.match_info.seconds_elapsed - touch.game_seconds <= 0.75
+                )
+                behind_challenger = (
+                    car_location.y * sign(goal_location.y)
+                    < Vec3(challenger.physics.location).y * sign(goal_location.y) - 100
+                )
+                pass_receiver = (
+                    recent_touch
+                    and behind_challenger
+                    and 250 <= ball_location.z <= 1250
+                    and ball_velocity.z >= 220
+                    and ball_location.y * sign(goal_location.y) > -1500
+                )
+            if pass_receiver:
+                li = shot_variables_2(target_func)
+                shoot_ball(target_func, li, other_cars, double_jump=False, aerial=True, delay=False)
+                self.should_chip = False
+                self.renderer.draw_string_3d("Pass Aerial", CarAnchor(self.index), 1, self.renderer.white)
+            elif closest_to_ball[0] == self.index:
+                # Chip upward only when a teammate is positioned behind us to
+                # receive the rising ball; otherwise retain normal shot choice.
+                chip_receiver = None
+                for teammate_index in other_cars[0]:
+                    if teammate_index == self.index or is_demolished(packet.players[teammate_index]):
+                        continue
+                    teammate_pos = Vec3(packet.players[teammate_index].physics.location)
+                    if (
+                        teammate_pos.y * sign(goal_location.y) < car_location.y * sign(goal_location.y) - 100
+                        and teammate_pos.dist(ball_location) < 3200
+                    ):
+                        if chip_receiver is None or teammate_pos.dist(ball_location) < Vec3(packet.players[chip_receiver].physics.location).dist(ball_location):
+                            chip_receiver = teammate_index
+                if (
+                    chip_receiver is not None
+                    and ball_location.z < 180
+                    and abs(ball_velocity.z) < 180
+                    and ball_location.y * sign(goal_location.y) > -1000
+                    and is_kickoff_pause() == False
+                    and has_wheel_contact(my_car)
+                ):
+                    li = shot_variables_2(target_func_chip)
+                    shoot_ball(target_func_chip, li, other_cars, double_jump=False, aerial=False, delay=False)
+                    self.should_chip = False
+                    self.renderer.draw_string_3d("Pass Chip", CarAnchor(self.index), 1, self.renderer.white)
                 else:
-                    if is_kickoff_pause() == True:
-                        tf = target_func_flat
+                    x_wall_to_use = 4096 - abs(ball_location.x) < 5120 - abs(ball_location.y)
+                    y_wall_to_use = not x_wall_to_use
+                    roll_up_wall_condition = ball_location.z + ball_velocity.z**2 / 1300 <= 92.75 + 36.25 - 18.125 * bool(abs(air_nbw.y) >= 5120) and str(nbw) != "nan" and car_location.flat().dist(air_nbw) > travel_d[min(round(nbw) * 120, 599)] and ((x_wall_to_use and abs(ball_velocity.x)**2 / 1300 >= 400) or (y_wall_to_use and abs(ball_velocity.y)**2 / 1300 >= 400 and abs(car_rotation.roll) > math.pi / 4 and ball_location.y * goal_location.y < 0))
+                    stable_up_wall_condition = new_jump_time_wall(min(4096 - abs(ball_location.x), 5120 - abs(ball_location.y)), 0)[0] <= 1.45 and ((x_wall_to_use and abs(ball_velocity.x) < 150) or (y_wall_to_use and abs(ball_velocity.y) < 150 and abs(car_rotation.roll) > math.pi / 4 and ball_location.y * goal_location.y < 0)) and ball_location.z + ball_velocity.z**2 / 1300 <= 1900 and (ball_velocity.z > 0 and ball_location.z + ball_velocity.z**2 / 1300 >= 400 or ball_location.z >= 400)
+                    go_up_wall = (roll_up_wall_condition or stable_up_wall_condition) and abs(air_nbw.y - goal_location.y) > 50
+                    if has_wheel_contact(my_car) == False:
+                        go_up_wall = self.on_wall
+                    if go_up_wall == True:
+                        li = shot_variables_wall(target_func)
+                        wall_shot(target_func, li, 0, True)
+                        txt = "Shoot (Wall)"
+                        if x_wall_to_use:
+                            txt += ", X"
+                        if y_wall_to_use:
+                            txt += ", Y"
+                        # self.renderer.draw_string_3d(car_location, 1, 1, txt, self.renderer.green())
                     else:
-                        tf = target_func
-                    li = shot_variables_2(tf)
-                    to_double_jump = li[0][2] < li[0][1] and is_kickoff_pause() == False
-                    shoot_ball(tf, li, other_cars, double_jump = to_double_jump, aerial = True, delay = True) # target_t, target_f, wait_for_fall
-                    txt = "Shoot"
-                    if to_double_jump:
-                        txt += ", Double"
-                    # self.renderer.draw_string_3d(car_location, 1, 1, txt, self.renderer.green())
+                        if is_kickoff_pause() == True:
+                            tf = target_func_flat
+                        else:
+                            tf = target_func
+                        li = shot_variables_2(tf)
+                        to_double_jump = li[0][2] < li[0][1] and is_kickoff_pause() == False
+                        shoot_ball(tf, li, other_cars, double_jump = to_double_jump, aerial = True, delay = True) # target_t, target_f, wait_for_fall
+                        txt = "Shoot"
+                        if to_double_jump:
+                            txt += ", Double"
+                        # self.renderer.draw_string_3d(car_location, 1, 1, txt, self.renderer.green())
             elif furthest_back[0] == self.index:
                 defense(True, abs(car_location.y + goal_location.y) > 1000)
                 self.should_chip = False
