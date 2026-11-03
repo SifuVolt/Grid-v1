@@ -237,7 +237,7 @@ class Car:
         if player_info is not None: self.update(player_info,initial=True)
     def update(self,p,initial=False):
         phys=_get(p,"physics"); self.location=Vec3.from_value(_get(phys,"location")); self.velocity=Vec3.from_value(_get(phys,"velocity")); self.angular_velocity=Vec3.from_value(_get(phys,"angular_velocity")); self.rotation=Vec3.from_value(_get(phys,"rotation")); self.orientation=Mat3x3(self.rotation); self.local_angular_velocity=self.Local(self.angular_velocity)
-        if initial: self.name=str(_get(p,"name",default="")); self.index=int(_get(p,"player_id",default=self.index)); self.team=int(_get(p,"team",default=0))
+        if initial: self.name=str(_get(p,"name",default="")); self.team=int(_get(p,"team",default=0))
         self.boost=float(_get(p,"boost",default=0)); self.is_bot=bool(_get(p,"is_bot",default=True)); air=_enum_name(_get(p,"air_state",default="on_ground"))
         self.is_grounded=air in ("onground","on_ground","airstate.onground"); self.has_jumped=air in ("jumping",); self.has_double_jumped=air in ("doublejumping","dodging","double_jumping")
         self.is_demolished=float(_get(p,"demolished_timeout",default=0))>0; self.is_supersonic=bool(_get(p,"is_supersonic",default=False))
