@@ -24,6 +24,9 @@ class NoobBlackDrive:
         steer = clamp(angle * 5.0, -1.0, 1.0)
         return -steer if backwards else steer
 
+    def reset(self) -> None:
+        self.previous_forward = None
+
     def apply_ground_controls(self, bot, target: Vec3, backwards: bool = False) -> None:
         car = bot.me
         if car is None or not car.is_grounded:
