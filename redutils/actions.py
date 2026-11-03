@@ -8,7 +8,6 @@ from typing import Optional
 from .math3d import Vec3, Mat3x3, clamp
 from .objects import Ball, BallSlice, Car, Cars, Field, Game, Goal, Surface, Target
 from .utils import cap, time_to_jump, predict_rotation, shot_power_modifier
-from .noob_black_drive import NoobBlackDrive
 
 
 class IAction:
@@ -42,7 +41,7 @@ class Drive(IAction):
         self.finished=False; self.interruptible=True; self.target=Vec3.from_value(target); self.target_speed=float(target_speed)
         fwd=self.GetEta(car,target,False,False); back=self.GetEta(car,target,True,False)
         self.backwards=(back+.5<fwd and car.forward.Dot(car.velocity)<500 and car.forward.FlatAngle(car.location.Direction(target),car.up)>pi*.6)
-        self.allow_dodges=allow_dodges; self.waste_boost=waste_boost; self.action=None; self.time_on_ground=0.; self.time_remaining=0.; self.noob_drive=NoobBlackDrive()
+        self.allow_dodges=allow_dodges; self.waste_boost=waste_boost; self.action=None; self.time_on_ground=0.; self.time_remaining=0.
     def Run(self,bot):
         car=bot.me
         self.time_remaining=self.Distance(car)/max(self.target_speed,1)
@@ -91,7 +90,6 @@ class Drive(IAction):
                 angle=car.forward.Angle(td)
 
             bot.controller.boost=bool(bot.controller.boost and (angle<.3 or (angle<.8 and not car.is_grounded)) and not self.backwards and self.waste_boost)
-            self.noob_drive.apply_ground_controls(bot,final_target,self.backwards)
 
             predicted=car.LocationAfterDodge()
             time_left=car.location.FlatDist(final_target)/max(car_speed+500,1410)
@@ -113,12 +111,10 @@ class Drive(IAction):
                     self.action=HalfFlip()
 
         elif self.action.finished:
-            self.noob_drive.reset()
             self.action=None
             self.backwards=False
             self.time_on_ground=0
         else:
-            self.noob_drive.reset()
             self.action.Run(bot)
             if isinstance(self.action,SpeedFlip):
                 bot.Throttle(self.target_speed+500,self.backwards)
