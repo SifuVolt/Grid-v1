@@ -112,7 +112,7 @@ class NoobBlackGroundStrategy:
         front_direction = my_car.forward
         prev_front = self.previous_forward if self.previous_forward is not None else front_direction
         goal_location = bot.our_goal.location
-        ball_location = __import__("redutils.objects", fromlist=["Ball"]).Ball.location
+        ball_location = Ball.location
         controls = bot.controller
 
         best_pad = None
@@ -222,6 +222,21 @@ class NoobBlackGroundStrategy:
             if my_car.is_grounded and abs(car_rotation.z) > 0.2:
                 tl = car_location.Flatten()
             controls.steer = self._steer(my_car, tl)
+            flip_distance = car_velocity.FlatLen() * 1.4 + 500 * 1.5 + car_velocity.FlatLen() ** 2 / 7000
+            if (
+                my_car.is_grounded
+                and abs(controls.steer) <= 0.01
+                and car_velocity.FlatLen() >= 1000
+                and (
+                    car_location.FlatDist(tl) >= flip_distance
+                    or (
+                        best_pad is not None
+                        and best_pad.is_large
+                        and abs(car_location.y + front_direction.y * flip_distance) < 5000
+                    )
+                )
+            ):
+                bot.action = NoobBlackFrontFlip()
 
         self.previous_forward = Vec3.from_value(front_direction)
         return True
