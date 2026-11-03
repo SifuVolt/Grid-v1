@@ -84,6 +84,8 @@ class PartyCannonPortTests(unittest.TestCase):
         self.assertTrue(Field.InField(Vec3(0, 0, 100), 50))
         self.assertFalse(Field.InField(Vec3(5000, 0, 100), 50))
         self.assertEqual(Field.LimitToNearestSurface(Vec3(0, 0, 100)).z, 0)
+        self.assertEqual(Field.NearestSurface(Vec3(0, 0, 1950)).key, "Ground")
+        self.assertEqual(Field.NearestSurface(Vec3(0, 0, 1950), ()).key, "Ceiling")
 
     def test_drive_eta_is_finite(self):
         car = Car()
