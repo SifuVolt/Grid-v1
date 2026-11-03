@@ -91,8 +91,7 @@ class Drive(IAction):
                 angle=car.forward.Angle(td)
 
             bot.controller.boost=bool(bot.controller.boost and (angle<.3 or (angle<.8 and not car.is_grounded)) and not self.backwards and self.waste_boost)
-            if car.is_grounded:
-                self.noob_drive.apply_ground_controls(bot,final_target,self.backwards)
+            self.noob_drive.apply_ground_controls(bot,final_target,self.backwards)
 
             predicted=car.LocationAfterDodge()
             time_left=car.location.FlatDist(final_target)/max(car_speed+500,1410)
@@ -114,10 +113,12 @@ class Drive(IAction):
                     self.action=HalfFlip()
 
         elif self.action.finished:
+            self.noob_drive.reset()
             self.action=None
             self.backwards=False
             self.time_on_ground=0
         else:
+            self.noob_drive.reset()
             self.action.Run(bot)
             if isinstance(self.action,SpeedFlip):
                 bot.Throttle(self.target_speed+500,self.backwards)
