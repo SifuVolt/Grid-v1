@@ -1121,6 +1121,10 @@ class Bot(VirxERLU):
         # Share and compare shot opportunities with teammates.
         self.update_teamplay()
 
+        side = utils.side(self.team)
+        ball_depth = self.ball.location.y * side
+        fast_intercept_zone = 0 < ball_depth <= 1280
+
         current_name = (
             self.stack[0].__class__.__name__
             if not self.is_clear()
@@ -1767,7 +1771,6 @@ class Bot(VirxERLU):
             ball_depth = (
                 self.ball.location.y * utils.side(self.team)
             )
-            fast_intercept_zone = 0 < ball_depth <= 1280
             can_take_first_challenge = (
                 not self.friends
                 or self.get_grid_active_challenger() == self.me.index
@@ -1854,7 +1857,16 @@ class Bot(VirxERLU):
                             current_shot_name in ordinary_shots
                             and new_shot_name in ordinary_shots
                         ):
-                            return
+                            current_intercept = getattr(
+                                self.stack[0], "intercept_time", float("inf")
+                            )
+                            # In the shallow own-half zone, let an earlier
+                            # feasible touch replace a later one.
+                            if (
+                                not fast_intercept_zone
+                                or shot.intercept_time >= current_intercept - 0.05
+                            ):
+                                return
 
                         self.clear()
                         self.push(shot)
