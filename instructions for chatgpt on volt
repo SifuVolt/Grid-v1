@@ -596,10 +596,7 @@ class Bot(VirxERLU):
                 shot_type = "ANY_SHOT_FOUND"
 
         # Outside that zone, retain the normal goal-directed shot planner.
-        elif (
-            ball.y * side < 640
-            and self.should_prioritize_ball(ignore_teammate=True)
-        ):
+        elif ball.y * side < 640:
             shot = tools.find_shot(self, self.foe_goal_shot)
 
             if shot is not None:
@@ -1784,10 +1781,7 @@ class Bot(VirxERLU):
             if fast_intercept_searched:
                 shot = routines.fast_intercept_finder().find(self)
 
-            elif (
-                ball_depth < 640
-                and self.should_prioritize_ball()
-            ):
+            elif ball_depth < 640 and can_take_first_challenge:
                 shot = tools.find_shot(self, self.foe_goal_shot)
 
 
