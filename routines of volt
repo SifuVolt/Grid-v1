@@ -2142,6 +2142,126 @@ class grid_defense:
         self._run_defense(agent, self.goalie, self.fast)
 
 
+class fast_intercept_finder:
+    """
+    Earliest-reachable prediction-slice search.
+
+    Unlike VirxERLU's general finder, this checks every prediction slice
+    from the requested time onward instead of starting six slices ahead
+    and skipping slices. Used for urgent saves and the shallow own-half
+    fast-intercept zone.
+    """
+
+    def find(self, agent: VirxERLU, earliest_time=None, cap_=6.0):
+        prediction = getattr(agent, "ball_prediction_struct", None)
+        slices = getattr(prediction, "slices", None) if prediction is not None else None
+        if not slices:
+            return None
+
+        me = agent.me.get_raw(agent)
+        game_info = (agent.boost_accel, agent.ball_radius)
+        gravity = tuple(agent.gravity)
+
+        is_on_ground = not agent.me.airborne
+        can_ground = is_on_ground
+        can_jump = is_on_ground
+        can_double_jump = is_on_ground
+        can_aerial = (
+            not is_on_ground
+            or agent.time - agent.me.land_time > 0.5
+        )
+
+        if not (
+            can_ground or can_jump or can_double_jump or can_aerial
+        ):
+            return None
+
+        first_time = max(
+            agent.time + (1 / 120),
+            earliest_time if earliest_time is not None else agent.time
+        )
+        end_time = min(
+            agent.time + cap_,
+            slices[-1].game_seconds
+        )
+
+        for ball_slice in slices:
+            intercept_time = ball_slice.game_seconds
+
+            if intercept_time < first_time:
+                continue
+            if intercept_time > end_time:
+                break
+
+            T = intercept_time - agent.time - (1 / 120)
+            if T <= 0:
+                continue
+
+            physics = ball_slice.physics
+            location = physics.location
+
+            if abs(location.y) > 5212.75:
+                break
+
+            ball_info = (
+                (location.x, location.y, location.z),
+                (
+                    physics.velocity.x,
+                    physics.velocity.y,
+                    physics.velocity.z
+                )
+            )
+
+            result = virxrlcu.parse_slice_for_shot(
+                can_ground,
+                can_jump,
+                can_double_jump,
+                can_aerial,
+                T,
+                *game_info,
+                gravity,
+                ball_info,
+                me
+            )
+
+            if result.get("found") != 1:
+                continue
+
+            shot_type = int(result["shot_type"])
+
+            if shot_type == 3:
+                return Aerial(
+                    intercept_time,
+                    fast_aerial=bool(result.get("fast", True))
+                )
+
+            constructors = {
+                0: ground_shot,
+                1: jump_shot,
+                2: double_jump
+            }
+            constructor = constructors.get(shot_type)
+            if constructor is not None:
+                return constructor(intercept_time)
+
+        return None
+
+
+class cover_followup_wait:
+    """
+    Keep the non-goalie cover player in its transition lane while the
+    elected attacker takes the first attacking touch.
+    """
+
+    def __init__(self, release_time, contact_key=None):
+        self.release_time = release_time
+        self.contact_key = contact_key
+        self.defense = grid_defense(goalie=False)
+
+    def run(self, agent: VirxERLU):
+        self.defense.run(agent)
+
+
 class goalie_followup_wait:
     """
     Keep the elected goalie in its defensive lane while the challenger
