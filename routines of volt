@@ -1658,8 +1658,8 @@ class grid_defense:
     """
     Grid's ground defensive movement, adapted to the VirxERLU routine API.
 
-    goalie=True holds the central goal-side lane. goalie=False uses Grid's
-    support positioning and its prepare-for-attack lane when appropriate.
+    goalie=True holds the central goal-side lane. goalie=False preserves
+    Grid's rotating non-goalie transition into its prepare-for-attack lane.
     """
 
     def __init__(self, goalie=False, fast=False):
@@ -1995,15 +1995,18 @@ class grid_defense:
         agent.controller.boost = False
         agent.controller.handbrake = False
 
-        # Grid's support player takes a forward/outlet lane when the ball
-        # is in our half and the car is still near midfield.
+        # Match Grid's original prepare_for_attack transition exactly.
+        # goal_location points toward the opponent goal, while side_value
+        # is positive toward our own goal, so the signs are opposite.
+        ball_depth = ball.y * side_value
+        car_depth = car.location.y * side_value
         should_prepare = (
             not self.goalie
-            and ball.y * side_value > 0
-            and car.location.y * side_value <= 50
+            and ball_depth < 0
+            and car_depth >= -50
             and (
-                sign(car.forward.y * goal_location.y) > 0
-                or car.location.y * side_value < -4120
+                car.forward.y * side_value < 0
+                or car_depth > 4120
             )
         )
 
