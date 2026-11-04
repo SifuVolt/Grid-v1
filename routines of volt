@@ -1340,6 +1340,81 @@ class half_flip:
         return True
 
 
+class half_flip_manager:
+    """Single decision gate for shot and navigation half-flips."""
+
+    @staticmethod
+    def active(agent):
+        return any(
+            routine.__class__.__name__ == "half_flip"
+            for routine in getattr(agent, "stack", ())
+        )
+
+    @classmethod
+    def request_for_shot(cls, agent, shot):
+        if agent.me.airborne or cls.active(agent):
+            return False
+
+        # A shot that has already committed to its jump/dodge must finish.
+        if (
+            getattr(shot, "jumping", False)
+            or getattr(shot, "dodging", False)
+        ):
+            return False
+
+        needs_half_flip = getattr(shot, "needs_half_flip", None)
+        if not callable(needs_half_flip) or not needs_half_flip(agent):
+            return False
+
+        # Require the actual ball to be behind the car, not merely the
+        # computed shot approach point.
+        local_ball = agent.me.local_location(agent.ball.location)
+        distance = agent.me.location.flat_dist(agent.ball.location)
+        forward_speed = agent.me.local_velocity().x
+
+        if (
+            local_ball.x >= -250
+            or distance <= 700
+            or forward_speed > 1000
+        ):
+            return False
+
+        print(
+            f"[HALF FLIP] Shot reposition "
+            f"ball_x={local_ball.x:.0f} distance={distance:.0f} "
+            f"forward_speed={forward_speed:.0f}",
+            flush=True
+        )
+        agent.push(half_flip())
+        return True
+
+    @classmethod
+    def request_for_navigation(
+        cls, agent, angle_to_target, distance_remaining, forward_speed
+    ):
+        if agent.me.airborne or cls.active(agent):
+            return False
+
+        # Preserve goto's existing trigger, but route it through the same
+        # lock so it cannot restart an already-running half-flip.
+        if (
+            angle_to_target <= 2.5
+            or forward_speed >= -300
+            or distance_remaining <= 600
+        ):
+            return False
+
+        print(
+            f"[HALF FLIP] Navigation reposition "
+            f"angle={angle_to_target:.2f} "
+            f"distance={distance_remaining:.0f} "
+            f"forward_speed={forward_speed:.0f}",
+            flush=True
+        )
+        agent.push(half_flip())
+        return True
+
+
 class kickoff_cheat:
     """Take a short, controlled cheat lane and hold until kickoff resolves."""
 
@@ -1554,13 +1629,13 @@ class goto:
             agent.push(recovery(self.target))
         elif agent.boost_amount != 'unlimited' and agent.me.boost < 60 and angle_to_target < 0.03 and velocity > 500 and distance_remaining / (velocity + dodge_impulse(agent)) > 1.25:
             agent.push(flip(agent.me.local_location(self.target)))
-        elif (
-            not agent.me.airborne
-            and angle_to_target > 2.5
-            and agent.me.local_velocity().x < -300
-            and distance_remaining > 600
+        elif half_flip_manager.request_for_navigation(
+            agent,
+            angle_to_target,
+            distance_remaining,
+            agent.me.local_velocity().x
         ):
-            agent.push(half_flip())
+            return
 
 
 class shadow:
@@ -3375,18 +3450,6 @@ class ground_shot:
         # the angle to the final target, in radians
         angle_to_target = abs(Vector(x=1).angle2D(local_final_target))
         local_ball = agent.me.local_location(agent.ball.location)
-
-        # Only half-flip for genuine repositioning.
-        # Never half-flip when the ball is already in front of the car
-        # and we're close enough to be making a shot.
-        if (
-            angle_to_target >= 1.6
-            and agent.me.local_velocity().x <= 1000
-            and local_ball.x < -250
-            and agent.me.location.flat_dist(agent.ball.location) > 700
-        ):
-            agent.push(half_flip())
-            return
 
         direction = 1
 
