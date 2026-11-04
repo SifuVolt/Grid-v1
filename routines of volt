@@ -475,6 +475,7 @@ class double_jump:
         self.shot_vector = None
         self.offset_target = None
         self.intercept_time = intercept_time
+        self.base_intercept_time = intercept_time
         self.targets = targets
 
         self.jumping = False
@@ -486,8 +487,111 @@ class double_jump:
         self.should_chip = False
 
     def update(self, shot):
+        self.base_intercept_time = shot.intercept_time
         self.intercept_time = shot.intercept_time
         self.targets = shot.targets
+
+    def _select_patient_intercept(self, agent):
+        """
+        Apply Grid's double-jump wait-for-fall and back-wall alignment delay.
+
+        This only changes the intercept used by the double_jump routine;
+        Volt's ground, jump-shot, and aerial selection remain untouched.
+        """
+        prediction = getattr(agent, "ball_prediction_struct", None)
+        slices = getattr(prediction, "slices", None) if prediction is not None else None
+        if not slices or self.targets is None:
+            return
+
+        start_time = max(
+            self.base_intercept_time,
+            agent.time + 1 / 120
+        )
+        end_time = min(agent.time + 5.0, slices[-1].game_seconds)
+
+        def shot_direction(ball_location):
+            direction = (ball_location - agent.me.location).normalize()
+            left = (self.targets[0] - ball_location).normalize()
+            right = (self.targets[1] - ball_location).normalize()
+            if direction.magnitude() < 1:
+                return left
+            return direction.clamp2D(left, right)
+
+        def double_jump_reachable(ball_location, direction):
+            contact_z = ball_location.z - direction.z * 92.75
+            required_height = max(
+                0.0,
+                contact_z - agent.me.location.z
+            )
+            jump_time, _ = new_jump_time(required_height, True)
+            return jump_time is not None
+
+        start_index = next(
+            (
+                i for i, prediction_slice in enumerate(slices)
+                if prediction_slice.game_seconds >= start_time
+            ),
+            None
+        )
+        if start_index is None:
+            return
+
+        selected_index = None
+        for i in range(start_index, len(slices)):
+            prediction_slice = slices[i]
+            if prediction_slice.game_seconds > end_time:
+                break
+
+            physics = prediction_slice.physics
+            ball = physics.location
+            ball_location = Vector(ball.x, ball.y, ball.z)
+            direction = shot_direction(ball_location)
+
+            # Grid records an unreachable high contact, then takes the
+            # first later prediction where the double jump can reach it.
+            if double_jump_reachable(ball_location, direction):
+                selected_index = i
+                break
+
+        if selected_index is None:
+            return
+
+        # Grid's delay=True behaviour: when a ball is moving in from the
+        # side near the opponent back wall, wait until it enters a better
+        # central shooting lane instead of attacking the poor angle early.
+        selected_slice = slices[selected_index]
+        selected_physics = selected_slice.physics
+        selected_ball = selected_physics.location
+        selected_velocity = selected_physics.velocity
+        goal_y = agent.foe_goal.location.y
+
+        needs_alignment_delay = (
+            abs(selected_ball.x) < 3000
+            and abs(selected_ball.x) - 890 + 92.75 * math.sqrt(2)
+                > abs(selected_ball.y - goal_y)
+            and selected_velocity.x * sign(selected_ball.x) < 0
+        )
+
+        if needs_alignment_delay:
+            for i in range(selected_index + 1, len(slices)):
+                prediction_slice = slices[i]
+                if prediction_slice.game_seconds > end_time:
+                    break
+
+                physics = prediction_slice.physics
+                ball = physics.location
+                ball_location = Vector(ball.x, ball.y, ball.z)
+                direction = shot_direction(ball_location)
+
+                aligned = (
+                    abs(ball.x) - 890 + 92.75 * math.sqrt(2)
+                    <= abs(ball.y - goal_y)
+                )
+                if aligned and double_jump_reachable(ball_location, direction):
+                    selected_index = i
+                    break
+
+        self.intercept_time = slices[selected_index].game_seconds
 
     def needs_half_flip(self, agent):
         if self.targets is None or self.intercept_time <= agent.time:
@@ -523,6 +627,9 @@ class double_jump:
     def run(self, agent: VirxERLU):
         if not agent.shooting:
             agent.shooting = True
+
+        if not self.jumping:
+            self._select_patient_intercept(agent)
 
         T = self.intercept_time - agent.time
         time_remaining = cap(T, 0.000001, 6)
@@ -2003,7 +2110,7 @@ class grid_defense:
         should_prepare = (
             not self.goalie
             and ball_depth < 0
-            and car_depth >= -50
+            and car_depth >= -500
             and (
                 car.forward.y * side_value < 0
                 or car_depth > 4120
