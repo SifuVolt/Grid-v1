@@ -988,9 +988,24 @@ class Bot(VirxERLU):
             self.teamplay_contact_time = 0.0
             self.teamplay_status = "DEFEND"
 
+            # The elected challenger is the one making the first defensive
+            # contact. Publish an estimated contact time so the goalie can
+            # schedule a second interception just after that attempt.
+            if self.friends:
+                attacker, goalie, transition = self.get_grid_team_roles()
+                if self.me.index == attacker:
+                    distance = self.me.location.dist(self.ball.location)
+                    speed = self.me.velocity.magnitude()
+                    self.teamplay_contact_time = max(
+                        0.12,
+                        min(2.0, distance / max(900.0, speed + 1000.0))
+                    )
+
             # Announce that we're taking defensive action.
             self.cover_role_released = True
-            self.send_teamplay_comm("DEFEND", 100.0, 0.0)
+            self.send_teamplay_comm(
+                "DEFEND", 100.0, self.teamplay_contact_time
+            )
             return
 
         # These names must match the actual routine class names.
@@ -1106,6 +1121,145 @@ class Bot(VirxERLU):
             if not self.is_clear()
             else None
         )
+
+        # A goalie must not simply wait for the challenger's save to work.
+        # Hold the existing Grid goalie lane until the challenger's expected
+        # contact, then take a fresh shot candidate from the next prediction
+        # slices if the ball is still dangerous.
+        if self.friends:
+            attacker, goalie, transition = self.get_grid_team_roles()
+            is_goalie = self.me.index == goalie
+            side = utils.side(self.team)
+            ball_depth = self.ball.location.y * side
+
+            if is_goalie and ball_depth > 640:
+                attacker_message = self.get_teammate_comm(
+                    attacker, max_age=0.65
+                ) if attacker is not None else None
+
+                active_save = (
+                    attacker_message is not None
+                    and attacker_message.get("cover_released", False)
+                    and attacker_message.get("status") in {
+                        "DEFEND", "SHOT_FOUND", "ANY_SHOT_FOUND"
+                    }
+                )
+
+                # Continue an already scheduled wait without allowing the
+                # ordinary aerial/boost logic to replace it.
+                if current_name == "goalie_followup_wait":
+                    wait = self.stack[0]
+                    if self.time < wait.release_time:
+                        return
+
+                    contact_key = wait.contact_key
+                    self.clear()
+
+                    ball_depth = self.ball.location.y * side
+                    still_threatening = (
+                        ball_depth > 640
+                        and (
+                            self.ball.velocity.y * side > 100
+                            or ball_depth > 3500
+                        )
+                    )
+
+                    if still_threatening:
+                        followup = tools.find_any_shot(self)
+                        if (
+                            followup is not None
+                            and followup.intercept_time > self.time + 0.08
+                        ):
+                            print(
+                                f"[GOALIE FOLLOWUP] player={self.me.index} "
+                                f"after={contact_key:.2f} "
+                                f"shot={followup.__class__.__name__} "
+                                f"T={followup.intercept_time - self.time:.2f}",
+                                flush=True
+                            )
+                            self.push(followup)
+                            return
+
+                    print(
+                        f"[GOALIE FOLLOWUP] player={self.me.index} "
+                        "first save held; returning to goal",
+                        flush=True
+                    )
+                    self.push(routines.grid_defense(goalie=True))
+                    return
+
+                if (
+                    active_save
+                    and current_name in {
+                        None, "grid_defense", "goto_boost"
+                    }
+                ):
+                    contact_time = max(
+                        0.0,
+                        min(2.5, attacker_message.get("contact_time", 0.0))
+                    )
+
+                    # DEFEND messages now carry an estimated contact time.
+                    # Retain a conservative fallback for older clients.
+                    if (
+                        attacker_message.get("status") == "DEFEND"
+                        and contact_time <= 0.01
+                    ):
+                        attacker_car = next(
+                            (
+                                friend for friend in self.friends
+                                if friend.index == attacker
+                            ),
+                            None
+                        )
+                        if attacker_car is not None:
+                            distance = attacker_car.location.dist(
+                                self.ball.location
+                            )
+                            speed = attacker_car.velocity.magnitude()
+                            contact_time = max(
+                                0.12,
+                                min(2.0, distance / max(900.0, speed + 1000.0))
+                            )
+
+                    contact_at = (
+                        attacker_message["received_at"] + contact_time
+                    )
+                    contact_key = round(contact_at * 2.0) / 2.0
+                    last_key = getattr(
+                        self, "_goalie_followup_contact_key", None
+                    )
+                    last_start = getattr(
+                        self, "_goalie_followup_last_start", -999.0
+                    )
+
+                    if (
+                        last_key is None
+                        or abs(contact_key - last_key) >= 0.5
+                    ) and self.time - last_start >= 1.0:
+                        self._goalie_followup_contact_key = contact_key
+                        self._goalie_followup_last_start = self.time
+
+                        if current_name is not None:
+                            self.clear()
+
+                        release_time = max(
+                            self.time + 0.05,
+                            contact_at + 0.15
+                        )
+                        print(
+                            f"[GOALIE FOLLOWUP] player={self.me.index} "
+                            f"waiting_for={attacker} "
+                            f"contact_in={max(0.0, release_time - self.time):.2f}",
+                            flush=True
+                        )
+                        self.push(
+                            routines.goalie_followup_wait(
+                                release_time, contact_key
+                            )
+                        )
+                        return
+
         if self.should_defensive_aerial():
             if current_name == "Aerial":
                 return
