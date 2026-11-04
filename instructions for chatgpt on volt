@@ -1386,10 +1386,26 @@ class Bot(VirxERLU):
                 "recovery",
                 "wave_dash",
                 "speed_flip",
-                "speedflip_kickoff"
+                "speedflip_kickoff",
+                "double_jump",
+                "jump_shot",
+                "Aerial",
+                "emergency_clear"
             }
 
-            if current_name not in protected:
+            active_shot = (
+                current_name in {"double_jump", "jump_shot", "Aerial"}
+                and (
+                    getattr(self.stack[0], "jumping", False)
+                    or getattr(self.stack[0], "dodging", False)
+                    or getattr(self.stack[0], "counter", 0) >= 1
+                )
+            ) if current_name is not None else False
+
+            if current_name not in protected or (
+                current_name in {"double_jump", "jump_shot", "Aerial"}
+                and not active_shot
+            ):
                 left_post = self.friend_goal.left_post
                 right_post = self.friend_goal.right_post
 
@@ -1707,7 +1723,16 @@ class Bot(VirxERLU):
                         "Aerial"
                     }
 
-                    if current_name in ordinary_shots:
+                    active_shot = (
+                        current_name in {"double_jump", "jump_shot", "Aerial"}
+                        and (
+                            getattr(self.stack[0], "jumping", False)
+                            or getattr(self.stack[0], "dodging", False)
+                            or getattr(self.stack[0], "counter", 0) >= 1
+                        )
+                    ) if current_name is not None else False
+
+                    if current_name in ordinary_shots and not active_shot:
                         self.clear()
 
                     # Yield to the teammate's better opportunity.
@@ -1741,6 +1766,23 @@ class Bot(VirxERLU):
 
                             # Don't cancel an ordinary shot just because a
                             # different ordinary shot is suggested.
+                            active_shot = (
+                                current_shot_name in {"double_jump", "jump_shot", "Aerial"}
+                                and (
+                                    getattr(self.stack[0], "jumping", False)
+                                    or getattr(self.stack[0], "dodging", False)
+                                    or getattr(self.stack[0], "counter", 0) >= 1
+                                )
+                            )
+
+                            if active_shot:
+                                print(
+                                    f"[SHOT LOCK] Keeping active {current_shot_name}; "
+                                    f"ignored replacement {new_shot_name}",
+                                    flush=True
+                                )
+                                return
+
                             if (
                                 current_shot_name in ordinary_shots
                                 and new_shot_name in ordinary_shots
@@ -1847,6 +1889,23 @@ class Bot(VirxERLU):
 
                         # Don't cancel an ordinary shot just because a
                         # different ordinary shot is suggested.
+                        active_shot = (
+                            current_shot_name in {"double_jump", "jump_shot", "Aerial"}
+                            and (
+                                getattr(self.stack[0], "jumping", False)
+                                or getattr(self.stack[0], "dodging", False)
+                                or getattr(self.stack[0], "counter", 0) >= 1
+                            )
+                        )
+
+                        if active_shot:
+                            print(
+                                f"[SHOT LOCK] Keeping active {current_shot_name}; "
+                                f"ignored replacement {new_shot_name}",
+                                flush=True
+                            )
+                            return
+
                         if (
                             current_shot_name in ordinary_shots
                             and new_shot_name in ordinary_shots
