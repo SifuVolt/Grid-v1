@@ -2159,7 +2159,7 @@ class fast_intercept_finder:
             return None
 
         me = agent.me.get_raw(agent)
-        game_info = (agent.boost_accel, agent.ball_radius)
+        game_info = (agent.boost_accel, getattr(agent, "ball_radius", 91.25))
         gravity = tuple(agent.gravity)
 
         is_on_ground = not agent.me.airborne
