@@ -578,7 +578,7 @@ class Bot(VirxERLU):
         side = utils.side(self.team)
         ball = self.ball.location
 
-        if len(self.friends) >= 2 and not self.defensive_emergency():
+        if self.friends and not self.defensive_emergency():
             active_challenger = self.get_grid_active_challenger()
             if (
                 active_challenger is not None
@@ -830,6 +830,26 @@ class Bot(VirxERLU):
                 if alignment < 0:
                     score += 700.0 + (-alignment * 500.0)
 
+            # An already committed shooter keeps first-man priority so the
+            # other bots rotate/support instead of joining the same challenge.
+            shot_names = {
+                "ground_shot", "jump_shot", "double_jump",
+                "Aerial", "short_shot"
+            }
+            if car.index == self.me.index:
+                committed = (
+                    getattr(self, "committed_shot", None) is not None
+                    or any(
+                        routine.__class__.__name__ in shot_names
+                        for routine in self.stack
+                    )
+                )
+            else:
+                message = self.get_teammate_comm(car.index, max_age=0.65) or {}
+                committed = bool(message.get("cover_released", False))
+            if committed:
+                score -= 10000.0
+
             # Avoid electing a car parked inside its own goal mouth
             # as the normal first challenger.
             if car.location.y * side > 4900 and abs(car.location.x) < 1100:
@@ -970,7 +990,14 @@ class Bot(VirxERLU):
         if not eligible:
             eligible = cars
 
-        # Preserve the existing 2v2 support/cover behaviour.
+        # In 2v2, always elect exactly one net defender. The other player is
+        # the challenger/support player, not a second goalie.
+        if len(cars) == 2:
+            attacker, owner, _ = self.get_grid_team_roles()
+            self.cover_role_owner = owner
+            return owner
+
+        # Preserve the existing multi-player cover selection.
         nearest = min(cars, key=lambda car: car.location.dist(ball))
         nearest_dist = nearest.location.dist(ball)
         farthest_dist = max(car.location.dist(ball) for car in cars)
@@ -1052,6 +1079,11 @@ class Bot(VirxERLU):
 
             if message is None:
                 continue
+
+            # An active teammate shot routine is a hard commitment. Do not
+            # double-commit just because our own candidate score is higher.
+            if message.get("cover_released", False):
+                return False
 
             status = message["status"]
             teammate_score = message["score"]
