@@ -1,0 +1,1941 @@
+from util import routines, tools, utils
+from util.agent import Vector, VirxERLU
+
+import json
+import math
+
+
+
+class Bot(VirxERLU):
+    # If the bot encounters an error, VirxERLU will do it's best to keep the bot from crashing.
+    # VirxERLU uses a stack system for it's routines. A stack is a first-in, last-out system of routines.
+    # VirxERLU on VirxEC Showcase -> https\://virxerlu.virxcase.dev/
+    # Questions? Want to be notified about VirxERLU updates? Join my Discord -> https\://discord.gg/5ARzYRD2Na
+    # Wiki -> https\://github.com/VirxEC/VirxERLU/wiki
+    def init(self):
+        # NOTE This method is ran only once, and it's when the bot starts up
+
+        # This is a shot between the opponent's goal posts
+        # NOTE When creating these, it must be a tuple of (left_target, right_target)
+        left_epost = self.foe_goal.left_post
+        right_epost = self.foe_goal.right_post
+
+        goal_width_direction = (
+            right_epost - left_epost
+        ).normalize()
+
+        self.foe_goal_shot = (
+            left_epost + goal_width_direction * 39,
+            right_epost - goal_width_direction * 39
+        )
+        
+        left_post = self.friend_goal.left_post
+        right_post = self.friend_goal.right_post
+
+        goal_width_direction = (
+            right_post - left_post
+        ).normalize()
+
+        anti_target = (
+            right_post + goal_width_direction * 100,
+            left_post - goal_width_direction * 100
+        )
+        self.last_prejump_check = -999.0
+        self.prejump_cooldown_until = -999.0
+        self.kickoff_routine_started = False
+        self.kickoff_role = None
+        self.kickoff_boost_pending = False
+        self.kickoff_ball_start = None
+        self.committed_shot = None
+        # Teamplay communication state.
+        self.cover_role_owner = None
+        self.cover_role_released = False
+        self.teammate_comms = {}
+        self.last_comms_signature = None
+        self.last_comms_send_time = -999.0
+        self.teamplay_shot = None
+        self.teamplay_score = 0.0
+        self.teamplay_contact_time = 10.0
+        self.teamplay_status = "NO_SHOT"
+        self.kickoff_routine_started = False
+        self.last_emergency_clear_time = -999.0
+        self.emergency_save_zone_active = False
+        self.emergency_save_active = False
+        self.emergency_save_cooldown = 0
+
+
+        # NOTE If you want to shoot the ball anywhere BUT between to targets, then make a tuple like (right_target, left_target) - I call this an anti-target
+    def _cars(self):
+        return [self.me] + list(self.friends)
+    def should_prejump_defensive_read(self):
+        """Rate-limited read of a likely opponent shot; no per-packet re-search."""
+        if self.time < self.prejump_cooldown_until or self.time - self.last_prejump_check < 0.12:
+            return False
+        self.last_prejump_check = self.time
+        if self.me.airborne or self.me.boost < 8:
+            return False
+        ball = self.ball.location
+        side = utils.side(self.team)
+        depth = ball.y * side
+        if ball.z < 280 or depth < -300 or depth > 4700:
+            return False
+        if not self.foes:
+            return False
+        foe = min(self.foes, key=self._eta_to_ball)
+        foe_eta = self._eta_to_ball(foe)
+        my_eta = self._eta_to_ball(self.me)
+        if foe_eta + 0.17 >= my_eta or foe.location.dist(ball) > 1500:
+            return False
+        toward_goal = (self.friend_goal.location - ball).flatten()
+        foe_forward = foe.forward.flatten()
+        if toward_goal.magnitude() < 1 or foe_forward.magnitude() < 1:
+            return False
+        threat_alignment = foe_forward.normalize().dot(toward_goal.normalize())
+        ball_to_goal = toward_goal.normalize()
+        ball_velocity = self.ball.velocity.flatten()
+        velocity_alignment = 0.0
+        if ball_velocity.magnitude() > 100:
+            velocity_alignment = ball_velocity.normalize().dot(ball_to_goal)
+        # Opponent must be facing toward our goal, or the ball must already be
+        # moving goalward. This avoids jumping at harmless opponent touches.
+        return threat_alignment > 0.30 or velocity_alignment > 0.48
+    def _flat_speed(self, car):
+        v = car.velocity
+        return math.hypot(v.x, v.y)
+
+    def _eta_to_ball(self, car):
+        """Cheap, deterministic ETA estimate; every teammate can calculate it."""
+        delta = self.ball.location - car.location
+        distance = max(0.0, delta.magnitude())
+        flat_delta = delta.flatten()
+        forward = car.forward.flatten()
+        facing = 1.0
+        if flat_delta.magnitude() > 1 and forward.magnitude() > 1:
+            facing = max(-1.0, min(1.0, forward.normalize().dot(flat_delta.normalize())))
+        speed = self._flat_speed(car)
+        effective_speed = max(850.0, min(2100.0, speed + 650.0))
+        turn_penalty = (1.0 - facing) * 0.28
+        height_penalty = max(0.0, self.ball.location.z - car.location.z) / 5000.0
+        return distance / effective_speed + turn_penalty + height_penalty
+    def should_take_kickoff(self):
+        # 1v1: always take the kickoff
+        if len(self.friends) == 0:
+            return True
+
+        teammate = min(
+            self.friends,
+            key=lambda car: car.location.dist(self.ball.location)
+        )
+
+        my_distance = self.me.location.dist(self.ball.location)
+        teammate_distance = teammate.location.dist(self.ball.location)
+
+        # If one player is clearly closer, the closer player takes it.
+        if my_distance + 300 < teammate_distance:
+            return True
+
+        if teammate_distance + 300 < my_distance:
+            return False
+
+        # If the positions are roughly equal, use left-goes.
+        # From our team's perspective, left is x * side(team) < 0.
+        return self.me.location.x * utils.side(self.team) < 0
+        
+    def should_defensive_aerial(self):
+        side = utils.side(self.team)
+        ball = self.ball.location
+        car = self.me
+
+        # Ball must be high and in our half.
+        ball_depth = ball.y * side
+        if ball.z < 350 or ball_depth < 0:
+            return False
+
+        # Ball must be travelling towards our own goal.
+        if self.ball.velocity.y * side < 250:
+            return False
+
+        # Car must be facing generally towards our own goal.
+        toward_own_goal = (
+            self.friend_goal.location - car.location
+        ).flatten().normalize()
+
+        car_forward = car.forward.flatten().normalize()
+
+        if car_forward.dot(toward_own_goal) < 0.35:
+            return False
+
+        # Avoid attempting an aerial when the ball is too far away.
+        if car.location.dist(ball) > 3000:
+            return False
+
+        return True
+
+    def _kickoff_assignments(self):
+        cars = self._cars()
+        ordered = sorted(
+            cars,
+            key=lambda car: (car.location.dist(self.ball.location), car.index),
+        )
+        kicker = ordered[0]
+        cheater = ordered[1] if len(ordered) >= 2 else None
+        boost_player = ordered[2] if len(ordered) >= 3 else None
+        return kicker.index, cheater.index if cheater else None, boost_player.index if boost_player else None
+
+    def should_take_kickoff(self):
+        if not self.friends:
+            return True
+        kicker, _, _ = self._kickoff_assignments()
+        return self.me.index == kicker
+
+    def _kickoff_boost_target(self):
+        side = utils.side(self.team)
+        pads = [
+            boost for boost in self.boosts
+            if boost.active and boost.large and boost.location.y * side > 2500
+        ]
+        if not pads:
+            pads = [boost for boost in self.boosts if boost.active and boost.large]
+        if not pads:
+            return None
+
+        # Prefer the back-corner pad on the player's own side of the field.
+        return min(
+            pads,
+            key=lambda boost: (
+                boost.location.dist(self.me.location)
+                + 0.35 * abs(boost.location.x - self.me.location.x),
+                boost.location.x * self.me.location.x < 0,
+            ),
+        )
+
+    def _kickoff_resolved(self):
+        if self.kickoff_ball_start is None:
+            return False
+        moved = self.ball.location.dist(self.kickoff_ball_start) > 300
+        fast = self.ball.velocity.magnitude() > 350
+        return moved or fast
+    def should_prioritize_ball(self, ignore_teammate=False):
+        """
+        Mode-specific ball prioritization.
+
+        1v1: Aggressive, but avoid bad challenges.
+        2v2: Balanced challenges with teammate awareness.
+        3v3: Aggressive pressure, especially in the attacking half.
+        """
+
+        car = self.me
+        ball = self.ball.location
+        side = utils.side(self.team)
+
+        distance = car.location.dist(ball)
+        local_ball = car.local_location(ball)
+        angle = abs(Vector(x=1).angle2D(local_ball))
+
+        ball_depth = ball.y * side
+
+        ball_toward_our_goal = (
+            self.ball.velocity.y * side > 400
+        )
+
+        ball_in_enemy_half = ball_depth < -500
+        ball_near_enemy_goal = ball_depth < -3000
+
+        mode = len(self.friends) + 1
+
+        # Genuine defensive emergencies always take priority.
+        if self.defensive_emergency():
+            return True
+                # --------------------------------------------------
+        # EMERGENCY GOAL-LINE DEFENCE
+        # Never yield a dangerous goal-line ball to teammate logic.
+        # --------------------------------------------------
+
+        # Ball is very close to our goal.
+        if ball_depth > 4000 and distance < 3200:
+            return True
+
+        # Ball is approaching our goal from the deeper defensive half.
+        if (
+            ball_depth > 3400
+            and ball_toward_our_goal
+            and distance < 2800
+        ):
+            return True
+
+        # --------------------------------------------------
+        # 1V1
+        # --------------------------------------------------
+
+        if mode == 1:
+
+            if distance < 650 and local_ball.x > -250:
+                return True
+
+            if local_ball.x < -200 and distance > 1100:
+                return False
+
+            if distance < 1500:
+                return angle < 1.65
+
+            return angle < 1.15
+
+        # --------------------------------------------------
+        # TEAMMATE AWARENESS
+        # --------------------------------------------------
+
+        
+        teammate_has_ball = False
+        teammate_distance = 99999
+        teammate_angle = 3.14
+
+        if not ignore_teammate:
+
+            if mode == 3:
+                # Grid-style role election already selects one challenger.
+                teammate_has_ball = False
+
+            else:
+                # Preserve the existing 2v2 teammate-awareness behaviour.
+                for friend in self.friends:
+                    friend_distance = friend.location.dist(ball)
+
+                    friend_local = friend.local_location(ball)
+                    friend_angle = abs(
+                        Vector(x=1).angle2D(friend_local)
+                    )
+
+                    if friend_distance < teammate_distance:
+                        teammate_distance = friend_distance
+                        teammate_angle = friend_angle
+
+                    if (
+                        friend_distance + 500 < distance
+                        and friend_angle < 0.85
+                        and friend_local.x > 0
+                    ):
+                        teammate_has_ball = True
+
+
+        # --------------------------------------------------
+        # 2V2
+        # --------------------------------------------------
+
+        if mode == 2:
+
+            # Don't double commit when teammate has a clear advantage.
+            if teammate_has_ball:
+                return False
+
+            # Defensive situations deserve more urgency.
+            if ball_depth > 640 and ball_toward_our_goal:
+                if distance < 2000:
+                    return True
+
+            # Take immediate opportunities.
+            if distance < 550 and local_ball.x > -150:
+                return True
+
+            # Don't chase balls significantly behind us.
+            if local_ball.x < -250 and distance > 1000:
+                return False
+
+            # Opponent has a major advantage.
+            if self.foes:
+                enemy_distance = min(
+                    foe.location.dist(ball)
+                    for foe in self.foes
+                )
+
+                # Avoid challenging when completely beaten.
+                if enemy_distance + 350 < distance:
+                    return distance < 650 and angle < 0.7
+
+            # Normal challenge thresholds.
+            if distance < 1400:
+                return angle < 1.5
+
+            return angle < 1.2
+
+        # --------------------------------------------------
+        # 3V3
+        # --------------------------------------------------
+
+                
+        # --------------------------------------------------
+        # 3V3
+        # --------------------------------------------------
+
+        if mode == 3:
+            attacker_index, cover_index, support_index = self.get_grid_team_roles()
+            active_challenger = self.get_grid_active_challenger()
+
+            # Only the elected player challenges. Cover takes over only when
+            # the ball enters the defensive area behind the moving line.
+            if active_challenger is None or self.me.index != active_challenger:
+                return False
+
+            if teammate_has_ball:
+                return False
+
+            if active_challenger == cover_index:
+                return distance < 2400 and angle < 1.8
+
+            # First man: retain Grid's aggressive forward pressure.
+            if ball_depth > 640 and ball_toward_our_goal and distance < 2300:
+                return True
+
+            if distance < 700 and local_ball.x > -250:
+                return True
+
+            if ball_in_enemy_half:
+                if ball_near_enemy_goal and distance < 2600:
+                    return angle < 2.0
+
+                if distance < 1900:
+                    return angle < 1.75
+
+                if self.foes:
+                    enemy_distance = min(
+                        foe.location.dist(ball)
+                        for foe in self.foes
+                    )
+                    if enemy_distance + 750 < distance:
+                        return False
+
+                return angle < 1.45
+
+            if distance < 1500:
+                return angle < 1.5
+
+            if self.foes:
+                enemy_distance = min(
+                    foe.location.dist(ball)
+                    for foe in self.foes
+                )
+                if enemy_distance + 450 < distance:
+                    return distance < 650 and angle < 0.7
+
+            if distance < 2400 and angle < 2.35:
+                return True
+
+            if distance < 3100 and angle < 1.65 and self.me.boost >= 16:
+                return True
+
+            return angle < 1.25
+
+    def boost_on_route_to_ball(self):
+        """Collect useful route boost, with wider options in our own corner."""
+        if self.defensive_emergency():
+            return None
+
+        car = self.me
+        ball = self.ball.location
+        side = utils.side(self.team)
+        ball_depth = ball.y * side
+
+        # Don't leave the ball uncontested when an opponent is close.
+        if any(foe.location.dist(ball) < 700 for foe in self.foes):
+            return None
+
+        dx = ball.x - car.location.x
+        dy = ball.y - car.location.y
+        length_squared = dx * dx + dy * dy
+
+        best_boost = None
+        best_score = float("inf")
+
+        own_corner = (
+            ball_depth > 640
+            and abs(ball.x) > 1200
+            and car.boost < 70
+        )
+
+        for boost in self.boosts:
+            if not boost.active:
+                continue
+
+            pad = boost.location
+            car_distance = car.location.flat_dist(pad)
+            pad_to_ball = pad.flat_dist(ball)
+
+            # Never make a corner-boost detour if an opponent is
+            # already close enough to contest that pad.
+            enemy_near_pad = any(
+                foe.location.flat_dist(pad) < 1100
+                for foe in self.foes
+            )
+
+            is_own_corner_pad = (
+                boost.large
+                and pad.y * side > 2500
+                and abs(pad.x) > 2200
+            )
+
+            # Special case: our own corner. A wider detour is worthwhile
+            # when we have time and the pad is not being contested.
+            if own_corner and is_own_corner_pad and not enemy_near_pad:
+                max_distance = (
+                    2800 if car.boost < 35
+                    else 2100 if car.boost < 55
+                    else 1500
+                )
+
+                if car_distance <= max_distance and pad_to_ball < 3200:
+                    score = car_distance + 0.35 * pad_to_ball
+
+                    if score < best_score:
+                        best_score = score
+                        best_boost = boost
+
+            # Normal route boost: allow a slightly wider route than before.
+            if length_squared > 1:
+                bx = pad.x - car.location.x
+                by = pad.y - car.location.y
+
+                progress = (bx * dx + by * dy) / length_squared
+
+                if not 0.05 < progress < 0.92:
+                    continue
+
+                nearest_x = car.location.x + progress * dx
+                nearest_y = car.location.y + progress * dy
+
+                lateral_distance = math.hypot(
+                    pad.x - nearest_x,
+                    pad.y - nearest_y
+                )
+
+                if lateral_distance > 350 or car_distance > 1400:
+                    continue
+
+                score = car_distance + lateral_distance * 1.5
+
+                if score < best_score:
+                    best_score = score
+                    best_boost = boost
+
+        return best_boost
+
+
+    def ball_rolling_toward_me(self):
+        ball = self.ball
+        car = self.me
+
+        # Ball should be near the ground.
+        if ball.location.z > 120:
+            return False
+
+        # Direction from the ball towards our car.
+        ball_to_car = (car.location - ball.location).flatten().normalize()
+
+        # Ball velocity must point generally towards our car.
+        ball_velocity = ball.velocity.flatten()
+
+        if ball_velocity.magnitude() < 250:
+            return False
+
+        return ball_velocity.normalize().dot(ball_to_car) > 0.65
+    
+    def defensive_emergency(self):
+        side = utils.side(self.team)
+        ball = self.ball.location
+
+        ball_depth = ball.y * side
+        moving_toward_goal = self.ball.velocity.y * side > 250
+
+        # Extreme danger: a low ball is right on our doorstep,
+        # even if its velocity isn't currently toward our goal.
+        extreme_danger = (
+            ball_depth > 4200
+            and ball.z < 350
+        )
+
+        # Normal danger: a low ball is moving toward our goal.
+        low_ball_threat = (
+            ball_depth > 1200
+            and ball.z < 350
+            and moving_toward_goal
+        )
+
+        return extreme_danger or low_ball_threat
+
+    
+    
+    def ball_in_goal_danger(self, distance=400):
+        # Horizontal distance from the ball to our goal centre.
+        side = utils.side(self.team)
+        ball = self.ball.location
+        return self.ball.location.flat_dist(
+            self.friend_goal.location
+        ) < distance and self.ball.velocity.y * side > 250
+    def find_teamplay_opportunity(self):
+        """Score a shot using contact time, approach angle, and shooting line."""
+
+        shot = None
+        shot_type = "NO_SHOT"
+
+        side = utils.side(self.team)
+        ball = self.ball.location
+
+        if len(self.friends) >= 2 and not self.defensive_emergency():
+            active_challenger = self.get_grid_active_challenger()
+            if (
+                active_challenger is not None
+                and active_challenger != self.me.index
+            ):
+                return None, 0.0, 10.0, "NO_SHOT"
+
+        # Try to find a real shot toward the opponent's goal first.
+        if (
+            ball.y * side < 640
+            and self.should_prioritize_ball(ignore_teammate=True)
+        ):
+            shot = tools.find_shot(self, self.foe_goal_shot)
+
+            if shot is not None:
+                shot_type = "SHOT_FOUND"
+
+        # Only fall back to a general touch when a targeted shot isn't available.
+        if (
+            shot is None
+            and ball.y * side < self.me.location.y * side
+        ):
+            left_post = self.friend_goal.left_post
+            right_post = self.friend_goal.right_post
+
+            goal_width_direction = (
+                right_post - left_post
+            ).normalize()
+            anti_target = (
+                right_post + goal_width_direction * 150,
+                left_post - goal_width_direction * 150
+            )
+            shot = tools.find_any_shot(self)
+
+            if shot is not None:
+                shot_type = "ANY_SHOT_FOUND"
+
+        if shot is None:
+            return None, 0.0, 10.0, "NO_SHOT"
+
+        contact_time = max(
+            0.0,
+            min(10.0, shot.intercept_time - self.time)
+        )
+
+        distance = self.me.location.dist(ball)
+
+        # 1. How well is the car facing the ball?
+        local_ball = self.me.local_location(ball)
+        facing_angle = abs(Vector(x=1).angle2D(local_ball))
+
+        # 2. Is the car approaching from a useful side of the ball?
+        # Ideally, the car approaches from behind the ball, in the
+        # direction of the opponent's goal.
+        approach = (ball - self.me.location).flatten()
+        goal_direction = (
+            self.foe_goal.location - ball
+        ).flatten()
+
+        shooting_angle_penalty = 0.0
+
+        if approach.magnitude() > 1 and goal_direction.magnitude() > 1:
+            approach = approach.normalize()
+            goal_direction = goal_direction.normalize()
+
+            alignment = max(
+                -1.0,
+                min(1.0, approach.dot(goal_direction))
+            )
+
+            # 0 penalty = straight toward goal.
+            # Larger penalty = approaching from the side or wrong direction.
+            shooting_angle_penalty = (1.0 - alignment) * 14.0
+
+        # Goal-directed shots should beat ordinary touches when their
+        # contact time and approach are reasonably competitive.
+        score = 78.0 if shot_type == "SHOT_FOUND" else 64.0
+
+        score -= min(contact_time, 4.0) * 7.0
+        score -= min(facing_angle, 3.14) * 7.0
+        score -= min(distance / 3000.0, 1.0) * 10.0
+
+        # Give the quality of the shooting line a meaningful influence.
+        if shot_type == "SHOT_FOUND":
+            score -= shooting_angle_penalty
+        else:
+            # Still discourage a sideways approach for general touches,
+            # but don't make it as important as a genuine shot on goal.
+            score -= shooting_angle_penalty * 0.35
+
+        if self.me.boost < 25:
+            score -= 4.0
+
+        # An actual defensive emergency takes priority.
+        if self.defensive_emergency():
+            score += 15.0
+
+        score = max(0.0, min(100.0, score))
+        
+        # A genuine goal-directed shot takes priority over a general touch.
+
+        # In 3v3, the designated cover player yields when
+        # second man has a comparable opportunity.
+        if len(self.friends) >= 2 and self.should_hold_cover_role():
+            for friend in self.friends:
+                comms = self.get_teammate_comm(friend.index, max_age=0.5) or {}
+
+                friend_score = comms.get("score", 0.0)
+                friend_type = comms.get("shot_type", "NO_SHOT")
+
+                # Only yield to a teammate who has a real shot/touch.
+                friend_has_opportunity = friend_type in (
+                    "SHOT_FOUND",
+                    "ANY_SHOT_FOUND"
+                )
+
+                if (
+                    friend_has_opportunity
+                    and friend_score >= score - 8.0
+                ):
+                    print(
+                        f"[TEAMPLAY] Cover player yielding to "
+                        f"teammate {friend.index}: "
+                        f"my_score={score:.1f}, "
+                        f"teammate_score={friend_score:.1f}",
+                        flush=True
+                    )
+
+                    return None, 0.0, 10.0, "NO_SHOT"
+
+        # Useful for checking why one teammate wins the comparison.
+        print(
+            f"[TEAMPLAY] {self.me.index if hasattr(self.me, 'index') else 'ME'} "
+            f"type={shot_type} score={score:.1f} "
+            f"time={contact_time:.2f} dist={distance:.0f} "
+            f"face={facing_angle:.2f} "
+            f"shoot_penalty={shooting_angle_penalty:.1f}",
+            flush=True
+        )
+
+        return shot, score, contact_time, shot_type
+
+    def opponent_is_vulnerable(self):
+        """Challenge when a nearby opponent is facing away from our goal."""
+
+        ball = self.ball.location
+        car = self.me
+
+        if car.location.dist(ball) > 1800:
+            return False
+
+        for foe in self.foes:
+            if foe.location.dist(ball) > 900:
+                continue
+
+            # Direction from opponent toward our goal.
+            toward_our_goal = (
+                self.friend_goal.location - foe.location
+            ).flatten().normalize()
+
+            foe_forward = foe.forward.flatten().normalize()
+
+            # Positive: facing our goal.
+            # Negative: facing away from our goal, toward their own end.
+            goal_alignment = foe_forward.dot(toward_our_goal)
+
+            # Ball is behind the opponent, so they must turn around.
+            foe_local_ball = foe.local_location(ball)
+            ball_behind_foe = foe_local_ball.x < -150
+
+            # Strong vulnerability: opponent is facing away from our goal.
+            facing_own_goal = goal_alignment < -0.25
+
+            if facing_own_goal or ball_behind_foe:
+                return True
+
+        return False
+
+    
+    def opponent_can_reach_ball_first(self):
+        """Avoid a losing challenge when an opponent can reach our-side ball first."""
+        ball = self.ball.location
+        me = self.me.location
+        side = utils.side(self.team)
+
+        # Ball is not on our side: use normal attacking logic.
+        ball_depth = ball.y * side
+        if ball_depth < 0:
+            return False
+
+        # Never suppress an emergency doorstep save.
+        if ball_depth > 4200 and ball.z < 350:
+            return False
+
+        def distance(a, b):
+            dx = a.x - b.x
+            dy = a.y - b.y
+            dz = a.z - b.z
+            return math.sqrt(dx * dx + dy * dy + dz * dz)
+
+        def flat_speed(car):
+            v = car.velocity
+            return math.sqrt(v.x * v.x + v.y * v.y)
+
+        my_distance = distance(me, ball)
+        my_eta = my_distance / max(900, flat_speed(self.me) + 500)
+
+        for foe in self.foes:
+            foe_distance = distance(foe.location, ball)
+            foe_eta = foe_distance / max(900, flat_speed(foe) + 500)
+
+            # Require a meaningful opponent advantage to avoid excessive passivity.
+            if foe_eta + 0.20 < my_eta:
+                return True
+
+        return False
+    def get_grid_team_roles(self):
+        """
+        Grid-style 3v3 role election:
+        - one primary challenger,
+        - one deepest remaining player as cover,
+        - one support player between them.
+
+        Every bot calculates the same roles from the shared packet.
+        """
+        cars = [self.me] + list(self.friends)
+        cars = [
+            car for car in cars
+            if not getattr(car, "demolished", False)
+        ]
+        cars.sort(key=lambda car: car.index)
+
+        if not cars:
+            return None, None, None
+
+        ball = self.ball.location
+        side = utils.side(self.team)
+
+        def challenge_score(car):
+            distance = car.location.dist(ball)
+            local_ball = car.local_location(ball)
+            facing_angle = abs(Vector(x=1).angle2D(local_ball))
+            score = distance + facing_angle * 180.0
+
+            flat_to_ball = (ball - car.location).flatten()
+            forward = car.forward.flatten()
+            if flat_to_ball.magnitude() > 1 and forward.magnitude() > 1:
+                alignment = forward.normalize().dot(flat_to_ball.normalize())
+                if alignment < 0:
+                    score += 700.0 + (-alignment * 500.0)
+
+            # Avoid electing a car parked inside its own goal mouth
+            # as the normal first challenger.
+            if car.location.y * side > 4900 and abs(car.location.x) < 1100:
+                score += 5000.0
+
+            return score
+
+        attacker = min(
+            cars,
+            key=lambda car: (challenge_score(car), car.index)
+        )
+
+        remaining = [
+            car for car in cars
+            if car.index != attacker.index
+        ]
+
+        if not remaining:
+            return attacker.index, None, None
+
+        cover = max(
+            remaining,
+            key=lambda car: (
+                car.location.y * side,
+                -car.index
+            )
+        )
+
+        support = next(
+            (
+                car for car in remaining
+                if car.index != cover.index
+            ),
+            None
+        )
+
+        return (
+            attacker.index,
+            cover.index,
+            support.index if support is not None else None
+        )
+
+    def get_team_defensive_line_depth(self):
+        """
+        Dynamic defensive line measured from our own goal.
+
+        As the two non-cover teammates move upfield, their average depth
+        decreases and the cover line moves up with them. It is deliberately
+        outside the goal rather than pinned to the goal line.
+        """
+        attacker, cover, support = self.get_grid_team_roles()
+        if cover is None:
+            return 2400.0
+
+        side = utils.side(self.team)
+        cars = [self.me] + list(self.friends)
+        forward_players = [
+            car for car in cars
+            if car.index != cover
+            and not getattr(car, "demolished", False)
+        ]
+
+        if not forward_players:
+            return 2400.0
+
+        average_forward_depth = sum(
+            car.location.y * side
+            for car in forward_players
+        ) / len(forward_players)
+
+        return max(
+            1200.0,
+            min(3900.0, average_forward_depth + 650.0)
+        )
+
+    def get_grid_active_challenger(self):
+        """
+        The normal first man challenges.
+        If the ball breaks behind the moving defensive line, cover takes over.
+        """
+        attacker, cover, support = self.get_grid_team_roles()
+        if attacker is None:
+            return None
+
+        if cover is None:
+            return attacker
+
+        ball_depth = self.ball.location.y * utils.side(self.team)
+        defensive_line = self.get_team_defensive_line_depth()
+
+        if ball_depth >= defensive_line - 350:
+            return cover
+
+        return attacker
+
+    def get_cover_role_owner(self):
+        side = utils.side(self.team)
+        ball = self.ball.location
+        ball_depth = ball.y * side
+        cars = [
+            car for car in [self.me] + list(self.friends)
+            if not getattr(car, "demolished", False)
+        ]
+
+        # In 3v3, elect the first man, then the deepest of the remaining cars.
+        if len(self.friends) >= 2:
+            attacker, owner, support = self.get_grid_team_roles()
+            self.cover_role_owner = owner
+            return owner
+
+        if len(cars) < 2:
+            self.cover_role_owner = None
+            return None
+
+        shot_names = {
+            "ground_shot", "jump_shot", "double_jump",
+            "Aerial", "short_shot"
+        }
+
+        def is_committed(car):
+            if car.index == self.me.index:
+                return (
+                    getattr(self, "committed_shot", None) is not None
+                    or any(
+                        routine.__class__.__name__ in shot_names
+                        for routine in self.stack
+                    )
+                )
+
+            message = self.get_teammate_comm(car.index, max_age=0.65)
+            return bool(message and message.get("cover_released", False))
+
+        eligible = [car for car in cars if not is_committed(car)]
+        if not eligible:
+            eligible = cars
+
+        # Preserve the existing 2v2 support/cover behaviour.
+        nearest = min(cars, key=lambda car: car.location.dist(ball))
+        nearest_dist = nearest.location.dist(ball)
+        farthest_dist = max(car.location.dist(ball) for car in cars)
+
+        clear_attacker = (
+            nearest_dist + 250 < farthest_dist
+            and nearest_dist < 3000
+        )
+
+        if clear_attacker:
+            candidates = [
+                car for car in eligible
+                if car.index != nearest.index
+                and car.location.y * side > ball_depth + 150
+            ]
+
+            if not candidates:
+                self.cover_role_owner = None
+                return None
+
+            owner = max(
+                candidates,
+                key=lambda car: (car.location.y * side, -car.index)
+            )
+        else:
+            ahead = [
+                car for car in cars
+                if car.location.y * side < ball_depth - 200
+                and car.location.dist(ball) < 3500
+            ]
+            cover_candidates = [
+                car for car in eligible
+                if car.location.y * side > ball_depth + 200
+            ]
+
+            if not ahead or not cover_candidates:
+                self.cover_role_owner = None
+                return None
+
+            owner = max(
+                cover_candidates,
+                key=lambda car: (car.location.y * side, -car.index)
+            )
+
+        self.cover_role_owner = owner.index
+        return owner.index
+
+    def should_hold_cover_role(self):
+        if not self.friends:
+            return False
+
+        side = utils.side(self.team)
+        ball = self.ball.location
+        ball_depth = ball.y * side
+
+        if (
+            self.defensive_emergency()
+            and ball_depth > 4350
+            and ball.z < 350
+        ):
+            return False
+
+        return self.get_cover_role_owner() == self.me.index
+
+    def should_commit_to_shot(self, my_score, my_contact_time):
+        """Yield only when a teammate has a meaningfully better opportunity."""
+        if not self.friends:
+            return True
+
+        # Don't let normal teamplay logic override an urgent own-goal threat.
+        if self.defensive_emergency():
+            return True
+
+        side = utils.side(self.team)
+        ball_is_our_side = self.ball.location.y * side > 640
+        
+        for friend in self.friends:
+            message = self.get_teammate_comm(friend.index, max_age=0.5)
+
+            if message is None:
+                continue
+
+            status = message["status"]
+            teammate_score = message["score"]
+            teammate_time = message["contact_time"]
+
+            # A teammate handling a defensive emergency should be allowed
+            # to take responsibility when the ball is in our half.
+            if status == "DEFEND" and ball_is_our_side:
+                return False
+
+            if status not in {"SHOT_FOUND", "ANY_SHOT_FOUND"}:
+                continue
+            
+            # If our teammate is rotating forward from behind us and has
+            # found a shot, give them priority unless our shot is clearly better.
+            friend_depth = friend.location.y * side
+            my_depth = self.me.location.y * side
+
+            teammate_rotating_from_behind = (
+                friend_depth > my_depth + 250
+                and self.ball.location.y * side < 640
+            )
+
+            if teammate_rotating_from_behind:
+                my_shot_is_clearly_better = (
+                    my_score >= teammate_score + 12.0
+                    and my_contact_time <= teammate_time + 0.35
+                )
+
+                if not my_shot_is_clearly_better:
+                    return False
+
+                # Our opportunity is clearly better, so keep attacking.
+                continue
+
+            # A clearly better score plus a reasonably similar arrival time.
+            teammate_has_better_shot = (
+                teammate_score >= my_score + 8.0
+                and teammate_time <= my_contact_time + 0.80
+            )
+
+            # If the teammate can arrive substantially earlier and has
+            # a comparable opportunity, let them take the first challenge.
+            teammate_arrives_first = (
+                teammate_time + 0.45 < my_contact_time
+                and teammate_score >= my_score - 8.0
+            )
+
+            if teammate_has_better_shot or teammate_arrives_first:
+                return False
+
+        return True
+
+    def update_teamplay(self):
+
+        """Refresh shot information and announce when we leave cover to commit."""
+
+        # Check for an urgent defensive situation first.
+        if self.defensive_emergency():
+            self.teamplay_shot = None
+            self.teamplay_score = 100.0
+            self.teamplay_contact_time = 0.0
+            self.teamplay_status = "DEFEND"
+
+            # Announce that we're taking defensive action.
+            self.cover_role_released = True
+            self.send_teamplay_comm("DEFEND", 100.0, 0.0)
+            return
+
+        # These names must match the actual routine class names.
+        shot_names = {
+            "ground_shot",
+            "jump_shot",
+            "double_jump",
+            "Aerial",
+            "short_shot"
+        }
+
+        # A candidate alone does NOT count as a commitment.
+        active_shot = any(
+            routine.__class__.__name__ in shot_names
+            for routine in self.stack
+        )
+
+        # Release cover only once an actual shot routine is active.
+        self.cover_role_released = active_shot
+
+        # Recalculate on the same cadence as your existing shot selection.
+        if self.is_clear() or self.odd_tick == 0:
+            (
+                self.teamplay_shot,
+                self.teamplay_score,
+                self.teamplay_contact_time,
+                self.teamplay_status,
+            ) = self.find_teamplay_opportunity()
+
+        status = self.teamplay_status
+        score = self.teamplay_score
+        contact_time = self.teamplay_contact_time
+
+        if status == "NO_SHOT" and self.me.boost < 18:
+            status = "LOW_BOOST"
+        self.send_teamplay_comm(
+            status,
+            score,
+            contact_time
+        )
+
+
+    
+    def run_logic(self):
+        # NOTE This method is ran every tick
+
+
+        # If the kickoff isn't done
+        
+       
+       
+        # Kickoff logic: assign the role once and don't restart
+        # the kickoff routine if its stack temporarily becomes empty.
+        if not self.kickoff_done:
+            if self.kickoff_routine_started:
+                if self.kickoff_boost_pending and self._kickoff_resolved():
+                    self.kickoff_done = True
+                    self.kickoff_boost_pending = False
+                    print("[KICKOFF] Ball moved; boost player released", flush=True)
+                else:
+                    return
+            else:
+                kicker, cheater, boost_player = self._kickoff_assignments()
+                if self.me.index == kicker:
+                    if self.is_clear():
+                        self.kickoff_routine_started = True
+                        self.kickoff_ball_start = Vector(self.ball.location.x, self.ball.location.y, self.ball.location.z)
+                        print(f"[KICKOFF] player={self.me.index} role=KICKER", flush=True)
+                        self.push(routines.speedflip_kickoff())
+                    return
+                if len(self.friends) == 1 or self.me.index == cheater:
+                    if self.is_clear():
+                        self.kickoff_routine_started = True
+                        self.kickoff_ball_start = Vector(self.ball.location.x, self.ball.location.y, self.ball.location.z)
+                        print(f"[KICKOFF] player={self.me.index} role=CHEAT", flush=True)
+                        self.push(routines.kickoff_cheat())
+                    return
+                self.kickoff_routine_started = True
+                self.kickoff_boost_pending = True
+                self.kickoff_ball_start = Vector(self.ball.location.x, self.ball.location.y, self.ball.location.z)
+                print(f"[KICKOFF] player={self.me.index} role=BACK_BOOST", flush=True)
+                target = self._kickoff_boost_target()
+                if target is not None and self.is_clear():
+                    self.push(routines.goto_boost(target))
+                return
+        if self.me.demolished:
+            self.clear()
+            boosts = [
+                    boost for boost in self.boosts
+                    if boost.active and boost.large
+                ]
+
+            if boosts and self.is_clear():
+                closest_boost = min(
+                    boosts,
+                    key=lambda boost: boost.location.dist(
+                        self.me.location
+                    )
+                )
+                self.push(routines.goto_boost(closest_boost))
+
+
+        # Share and compare shot opportunities with teammates.
+        self.update_teamplay()
+
+        current_name = (
+            self.stack[0].__class__.__name__
+            if not self.is_clear()
+            else None
+        )
+        current_name = (
+            self.stack[0].__class__.__name__
+            if not self.is_clear()
+            else None
+        )
+        if self.should_defensive_aerial():
+            if current_name == "Aerial":
+                return
+
+            # Don't interrupt an active flip or recovery.
+            protected = {
+                "flip",
+                "half_flip",
+                "recovery",
+                "wave_dash",
+                "speed_flip",
+                "speedflip_kickoff"
+            }
+
+            if current_name not in protected:
+                left_post = self.friend_goal.left_post
+                right_post = self.friend_goal.right_post
+
+                goal_width_direction = (
+                    right_post - left_post
+                ).normalize()
+                anti_target = (
+                    self.friend_goal.right_post,
+                    self.friend_goal.left_post
+                )
+                aerial = tools.find_aerial(self, anti_target)
+
+                if aerial is not None:
+                    self.clear()
+                    self.push(aerial)
+                    return
+
+        
+
+        # If the stack is clear and we're in the air
+        if self.is_clear() and self.me.airborne:
+            time_since_flip = self.time - getattr(
+                self, "last_flip_time", -999.0
+            )
+
+            if time_since_flip >= 0.5:
+                # Recover - This routine supports floor, wall, and ceiling recoveries, as well as recovering towards a target
+                self.push(routines.recovery())
+
+            # we've made our decision and we don't want to run anything else
+            return
+                # Defensive emergency:
+        # Don't leave for boost or wait for a perfect shot when an opponent
+        #TODO CAN REMOVE THIS FOR A BETTER CODE, THIS JUST PREVENTS BOT FROM BEING IN SHADOW WHEN ITS IN ITS OWN GOAL
+        
+                # DANGEROUS OWN-GOAL THREAT:
+        # Never let an ordinary jump shot override an emergency clear.
+        if self.ball_in_goal_danger():
+            current_name = (
+                self.stack[0].__class__.__name__
+                if not self.is_clear()
+                else None
+            )
+
+            # If the emergency clear is already running, let it finish.
+            if current_name == "emergency_clear":
+                self.emergency_save_zone_active = True
+                return
+
+            # Only trigger a new emergency action when entering the zone.
+            if not self.emergency_save_zone_active:
+                self.emergency_save_zone_active = True
+
+                ordinary_shots = {
+                    "ground_shot",
+                    "jump_shot",
+                    "double_jump",
+                    "short_shot"
+                }
+
+                if current_name in ordinary_shots or current_name is None:
+                    self.clear()
+                    self.push(routines.emergency_clear())
+
+                    print(
+                        f"[EMERGENCY SAVE] Replacing {current_name} "
+                        f"with emergency_clear; ball threatens our goal",
+                        flush=True
+                    )
+                    return
+
+                # Do not interrupt a flip or recovery mid-action.
+                print(
+                    f"[EMERGENCY SAVE] Goal danger detected; "
+                    f"current routine={current_name}",
+                    flush=True
+                )
+
+        else:
+            if self.emergency_save_zone_active:
+                self.emergency_save_zone_active = False
+                print(
+                    "[EMERGENCY SAVE] Ball left goal danger; "
+                    "save trigger re-armed",
+                    flush=True
+                )
+        # is threatening the ball in front of our own goal.
+        # Defensive emergency.
+        
+        # Defensive emergency: prioritise an actual interception.
+        
+        # Defensive emergency: avoid repeatedly restarting the clear
+        # immediately after a jump, flip, or recovery.
+        if self.is_clear() and self.defensive_emergency():
+            ball = self.ball.location
+            ball_depth = ball.y * utils.side(self.team)
+            distance_to_ball = self.me.location.flat_dist(ball)
+            
+            # At the doorstep, attempt a clearing shot first if
+            # our car is behind the ball and can play it forward.
+            side = utils.side(self.team)
+            car_is_behind_ball = (
+                self.me.location.y * side
+                > ball.y * side + 100
+            )
+
+            if ball_depth > 4200 and car_is_behind_ball:
+                # Do not trust a generic shot when the ball is on our doorstep.
+                # Let the emergency-clear / defensive logic handle the danger.
+                self.last_emergency_clear_time = self.time
+                self.push(routines.emergency_clear())
+                return
+
+
+            # Wait briefly between emergency-clear attempts.
+            clear_cooldown = (
+                self.time - self.last_emergency_clear_time < 0.8
+            )
+
+            if clear_cooldown:
+                shadow_routine = routines.shadow()
+
+                if shadow_routine.is_viable(self):
+                    self.push(shadow_routine)
+
+                return
+
+            if ball_depth > 2500 or distance_to_ball < 1100:
+                self.last_emergency_clear_time = self.time
+                self.push(routines.emergency_clear())
+            else:
+                shadow_routine = routines.shadow()
+
+                if shadow_routine.is_viable(self):
+                    self.push(shadow_routine)
+                else:
+                    self.last_emergency_clear_time = self.time
+                    self.push(routines.emergency_clear())
+
+            return
+
+        
+        
+
+        # TODO this bot will go for boost no matter what - this is AWFUL, especially in a 1v1!
+        
+        # A cover player must hold position when the ball is deep
+        # in our half. The ball must return toward midfield before
+        # this player is allowed to collect boost again.
+        side = utils.side(self.team)
+        ball_depth = self.ball.location.y * side
+
+        if len(self.friends) >= 2:
+            defensive_line_depth = self.get_team_defensive_line_depth()
+            cover_player_deep_defending = (
+                self.should_hold_cover_role()
+                and ball_depth >= defensive_line_depth - 350
+            )
+        else:
+            cover_player_deep_defending = (
+                bool(self.friends)
+                and self.should_hold_cover_role()
+                and ball_depth > 2048
+            )
+
+        # Cancel an existing boost detour if we need to hold cover.
+        if cover_player_deep_defending and not self.is_clear():
+            current_name = self.stack[0].__class__.__name__
+
+            if current_name == "goto_boost":
+                self.clear()
+
+
+        # Collect boost along the route even when we want to challenge,
+        # but only when the stack is clear and the opponent isn't a threat.
+        
+        if (
+            self.is_clear()
+            and self.me.boost < 70
+            and not self.defensive_emergency()
+            and not (
+                len(self.friends) >= 2
+                and self.should_hold_cover_role()
+                and not cover_player_deep_defending
+            )
+            and (
+                self.should_prioritize_ball()
+                or (
+                    self.me.boost < 55
+                    and self.ball.location.y * utils.side(self.team) > 640
+                    and abs(self.ball.location.x) > 1200
+                )
+            )
+        ):
+
+            route_boost = self.boost_on_route_to_ball()
+
+            if route_boost is not None:
+                self.push(routines.goto_boost(route_boost))
+                return
+
+        # Normal boost collection when we aren't prioritising the ball.
+
+        if len(self.friends) == 1:
+            if self.me.boost < 23 and not self.should_prioritize_ball() and not cover_player_deep_defending:
+                # If the stack is clear
+                if self.is_clear():
+                    # Get a list of all of the large, active boosts
+                    boosts = tuple(boost for boost in self.boosts if boost.active and boost.large)
+
+                    # if there's at least one large and active boost
+                    if len(boosts) > 0:
+                        # Get the closest boost
+                        closest_boost = min(boosts, key=lambda boost: boost.location.dist(self.me.location))
+                        # Goto the nearest boost
+                        self.push(routines.goto_boost(closest_boost))
+
+                # we've made our decision and we don't want to run anything else
+                if not self.is_clear():
+                    return
+        elif len(self.friends) > 1:
+            if self.me.boost < 30 and not self.should_prioritize_ball() and not cover_player_deep_defending:
+                # If the stack is clear
+                if self.is_clear():
+                    # Get a list of all of the large, active boosts
+                    boosts = tuple(boost for boost in self.boosts if boost.active and boost.large)
+
+                    # if there's at least one large and active boost
+                    if len(boosts) > 0:
+                        # Get the closest boost
+                        closest_boost = min(boosts, key=lambda boost: boost.location.dist(self.me.location))
+                        # Goto the nearest boost
+                        self.push(routines.goto_boost(closest_boost))
+
+                # we've made our decision and we don't want to run anything else
+                if not self.is_clear():
+                    return
+        else:
+            if self.me.boost < 18 and not self.should_prioritize_ball():
+                # If the stack is clear
+                if self.is_clear():
+                    # Get a list of all of the large, active boosts
+                    boosts = tuple(boost for boost in self.boosts if boost.active and boost.large)
+
+                    # if there's at least one large and active boost
+                    if len(boosts) > 0:
+                        # Get the closest boost
+                        closest_boost = min(boosts, key=lambda boost: boost.location.dist(self.me.location))
+                        # Goto the nearest boost
+                        self.push(routines.goto_boost(closest_boost))
+
+                # we've made our decision and we don't want to run anything else
+                if not self.is_clear():
+                    return
+        
+        # Give an incoming rolling ball priority over boost collection
+        # and ordinary shot selection.
+        #if self.ball_rolling_toward_me():
+#
+ #           current_name = (
+  #              self.stack[-1].__class__.__name__
+   #             if not self.is_clear()
+    #            else None
+     #       )
+#
+ #           # Don't interrupt an action that must finish first.
+  #          protected = {
+   #             "flip",
+    #            "half_flip",
+     #           "recovery",
+      #          "wave_dash",
+       #         "speed_flip",
+        #        "speedflip_kickoff",
+         #       "Aerial",
+          #  }
+
+           # # Keep the existing power clear running.
+            #if current_name == "power_clear":
+             #   return
+
+            # Let protected routines finish.
+            #if current_name in protected:
+             #   return
+
+            # Interrupt boost collection, shadowing, or a normal shot.
+           # self.clear()
+           # self.push(routines.power_clear())
+           # return
+
+    
+        # Wall-shot attempt: only start from a clear stack so we don't
+        # interrupt kickoff, recovery, defence, or an existing shot.
+
+
+        # if the stack is clear, then run the following - otherwise, if the stack isn't empty, then look for a shot every 4th tick while the other routine is running
+        
+        if self.is_clear() or self.odd_tick == 0:
+            shot = self.teamplay_shot
+
+            if shot is not None:
+                should_commit = self.should_commit_to_shot(
+                    self.teamplay_score,
+                    self.teamplay_contact_time
+                )
+
+                if not should_commit:
+                    # Only interrupt an ordinary shot routine.
+                    # Never cancel a flip, aerial, or recovery here.
+                    current_name = (
+                        self.stack[0].__class__.__name__
+                        if not self.is_clear()
+                        else None
+                    )
+
+                    ordinary_shots = {
+                        "double_jump",
+                        "jump_shot",
+                        "ground_shot",
+                        "Aerial"
+                    }
+
+                    if current_name in ordinary_shots:
+                        self.clear()
+
+                    # Yield to the teammate's better opportunity.
+                    # Continue to the existing fallback behaviour.
+                else:
+                    if (
+                        hasattr(shot, "needs_half_flip")
+                        and shot.needs_half_flip(self)
+                        and not self.me.airborne
+                    ):
+                        self.push(routines.half_flip())
+                        return
+
+                    
+                    if self.is_clear():
+                        self.push(shot)
+                    else:
+                        current_shot_name = self.stack[0].__class__.__name__
+                        new_shot_name = shot.__class__.__name__
+
+                        if new_shot_name == current_shot_name:
+                            # Keep updating the same routine as predictions change.
+                            self.stack[0].update(shot)
+                        else:
+                            ordinary_shots = {
+                                "ground_shot",
+                                "jump_shot",
+                                "double_jump",
+                                "Aerial"
+                            }
+
+                            # Don't cancel an ordinary shot just because a
+                            # different ordinary shot is suggested.
+                            if (
+                                current_shot_name in ordinary_shots
+                                and new_shot_name in ordinary_shots
+                            ):
+                                return
+
+                            self.clear()
+                            self.push(shot)
+                    return
+
+
+
+            # TODO we might miss the net, even when using a target - make a pair of targets that are small than the goal so we have a better chance of scoring!
+            # If the ball is on the enemy's side of the field, or slightly on our side
+            
+            if (
+                self.ball.location.y * utils.side(self.team) < 640
+                and self.should_prioritize_ball()
+            ):
+
+                shot = tools.find_shot(self, self.foe_goal_shot)
+
+
+
+            # TODO Using an anti-target here could be cool - do to this, pass in a target tuple that's (right_target, left_target) (instead of (left, right)) into tools.find_shot (NOT tools.find_any_shot)
+            # TODO When possible, we might want to take a little bit more time to shot the ball anywhere in the opponent's end - this target should probably be REALLY LONG AND HIGH!
+            # If we're behind the ball and we couldn't find a shot on target
+            if (
+                shot is None
+                and (
+                    len(self.friends) < 2
+                    or self.get_grid_active_challenger() == self.me.index
+                    or self.defensive_emergency()
+                )
+            ):
+                # Find a shot, but without a target - double_jump, jump_shot, and ground_shot are automatically disabled if we're airborne
+                shot = tools.find_any_shot(self)
+
+            # Last-resort team option: if neither a goal shot nor a useful
+            # untargeted shot exists, try to send the ball ahead of a teammate.
+            # This is intentionally outside teamplay decision-making and does
+            # not override an existing teamplay shot or the cover-role guard.
+            if (
+                shot is None
+                and self.friends
+                and (
+                    len(self.friends) < 2
+                    or self.get_grid_active_challenger() == self.me.index
+                    or self.defensive_emergency()
+                )
+            ):
+                shot = tools.find_pass_shot(self)
+
+            # If we found a shot
+            if shot is not None:
+
+                if (
+                    hasattr(shot, "needs_half_flip")
+                    and shot.needs_half_flip(self)
+                    and not self.me.airborne
+                ):
+                    self.push(routines.half_flip())
+                    return
+
+                
+                if self.is_clear():
+                    self.push(shot)
+                else:
+                    current_shot_name = self.stack[0].__class__.__name__
+                    new_shot_name = shot.__class__.__name__
+
+                    if new_shot_name == current_shot_name:
+                        # Keep updating the same routine as predictions change.
+                        self.stack[0].update(shot)
+                    else:
+                        ordinary_shots = {
+                            "ground_shot",
+                            "jump_shot",
+                            "double_jump",
+                            "Aerial"
+                        }
+
+                        # Don't cancel an ordinary shot just because a
+                        # different ordinary shot is suggested.
+                        if (
+                            current_shot_name in ordinary_shots
+                            and new_shot_name in ordinary_shots
+                        ):
+                            return
+
+                        self.clear()
+                        self.push(shot)
+                return
+
+
+
+        # TODO this setup is far from ideal - a custom shadow/retreat routine is probably best for the bot...
+        # Make sure to put custom routines in a separate file from VirxERLU routines, so you can easily update VirxERLU to newer versions.
+        # If the stack is still clear
+        if self.is_clear():
+            
+            # Challenge a nearby opponent with a poor attacking angle.
+            # Do not use emergency_clear as a fallback here.
+            if (
+                self.ball.location.y * utils.side(self.team) > 640
+                and self.opponent_is_vulnerable()
+                and (
+                    len(self.friends) < 2
+                    or self.get_grid_active_challenger() == self.me.index
+                )
+            ):
+                challenge = tools.find_any_shot(self)
+
+                if challenge is not None:
+                    self.push(challenge)
+                    return
+
+            # Grid-style team rotation. In 3v3, only the elected cover
+            # player owns the defensive line. The line moves up as the two
+            # forward teammates advance, so cover is not pinned in the goal.
+            if len(self.friends) >= 2:
+                ball_depth = self.ball.location.y * utils.side(self.team)
+                line_depth = self.get_team_defensive_line_depth()
+
+                if (
+                    self.should_hold_cover_role()
+                    and ball_depth >= line_depth - 350
+                ):
+                    self.push(routines.defense())
+                else:
+                    shadow_routine = routines.shadow()
+                    if shadow_routine.is_viable(self):
+                        self.push(shadow_routine)
+
+                return
+
+            # Preserve the existing 1v1/2v2 fallback behaviour.
+            if self.ball.location.y * utils.side(self.team) > 640:
+                ball = self.ball.location
+
+                if ball.x >= 0:
+                    defensive_post = self.friend_goal.left_post
+                else:
+                    defensive_post = self.friend_goal.right_post
+
+                teammate_at_post = any(
+                    friend.location.flat_dist(defensive_post) < 700
+                    for friend in self.friends
+                )
+
+                if teammate_at_post:
+                    retreat_routine = routines.retreat()
+                    if retreat_routine.is_viable(self):
+                        self.push(retreat_routine)
+                        return
+
+                self.push(routines.defense())
+                return
+
+            shadow_routine = routines.shadow()
+            if shadow_routine.is_viable(self):
+                self.push(shadow_routine)
+
+            return
+
+        # If we get here, then we are doing our kickoff, nor can we shoot, nor can we retreat or shadow - so let's just wait!
+
+    
+    def demolished(self):
+        # Clear any routine interrupted by the demolition.
+        if not self.is_clear():
+            self.clear()
+
+        # Reset kickoff state so a stale kickoff flag cannot block logic.
+        self.kickoff_routine_started = False
+
+        # Force normal decision-making to resume after respawn.
+        self.kickoff_done = True
+
+        # Reset emergency-save state in case demolition interrupted a save.
+        self.emergency_save_active = False
+        self.emergency_save_cooldown = 0
+
+
+    
+    def handle_match_comm(
+        self,
+        index: int,
+        team: int,
+        content: bytes,
+        display: str | None,
+        team_only: bool
+    ):
+        print(
+            f"[COMM CALLBACK] from={index}, team={team}, "
+            f"team_only={team_only}, bytes={len(content)}",
+            flush=True
+        )
+
+        if team != self.team or index == self.index:
+            return
+
+        if not team_only:
+            return
+
+        if not any(friend.index == index for friend in self.friends):
+            return
+
+        try:
+            message = json.loads(content.decode("utf-8"))
+
+            if message.get("protocol") != "volt_teamplay_v1":
+                return
+
+            status = message.get("status")
+
+            if status not in {
+                "SHOT_FOUND",
+                "ANY_SHOT_FOUND",
+                "LOW_BOOST",
+                "NO_SHOT",
+                "DEFEND",
+                "SHADOW"
+            }:
+                return
+
+            score = float(message.get("score", 0))
+            contact_time = float(message.get("contact_time", 99))
+
+            if not math.isfinite(score) or not 0 <= score <= 100:
+                return
+
+            if not math.isfinite(contact_time) or not 0 <= contact_time <= 10:
+                return
+
+            cover_released = message.get("cover_released", False)
+            if not isinstance(cover_released, bool):
+                return
+
+            cover_owner = message.get("cover_owner")
+            if cover_owner is not None:
+                if not isinstance(cover_owner, int):
+                    return
+
+            self.teammate_comms[index] = {
+                "status": status,
+                "shot_type": message.get("shot_type", status),
+                "score": score,
+                "contact_time": contact_time,
+                "cover_owner": cover_owner,
+                "cover_released": cover_released,
+                "received_at": self.time
+            }
+
+            self.print(
+                f"TEAMPLAY RECEIVED from {index}: "
+                f"{status}, score={score:.1f}, time={contact_time:.2f}, "
+                f"cover_owner={cover_owner}, released={cover_released}"
+            )
+
+        except (
+            ValueError,
+            TypeError,
+            UnicodeDecodeError,
+            AttributeError
+        ):
+            return
+    def send_teamplay_comm(
+        self,
+        status: str,
+        score: float = 0,
+        contact_time: float = 10
+    ):
+        message = {
+            "protocol": "volt_teamplay_v1",
+            "status": status,
+            "shot_type": status if status in {"SHOT_FOUND", "ANY_SHOT_FOUND"} else "NO_SHOT",
+            "score": round(max(0, min(100, score)), 1),
+            "contact_time": round(max(0, min(10, contact_time)), 2),
+            "cover_owner": self.get_cover_role_owner(),
+            "cover_released": bool(self.cover_role_released)
+        }
+
+        # Include cover fields so a change in cover responsibility
+        # causes the updated message to be sent.
+        signature = (
+            message["status"],
+            message["score"],
+            message["contact_time"],
+            message["cover_owner"],
+            message["cover_released"]
+        )
+
+        # Refresh unchanged messages periodically so teammates don't
+        # treat the information as stale.
+        if (
+            signature == self.last_comms_signature
+            and self.time - self.last_comms_send_time < 0.25
+        ):
+            return
+
+        # Limit message frequency.
+        if self.time - self.last_comms_send_time < 0.1:
+            return
+
+        try:
+            self.send_match_comm(
+                json.dumps(message).encode("utf-8"),
+                team_only=True
+            )
+
+            print(f"TEAMPLAY SENT: {message}", flush=True)
+
+            self.last_comms_signature = signature
+            self.last_comms_send_time = self.time
+
+        except (AttributeError, RuntimeError) as e:
+            self.print(f"TEAMPLAY SEND FAILED: {e}")
+            return
+    def get_teammate_comm(self, index: int, max_age: float = 0.5):
+        message = self.teammate_comms.get(index)
+
+        if message is None:
+            return None
+
+        if self.time - message["received_at"] > max_age:
+            return None
+
+        return message
+
+
+    def handle_quick_chat(self, index, team, quick_chat):
+        # NOTE This is for handling any incoming quick chats
+
+        # See https\://github.com/RLBot/RLBot/blob/master/src/main/flatbuffers/rlbot.fbs#L376 for a list of all quick chats
+        if self.team is team:
+            self.print(quick_chat)
+if __name__ == "__main__":
+    Bot().run()
