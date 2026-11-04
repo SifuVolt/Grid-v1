@@ -1292,7 +1292,7 @@ class Bot(VirxERLU):
                 and attacker_message.get("status") in {
                     "SHOT_FOUND", "ANY_SHOT_FOUND"
                 }
-                and ball_depth < 640
+                and ball_depth < 1280
             )
 
             if current_name == "cover_followup_wait":
