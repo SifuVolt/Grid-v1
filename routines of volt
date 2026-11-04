@@ -1787,7 +1787,7 @@ class grid_defense:
         car_velocity = car.velocity
         front = car.forward
         ball_location = agent.ball.location
-        goal_location = agent.enemy_goal.location
+        goal_location = agent.foe_goal.location
         goal_sign = sign(goal_location.y) or 1
 
         best_pad = self._choose_pad(
@@ -1988,7 +1988,7 @@ class grid_defense:
 
     def run(self, agent: VirxERLU):
         side_value = side(agent.team)
-        goal_location = agent.enemy_goal.location
+        goal_location = agent.foe_goal.location
         ball = agent.ball.location
         car = agent.me
 
