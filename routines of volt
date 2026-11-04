@@ -1362,6 +1362,21 @@ class half_flip_manager:
         ):
             return False
 
+        # Check the live stack too: main may be evaluating a fresh shot
+        # candidate while an older shot routine is already mid-mechanic.
+        for routine in getattr(agent, "stack", ()):
+            if routine.__class__.__name__ not in {
+                "jump_shot", "double_jump", "Aerial"
+            }:
+                continue
+
+            if (
+                getattr(routine, "jumping", False)
+                or getattr(routine, "dodging", False)
+                or getattr(routine, "counter", 0) >= 1
+            ):
+                return False
+
         needs_half_flip = getattr(shot, "needs_half_flip", None)
         if not callable(needs_half_flip) or not needs_half_flip(agent):
             return False
