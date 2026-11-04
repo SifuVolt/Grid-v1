@@ -2166,9 +2166,10 @@ class fast_intercept_finder:
         can_ground = is_on_ground
         can_jump = is_on_ground
         can_double_jump = is_on_ground
+        land_time = getattr(agent.me, "land_time", agent.time - 1.0)
         can_aerial = (
             not is_on_ground
-            or agent.time - agent.me.land_time > 0.5
+            or agent.time - land_time > 0.5
         )
 
         if not (
