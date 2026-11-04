@@ -927,13 +927,8 @@ class Bot(VirxERLU):
         ball = self.ball.location
         ball_depth = ball.y * side
 
-        if (
-            self.defensive_emergency()
-            and ball_depth > 4350
-            and ball.z < 350
-        ):
-            return False
-
+        # The goalie keeps the net even during an emergency. The elected
+        # challenger, not the goalie, is responsible for the emergency clear.
         return self.get_cover_role_owner() == self.me.index
 
     def should_commit_to_shot(self, my_score, my_contact_time):
@@ -961,7 +956,11 @@ class Bot(VirxERLU):
             # A teammate handling a defensive emergency should be allowed
             # to take responsibility when the ball is in our half.
             if status == "DEFEND" and ball_is_our_side:
-                return False
+                # A goalie reporting DEFEND is holding the net, not taking
+                # the challenge. Only yield to the elected challenger.
+                attacker, goalie, transition = self.get_grid_team_roles()
+                if friend.index == attacker:
+                    return False
 
             if status not in {"SHOT_FOUND", "ANY_SHOT_FOUND"}:
                 continue
