@@ -1763,7 +1763,7 @@ class grid_defense:
                     target - car_location, front
                 )) * target.dist(car_location.flatten())
             )
-            agent.controller.throttle = sign(throttle_value, 1)
+            agent.controller.throttle = sign(throttle_value) or 1
         else:
             agent.controller.throttle = sign(
                 target_distance - car_velocity.magnitude() ** 2 / 6000
@@ -1788,7 +1788,7 @@ class grid_defense:
         front = car.forward
         ball_location = agent.ball.location
         goal_location = agent.friend_goal.location
-        goal_sign = sign(goal_location.y, 1)
+        goal_sign = sign(goal_location.y) or 1
 
         best_pad = self._choose_pad(
             agent, goal_location, car_location
