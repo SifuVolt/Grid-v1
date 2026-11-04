@@ -1986,6 +1986,89 @@ class grid_defense:
         ):
             agent.push(recovery(target))
 
+    def _run_support(self, agent):
+        """
+        Keep the non-goalie players upfield as attacking support.
+
+        The support target stays behind the ball (toward our own half), but
+        never retreats all the way to the goal line. This prevents every
+        non-goalie from becoming a second net defender.
+        """
+        car = agent.me
+        ball = agent.ball.location
+        side_value = side(agent.team)
+        ball_depth = ball.y * side_value
+
+        # Positive depth is our half. Cap the support line around midfield
+        # when the ball is deep, and advance behind the ball when play moves up.
+        support_depth = cap(ball_depth + 1100, -2200, 2600)
+
+        nearest_opponent = None
+        nearest_distance = float("inf")
+        for foe in agent.foes:
+            distance = foe.location.dist(ball)
+            if distance < nearest_distance:
+                nearest_distance = distance
+                nearest_opponent = foe
+
+        if nearest_opponent is not None:
+            lane_side = -sign(nearest_opponent.location.x - ball.x)
+        else:
+            lane_side = sign(car.location.x - ball.x)
+
+        if lane_side == 0:
+            lane_side = 1 if car.index % 2 else -1
+
+        target = Vector(
+            x=cap(ball.x + lane_side * 1100, -3000, 3000),
+            y=support_depth * side_value,
+            z=0
+        )
+
+        car_location = car.location
+        car_velocity = car.velocity
+        front = car.forward
+        distance = target.dist(car_location.flatten())
+        speed = car_velocity.flatten().magnitude()
+        target_vector = target - car_location.flatten()
+        target_angle = self._angle(front, target_vector)
+
+        throttle_value = (
+            -sign(math.pi / 2 - self._angle(car_velocity, front))
+            * car_velocity.magnitude() ** 2 / 6000
+            + sign(math.pi / 2 - target_angle) * distance
+        )
+        agent.controller.throttle = sign(throttle_value) or 1
+        agent.controller.steer = self._steer(agent, target)
+        previous_front = self.prev_front if self.prev_front is not None else front
+        agent.controller.handbrake = (
+            self._angle(car_velocity, front) <= math.pi / 4
+            and target_angle > math.pi / 4
+            and self._angular_speed(agent) >= min(speed / 500, 2)
+            and self._angle(target_vector, front)
+                < self._angle(target_vector, previous_front)
+        )
+        agent.controller.boost = (
+            distance > 1800
+            and speed < 2200
+            and target_angle < 0.2
+            and car.boost > 20
+            and not agent.controller.handbrake
+            and not car.airborne
+        )
+
+        self.prev_front = front
+
+        time_since_flip = (
+            agent.time - getattr(agent, "last_flip_time", -999.0)
+        )
+        if (
+            car.airborne
+            and time_since_flip > 78 / 120
+            and car_velocity.z < -10
+        ):
+            agent.push(recovery(target))
+
     def run(self, agent: VirxERLU):
         side_value = side(agent.team)
         goal_location = agent.foe_goal.location
@@ -1994,6 +2077,12 @@ class grid_defense:
 
         agent.controller.boost = False
         agent.controller.handbrake = False
+
+        # In team modes, only the designated goalie uses the net-defence
+        # movement. Every other player holds an upfield support lane.
+        if not self.goalie and agent.friends:
+            self._run_support(agent)
+            return
 
         # Grid's support player takes a forward/outlet lane when the ball
         # is in our half and the car is still near midfield.
