@@ -1276,18 +1276,11 @@ class Bot(VirxERLU):
         side = utils.side(self.team)
         ball_depth = self.ball.location.y * side
 
-        if len(self.friends) >= 2:
-            defensive_line_depth = self.get_team_defensive_line_depth()
-            cover_player_deep_defending = (
-                self.should_hold_cover_role()
-                and ball_depth >= defensive_line_depth - 350
-            )
-        else:
-            cover_player_deep_defending = (
-                bool(self.friends)
-                and self.should_hold_cover_role()
-                and ball_depth > 2048
-            )
+        cover_player_deep_defending = (
+            bool(self.friends)
+            and self.should_hold_cover_role()
+            and ball_depth > 2048
+        )
 
         # Cancel an existing boost detour if we need to hold cover.
         if cover_player_deep_defending and not self.is_clear():
