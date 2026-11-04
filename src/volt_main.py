@@ -1230,12 +1230,6 @@ class Bot(VirxERLU):
             if not self.is_clear()
             else None
         )
-
-        # A half-flip is a committed multi-frame mechanic. Do not let shot
-        # selection or defensive logic replace it before its cancel/recovery.
-        if current_name == "half_flip":
-            return
-
         if self.should_defensive_aerial():
             if current_name == "Aerial":
                 return
@@ -1578,7 +1572,12 @@ class Bot(VirxERLU):
                     # Yield to the teammate's better opportunity.
                     # Continue to the existing fallback behaviour.
                 else:
-                    if routines.half_flip_manager.request_for_shot(self, shot):
+                    if (
+                        hasattr(shot, "needs_half_flip")
+                        and shot.needs_half_flip(self)
+                        and not self.me.airborne
+                    ):
+                        self.push(routines.half_flip())
                         return
 
                     
@@ -1657,7 +1656,12 @@ class Bot(VirxERLU):
             # If we found a shot
             if shot is not None:
 
-                if routines.half_flip_manager.request_for_shot(self, shot):
+                if (
+                    hasattr(shot, "needs_half_flip")
+                    and shot.needs_half_flip(self)
+                    and not self.me.airborne
+                ):
+                    self.push(routines.half_flip())
                     return
 
                 
