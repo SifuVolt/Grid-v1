@@ -2142,6 +2142,22 @@ class grid_defense:
         self._run_defense(agent, self.goalie, self.fast)
 
 
+class goalie_followup_wait:
+    """
+    Keep the elected goalie in its defensive lane while the challenger
+    makes the first save attempt. The bot logic releases this routine at
+    the expected contact time and then plans a fresh follow-up intercept.
+    """
+
+    def __init__(self, release_time, contact_key=None):
+        self.release_time = release_time
+        self.contact_key = contact_key
+        self.defense = grid_defense(goalie=True)
+
+    def run(self, agent: VirxERLU):
+        self.defense.run(agent)
+
+
 class defense:
     """
     Goal-line defence.
