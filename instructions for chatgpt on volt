@@ -608,6 +608,7 @@ class Bot(VirxERLU):
         # Only fall back to a general touch when a targeted shot isn't available.
         if (
             shot is None
+            and not fast_intercept_zone
             and ball.y * side < self.me.location.y * side
         ):
             left_post = self.friend_goal.left_post
@@ -1743,7 +1744,16 @@ class Bot(VirxERLU):
                                 current_shot_name in ordinary_shots
                                 and new_shot_name in ordinary_shots
                             ):
-                                return
+                                current_intercept = getattr(
+                                    self.stack[0], "intercept_time", float("inf")
+                                )
+                                # In the fast zone, allow a genuinely earlier
+                                # reachable touch to replace a later planned hit.
+                                if (
+                                    not fast_intercept_zone
+                                    or shot.intercept_time >= current_intercept - 0.05
+                                ):
+                                    return
 
                             self.clear()
                             self.push(shot)
@@ -1764,7 +1774,11 @@ class Bot(VirxERLU):
                 or self.defensive_emergency()
             )
 
-            if fast_intercept_zone and can_take_first_challenge:
+            fast_intercept_searched = (
+                fast_intercept_zone and can_take_first_challenge
+            )
+
+            if fast_intercept_searched:
                 shot = routines.fast_intercept_finder().find(self)
 
             elif (
@@ -1780,17 +1794,15 @@ class Bot(VirxERLU):
             # If we're behind the ball and we couldn't find a shot on target
             if (
                 shot is None
+                and not fast_intercept_searched
                 and (
                     len(self.friends) < 2
                     or self.get_grid_active_challenger() == self.me.index
                     or self.defensive_emergency()
                 )
             ):
-                # Find a shot, but without a target - double_jump, jump_shot, and ground_shot are automatically disabled if we're airborne
-                if fast_intercept_zone:
-                    shot = routines.fast_intercept_finder().find(self)
-                else:
-                    shot = tools.find_any_shot(self)
+                # Find a shot, but without a target - double_jump, jump_shot, and ground_shot are automatically disabled if we're airborne.
+                shot = tools.find_any_shot(self)
 
             # Last-resort team option: if neither a goal shot nor a useful
             # untargeted shot exists, try to send the ball ahead of a teammate.
