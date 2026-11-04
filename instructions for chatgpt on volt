@@ -871,39 +871,6 @@ class Bot(VirxERLU):
             transition.index if transition is not None else None
         )
 
-    def get_team_defensive_line_depth(self):
-        """
-        Dynamic defensive line measured from our own goal.
-
-        As the two non-cover teammates move upfield, their average depth
-        decreases and the cover line moves up with them. It is deliberately
-        outside the goal rather than pinned to the goal line.
-        """
-        attacker, cover, support = self.get_grid_team_roles()
-        if cover is None:
-            return 2400.0
-
-        side = utils.side(self.team)
-        cars = [self.me] + list(self.friends)
-        forward_players = [
-            car for car in cars
-            if car.index != cover
-            and not getattr(car, "demolished", False)
-        ]
-
-        if not forward_players:
-            return 2400.0
-
-        average_forward_depth = sum(
-            car.location.y * side
-            for car in forward_players
-        ) / len(forward_players)
-
-        return max(
-            1200.0,
-            min(3900.0, average_forward_depth + 650.0)
-        )
-
     def get_grid_active_challenger(self):
         """Grid's closest viable player is the only normal challenger."""
         attacker, goalie, transition = self.get_grid_team_roles()
