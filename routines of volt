@@ -1654,6 +1654,384 @@ class support:
         return agent.me.location.flat_dist(self.get_target(agent)) > 300
 
 
+class grid_defense:
+    """
+    Grid's ground defensive movement, adapted to the VirxERLU routine API.
+
+    goalie=True holds the central goal-side lane. goalie=False uses Grid's
+    support positioning and its prepare-for-attack lane when appropriate.
+    """
+
+    def __init__(self, goalie=False, fast=False):
+        self.goalie = goalie
+        self.fast = fast
+        self.prev_front = None
+
+    @staticmethod
+    def _angle(a, b):
+        a_length = a.magnitude()
+        b_length = b.magnitude()
+        if a_length < 1 or b_length < 1:
+            return math.pi / 2
+        return math.acos(cap(a.normalize().dot(b.normalize()), -1, 1))
+
+    @staticmethod
+    def _steer(agent, target):
+        local = agent.me.local_location(target)
+        return cap(math.atan2(local.y, local.x) * 5, -1, 1)
+
+    def _raw_physics(self, agent):
+        try:
+            return agent.me.get_raw(agent).physics
+        except (AttributeError, TypeError):
+            return None
+
+    def _roll(self, agent):
+        physics = self._raw_physics(agent)
+        if physics is None:
+            return 0.0
+        return physics.rotation.roll
+
+    def _angular_speed(self, agent):
+        physics = self._raw_physics(agent)
+        if physics is None:
+            return 0.0
+        angular = physics.angular_velocity
+        return math.sqrt(
+            angular.x * angular.x
+            + angular.y * angular.y
+            + angular.z * angular.z
+        )
+
+    def _choose_pad(self, agent, goal_location, car_location):
+        if agent.me.boost >= 100 or self.fast:
+            return None
+
+        candidates = []
+        car_goal_distance = car_location.dist(-goal_location)
+
+        for boost in agent.boosts:
+            pad = boost.location
+            if not (
+                abs(pad.x) > 3000 or abs(pad.y) > 4000
+            ):
+                continue
+            if pad.dist(-goal_location) >= car_goal_distance:
+                continue
+            if sign(pad.x) != sign(car_location.x):
+                continue
+
+            pad_distance = pad.dist(car_location)
+            active = getattr(boost, "active", False)
+            respawn_time = getattr(boost, "timer", None)
+            if not active and (
+                respawn_time is None or respawn_time > pad_distance / 2300
+            ):
+                continue
+
+            score = pad_distance + pad.dist(-goal_location)
+            candidates.append((not boost.large, score, boost))
+
+        if not candidates:
+            return None
+
+        # Grid prefers a full boost pad whenever one is reachable.
+        candidates.sort(key=lambda item: (item[0], item[1]))
+        return candidates[0][2]
+
+    def _prepare_for_attack(self, agent, side_value, goal_location):
+        car_location = agent.me.location
+        car_velocity = agent.me.velocity
+        front = agent.me.forward
+        ball = agent.ball.location
+
+        target = Vector(x=4000 * side_value, y=0, z=0)
+        direction = target + goal_location
+        distance = (
+            target.dist(-goal_location) / 5120
+            * max(min(ball.y * goal_location.y + 1000, 5120), 1000)
+        )
+        if direction.magnitude() > 1:
+            target = -goal_location + direction.normalize() * distance
+
+        target_distance = target.dist(car_location.flatten())
+        if car_location.flatten().dist(target) <= 100:
+            throttle_value = (
+                -sign(math.pi / 2 - self._angle(car_velocity, front))
+                * car_velocity.magnitude() ** 2 / 6000
+                + sign(math.pi / 2 - self._angle(
+                    target - car_location, front
+                )) * target.dist(car_location.flatten())
+            )
+            agent.controller.throttle = sign(throttle_value, 1)
+        else:
+            agent.controller.throttle = sign(
+                target_distance - car_velocity.magnitude() ** 2 / 6000
+            )
+
+        angular_speed = self._angular_speed(agent)
+        previous_front = self.prev_front if self.prev_front is not None else front
+        agent.controller.handbrake = (
+            self._angle(car_velocity, front) <= math.pi / 4
+            and self._angle(front, target - car_location.flatten()) > math.pi / 4
+            and angular_speed >= min(car_velocity.magnitude() / 500, 2)
+            and self._angle(target - car_location.flatten(), front)
+                < self._angle(target - car_location.flatten(), previous_front)
+        )
+        agent.controller.steer = self._steer(agent, target)
+        agent.controller.boost = False
+
+    def _run_defense(self, agent, goalie, fast):
+        car = agent.me
+        car_location = car.location
+        car_velocity = car.velocity
+        front = car.forward
+        ball_location = agent.ball.location
+        goal_location = agent.friend_goal.location
+        goal_sign = sign(goal_location.y, 1)
+
+        best_pad = self._choose_pad(
+            agent, goal_location, car_location
+        )
+
+        if best_pad is not None:
+            target = best_pad.location
+        elif goalie:
+            target = Vector(
+                x=0,
+                y=-goal_location.y - goal_sign * 150,
+                z=0
+            )
+        else:
+            target = Vector(
+                x=sign(car_location.x) * 900,
+                y=-goal_sign * 5050,
+                z=0
+            )
+
+        agent.controller.boost = False
+        agent.controller.handbrake = False
+
+        if car_location.dist(-goal_location) <= 1500:
+            car_depth = car_location.y * goal_sign
+
+            if (
+                car_velocity.magnitude() <= 100
+                and -5320 + 200 * (not goalie) > car_depth
+                and self._angle(front, target - car_location) > math.pi / 4
+            ):
+                agent.controller.handbrake = True
+                agent.controller.throttle = -sign(
+                    math.pi / 2 - self._angle(front, car_velocity)
+                )
+                agent.controller.steer = (
+                    self._steer(agent, target)
+                    * agent.controller.throttle
+                )
+
+            elif (
+                car_velocity.magnitude() <= 100
+                and -5320 + 200 * (not goalie)
+                    <= car_depth
+                    <= -5120 + 100 * (not goalie)
+                and self._angle(front, ball_location - car_location) >= 0.2
+            ):
+                agent.controller.handbrake = True
+                agent.controller.throttle = -sign(
+                    math.pi / 2 - self._angle(front, car_velocity)
+                )
+
+                if goalie:
+                    ball_lane = (
+                        ball_location.flatten()
+                        - Vector(x=cap(ball_location.x, -900, 900))
+                        + goal_location
+                    )
+                    if self._angle(ball_lane, goal_location) <= math.pi / 3:
+                        steer_target = ball_location
+                    else:
+                        steer_target = (
+                            -goal_location
+                            + Vector(
+                                x=ball_location.x,
+                                y=(
+                                    sign(ball_location.y + goal_location.y)
+                                    / math.tan(math.pi / 3)
+                                    * (abs(ball_location.x) - 900)
+                                ),
+                                z=0
+                            )
+                        )
+                else:
+                    steer_target = Vector(
+                        x=0, y=car_location.y, z=0
+                    )
+
+                agent.controller.steer = (
+                    self._steer(agent, steer_target)
+                    * agent.controller.throttle
+                )
+
+            else:
+                throttle_value = (
+                    -sign(
+                        math.pi / 2 - self._angle(car_velocity, front)
+                    ) * car_velocity.magnitude() ** 2 / 6000
+                    + sign(
+                        math.pi / 2 - self._angle(
+                            target - car_location, front
+                        )
+                    ) * target.dist(car_location)
+                )
+                agent.controller.throttle = sign(throttle_value, 1)
+                agent.controller.steer = self._steer(agent, target)
+
+                # Grid's non-goalie understeer check: reverse rather than
+                # carry momentum across the intended defensive lane.
+                if not goalie and car_velocity.flatten().magnitude() > 100:
+                    own_lane = Vector(
+                        x=sign(car_location.x) * 900,
+                        y=-goal_sign * 5050,
+                        z=0
+                    )
+                    opposite_lane = Vector(
+                        x=-sign(car_location.x) * 900,
+                        y=-goal_sign * 5050,
+                        z=0
+                    )
+                    lane_distance = (
+                        target - car_location
+                    ).flatten().magnitude()
+                    threshold = min(
+                        math.asin(min(25000 / 11 * lane_distance, 1)) * 2,
+                        1
+                    )
+                    angle_current = self._angle(
+                        (own_lane - car_location).flatten(),
+                        car_velocity.flatten()
+                    )
+                    angle_opposite = self._angle(
+                        (opposite_lane - car_location).flatten(),
+                        car_velocity.flatten()
+                    )
+                    if angle_current > threshold < angle_opposite:
+                        agent.controller.throttle = -sign(
+                            math.pi / 2 - self._angle(
+                                car_velocity, front
+                            )
+                        )
+
+        else:
+            speed = car_velocity.flatten().magnitude()
+            previous_front = (
+                self.prev_front if self.prev_front is not None else front
+            )
+            agent.controller.throttle = 1
+            agent.controller.handbrake = (
+                speed < 1000
+                and self._angle(car_velocity, front) <= math.pi / 4
+                and self._angle(front, target - car_location) > math.pi / 4
+                and self._angular_speed(agent) >= min(speed / 500, 2)
+                and self._angle(target - car_location, front)
+                    < self._angle(target - car_location, previous_front)
+            )
+            agent.controller.boost = (
+                best_pad is not None
+                and best_pad.large
+                and not car.airborne
+                and not agent.controller.handbrake
+            )
+
+            if not car.airborne and abs(self._roll(agent)) > 0.2:
+                target = car_location.flatten()
+
+            agent.controller.steer = self._steer(agent, target)
+
+            flip_distance = (
+                speed * 1.4 + 500 * 1.5 + speed ** 2 / 7000
+            )
+            should_flip = (
+                not car.airborne
+                and abs(agent.controller.steer) <= 0.01
+                and speed >= 1000
+                and (
+                    car_location.flatten().dist(target.flatten())
+                    >= flip_distance
+                    or (
+                        best_pad is not None
+                        and best_pad.large
+                        and abs(
+                            car_location.y
+                            + front.y * flip_distance
+                        ) < 5000
+                    )
+                )
+            )
+            if should_flip:
+                agent.push(flip(Vector(x=1)))
+                self.prev_front = front
+                return
+
+        self.prev_front = front
+
+        # Grid recovers when falling after the flip lockout. Use Volt's
+        # existing recovery routine to preserve VirxERLU's landing control.
+        time_since_flip = (
+            agent.time - getattr(agent, "last_flip_time", -999.0)
+        )
+        if (
+            car.airborne
+            and time_since_flip > 78 / 120
+            and car_velocity.z < -10
+        ):
+            agent.push(recovery(target))
+
+    def run(self, agent: VirxERLU):
+        side_value = side(agent.team)
+        goal_location = agent.friend_goal.location
+        ball = agent.ball.location
+        car = agent.me
+
+        agent.controller.boost = False
+        agent.controller.handbrake = False
+
+        # Grid's support player takes a forward/outlet lane when the ball
+        # is in our half and the car is still near midfield.
+        should_prepare = (
+            not self.goalie
+            and ball.y * side_value > 0
+            and car.location.y * side_value <= 50
+            and (
+                sign(car.forward.y * goal_location.y) > 0
+                or car.location.y * side_value < -4120
+            )
+        )
+
+        if should_prepare:
+            nearest_opponent = None
+            nearest_distance = float("inf")
+            for foe in agent.foes:
+                distance = foe.location.dist(ball)
+                if distance < nearest_distance:
+                    nearest_distance = distance
+                    nearest_opponent = foe
+
+            if nearest_opponent is not None:
+                lane_side = sign(
+                    ball.x - nearest_opponent.location.x
+                ) * 0.5
+            else:
+                lane_side = 0
+
+            self._prepare_for_attack(
+                agent, lane_side, goal_location
+            )
+            self.prev_front = car.forward
+            return
+
+        self._run_defense(agent, self.goalie, self.fast)
+
+
 class defense:
     """
     Goal-line defence.
