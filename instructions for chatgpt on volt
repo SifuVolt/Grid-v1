@@ -1365,24 +1365,18 @@ class Bot(VirxERLU):
             )
 
             if clear_cooldown:
-                shadow_routine = routines.shadow()
-
-                if shadow_routine.is_viable(self):
-                    self.push(shadow_routine)
-
+                self.push(routines.grid_defense(
+                    goalie=(bool(self.friends) and self.should_hold_cover_role())
+                ))
                 return
 
             if ball_depth > 2500 or distance_to_ball < 1100:
                 self.last_emergency_clear_time = self.time
                 self.push(routines.emergency_clear())
             else:
-                shadow_routine = routines.shadow()
-
-                if shadow_routine.is_viable(self):
-                    self.push(shadow_routine)
-                else:
-                    self.last_emergency_clear_time = self.time
-                    self.push(routines.emergency_clear())
+                self.push(routines.grid_defense(
+                    goalie=(bool(self.friends) and self.should_hold_cover_role())
+                ))
 
             return
 
@@ -1717,52 +1711,20 @@ class Bot(VirxERLU):
                     self.push(challenge)
                     return
 
-            # Grid-style team rotation. In 3v3, only the elected cover
-            # player owns the defensive line. The line moves up as the two
-            # forward teammates advance, so cover is not pinned in the goal.
+            # Grid-derived defensive movement for all modes.
+            # 1v1 has no teammate role election. In 2v2/3v3 the elected
+            # last player holds Grid's central goalie lane; the other
+            # defender uses Grid's offset support lane.
+            goalie_role = (
+                bool(self.friends)
+                and self.should_hold_cover_role()
+            )
+
             if len(self.friends) >= 2:
-                ball_depth = self.ball.location.y * utils.side(self.team)
-                line_depth = self.get_team_defensive_line_depth()
+                attacker, cover, support = self.get_grid_team_roles()
+                goalie_role = self.me.index == cover
 
-                if (
-                    self.should_hold_cover_role()
-                    and ball_depth >= line_depth - 350
-                ):
-                    self.push(routines.defense())
-                else:
-                    shadow_routine = routines.shadow()
-                    if shadow_routine.is_viable(self):
-                        self.push(shadow_routine)
-
-                return
-
-            # Preserve the existing 1v1/2v2 fallback behaviour.
-            if self.ball.location.y * utils.side(self.team) > 640:
-                ball = self.ball.location
-
-                if ball.x >= 0:
-                    defensive_post = self.friend_goal.left_post
-                else:
-                    defensive_post = self.friend_goal.right_post
-
-                teammate_at_post = any(
-                    friend.location.flat_dist(defensive_post) < 700
-                    for friend in self.friends
-                )
-
-                if teammate_at_post:
-                    retreat_routine = routines.retreat()
-                    if retreat_routine.is_viable(self):
-                        self.push(retreat_routine)
-                        return
-
-                self.push(routines.defense())
-                return
-
-            shadow_routine = routines.shadow()
-            if shadow_routine.is_viable(self):
-                self.push(shadow_routine)
-
+            self.push(routines.grid_defense(goalie=goalie_role))
             return
 
         # If we get here, then we are doing our kickoff, nor can we shoot, nor can we retreat or shadow - so let's just wait!
