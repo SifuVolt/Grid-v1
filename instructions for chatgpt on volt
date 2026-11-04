@@ -586,8 +586,17 @@ class Bot(VirxERLU):
             ):
                 return None, 0.0, 10.0, "NO_SHOT"
 
-        # Try to find a real shot toward the opponent's goal first.
-        if (
+        # In the first quarter of our half, favour the earliest
+        # reachable touch over a cleaner, later attacking contact.
+        fast_intercept_zone = 0 < ball.y * side <= 1280
+
+        if fast_intercept_zone:
+            shot = routines.fast_intercept_finder().find(self)
+            if shot is not None:
+                shot_type = "ANY_SHOT_FOUND"
+
+        # Outside that zone, retain the normal goal-directed shot planner.
+        elif (
             ball.y * side < 640
             and self.should_prioritize_ball(ignore_teammate=True)
         ):
@@ -1165,7 +1174,10 @@ class Bot(VirxERLU):
                     )
 
                     if still_threatening:
-                        followup = tools.find_any_shot(self)
+                        followup = routines.fast_intercept_finder().find(
+                            self,
+                            earliest_time=self.time + 0.08
+                        )
                         if (
                             followup is not None
                             and followup.intercept_time > self.time + 0.08
@@ -1259,6 +1271,107 @@ class Bot(VirxERLU):
                             )
                         )
                         return
+
+        # The third player in 3v3 is the non-goalie cover/transition
+        # player. They do not join the attacker's first challenge; they wait
+        # for that expected contact, then take the earliest reachable
+        # follow-up touch from the ball's updated trajectory.
+        if self.friends and transition is not None and self.me.index == transition:
+            attacker_message = self.get_teammate_comm(
+                attacker, max_age=0.65
+            ) if attacker is not None else None
+
+            active_attack = (
+                attacker_message is not None
+                and attacker_message.get("cover_released", False)
+                and attacker_message.get("status") in {
+                    "SHOT_FOUND", "ANY_SHOT_FOUND"
+                }
+                and ball_depth < 640
+            )
+
+            if current_name == "cover_followup_wait":
+                wait = self.stack[0]
+                if self.time < wait.release_time:
+                    return
+
+                contact_key = wait.contact_key
+                release_time = wait.release_time
+                self.clear()
+
+                followup = routines.fast_intercept_finder().find(
+                    self,
+                    earliest_time=release_time
+                )
+                if (
+                    followup is not None
+                    and followup.intercept_time > self.time + 0.08
+                ):
+                    print(
+                        f"[COVER FOLLOWUP] player={self.me.index} "
+                        f"after={contact_key:.2f} "
+                        f"shot={followup.__class__.__name__} "
+                        f"T={followup.intercept_time - self.time:.2f}",
+                        flush=True
+                    )
+                    self.push(followup)
+                    return
+
+                print(
+                    f"[COVER FOLLOWUP] player={self.me.index} "
+                    "no reachable second touch; returning to transition",
+                    flush=True
+                )
+                self.push(routines.grid_defense(goalie=False))
+                return
+
+            if (
+                active_attack
+                and current_name in {
+                    None, "grid_defense", "goto_boost"
+                }
+            ):
+                contact_time = max(
+                    0.0,
+                    min(2.5, attacker_message.get("contact_time", 0.0))
+                )
+                contact_at = (
+                    attacker_message["received_at"] + contact_time
+                )
+                contact_key = round(contact_at * 2.0) / 2.0
+                last_key = getattr(
+                    self, "_cover_followup_contact_key", None
+                )
+                last_start = getattr(
+                    self, "_cover_followup_last_start", -999.0
+                )
+
+                if (
+                    last_key is None
+                    or abs(contact_key - last_key) >= 0.5
+                ) and self.time - last_start >= 1.0:
+                    self._cover_followup_contact_key = contact_key
+                    self._cover_followup_last_start = self.time
+
+                    if current_name is not None:
+                        self.clear()
+
+                    release_time = max(
+                        self.time + 0.05,
+                        contact_at + 0.12
+                    )
+                    print(
+                        f"[COVER FOLLOWUP] player={self.me.index} "
+                        f"waiting_for={attacker} "
+                        f"contact_in={max(0.0, release_time - self.time):.2f}",
+                        flush=True
+                    )
+                    self.push(
+                        routines.cover_followup_wait(
+                            release_time, contact_key
+                        )
+                    )
+                    return
 
         if self.should_defensive_aerial():
             if current_name == "Aerial":
@@ -1641,11 +1754,23 @@ class Bot(VirxERLU):
             # TODO we might miss the net, even when using a target - make a pair of targets that are small than the goal so we have a better chance of scoring!
             # If the ball is on the enemy's side of the field, or slightly on our side
             
-            if (
-                self.ball.location.y * utils.side(self.team) < 640
+            ball_depth = (
+                self.ball.location.y * utils.side(self.team)
+            )
+            fast_intercept_zone = 0 < ball_depth <= 1280
+            can_take_first_challenge = (
+                not self.friends
+                or self.get_grid_active_challenger() == self.me.index
+                or self.defensive_emergency()
+            )
+
+            if fast_intercept_zone and can_take_first_challenge:
+                shot = routines.fast_intercept_finder().find(self)
+
+            elif (
+                ball_depth < 640
                 and self.should_prioritize_ball()
             ):
-
                 shot = tools.find_shot(self, self.foe_goal_shot)
 
 
@@ -1662,7 +1787,10 @@ class Bot(VirxERLU):
                 )
             ):
                 # Find a shot, but without a target - double_jump, jump_shot, and ground_shot are automatically disabled if we're airborne
-                shot = tools.find_any_shot(self)
+                if fast_intercept_zone:
+                    shot = routines.fast_intercept_finder().find(self)
+                else:
+                    shot = tools.find_any_shot(self)
 
             # Last-resort team option: if neither a goal shot nor a useful
             # untargeted shot exists, try to send the ball ahead of a teammate.
