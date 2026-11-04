@@ -2110,7 +2110,7 @@ class grid_defense:
         should_prepare = (
             not self.goalie
             and ball_depth < 0
-            and car_depth >= -500
+            and car_depth >= -900
             and (
                 car.forward.y * side_value < 0
                 or car_depth > 4120
@@ -2578,6 +2578,89 @@ class kickoff_boost:
         agent.controller.boost = False
 
 
+class shot_patience:
+    """
+    Grid-inspired shot timing adjustment.
+
+    If the selected contact is a poor backboard/goal alignment while the ball
+    is travelling toward the middle, or the ball is high and already falling,
+    move the contact time to the first later prediction slice with a better
+    contact window. Apply once per routine so the target cannot drift forever.
+    """
+
+    def __init__(self):
+        self.applied = False
+
+    def adjust(self, agent, intercept_time, targets=None):
+        if self.applied:
+            return intercept_time
+
+        prediction = getattr(agent, "ball_prediction_struct", None)
+        slices = getattr(prediction, "slices", None) if prediction is not None else None
+        if not slices:
+            return intercept_time
+
+        current_time = max(0.0, intercept_time - agent.time)
+        start = max(0, min(round(current_time * 120) - 1, len(slices) - 1))
+        if start >= len(slices) - 1:
+            return intercept_time
+
+        current = slices[start]
+        current_pos = current.physics.location
+        current_vel = current.physics.velocity
+
+        goal_y = agent.foe_goal.location.y
+        x = current_pos.x
+        alignment_wait = (
+            abs(x) < 3000
+            and abs(x) - 890 + 92.75 * math.sqrt(2)
+                > abs(current_pos.y - goal_y)
+            and current_vel.x * sign(x) < 0
+        )
+        falling_wait = current_pos.z > 180 and current_vel.z < -80
+
+        if not alignment_wait and not falling_wait:
+            return intercept_time
+
+        speed = agent.me.velocity.flatten().magnitude()
+        estimated_speed = max(1000.0, min(2300.0, speed + 650.0))
+        max_index = min(len(slices) - 1, 600)
+
+        for i in range(start + 1, max_index + 1):
+            future = slices[i]
+            pos = future.physics.location
+            vel = future.physics.velocity
+            future_time = (i + 1) / 120
+            if future_time <= current_time + 0.15:
+                continue
+
+            # Do not select a later contact the car cannot plausibly reach.
+            distance = agent.me.location.flat_dist(Vector(pos.x, pos.y, pos.z))
+            if distance / estimated_speed > future_time + 0.15:
+                continue
+
+            aligned = (
+                alignment_wait
+                and abs(pos.x) - 890 + 92.75 * math.sqrt(2)
+                    <= abs(pos.y - goal_y)
+            )
+            fallen = falling_wait and pos.z <= 180 and vel.z <= 80
+
+            if aligned or fallen:
+                self.applied = True
+                reason = "goal_alignment" if aligned else "falling_ball"
+                new_time = agent.time + future_time
+                print(
+                    f"[SHOT PATIENCE] reason={reason} "
+                    f"old_T={current_time:.2f} new_T={future_time:.2f} "
+                    f"ball=({pos.x:.0f},{pos.y:.0f},{pos.z:.0f})",
+                    flush=True
+                )
+                return new_time
+
+        return intercept_time
+
+
 class jump_shot:
     # Hits a target point at a target time towards a target direction
     def __init__(self, intercept_time, targets=None):
@@ -2593,6 +2676,7 @@ class jump_shot:
         self.jump_time = -1
         self.needed_jump_time = -1
         self._orientation_logged = False
+        self.patience = shot_patience()
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -2638,6 +2722,9 @@ class jump_shot:
         if not agent.shooting:
             agent.shooting = True
 
+        self.intercept_time = self.patience.adjust(
+            agent, self.intercept_time, self.targets
+        )
         T = self.intercept_time - agent.time
         # Capping T above 0 to prevent division problems
         time_remaining = cap(T, 0.000001, 6)
@@ -3022,6 +3109,7 @@ class ground_shot:
         self.offset_target = None
         self.intercept_time = intercept_time
         self.targets = targets
+        self.patience = shot_patience()
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -3063,6 +3151,9 @@ class ground_shot:
         if not agent.shooting:
             agent.shooting = True
 
+        self.intercept_time = self.patience.adjust(
+            agent, self.intercept_time, self.targets
+        )
         T = self.intercept_time - agent.time
         # Capping T above 0 to prevent division problems
         time_remaining = cap(T, 0.000001, 6)
