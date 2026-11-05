@@ -4,7 +4,13 @@ from util.grid_double_jump import find_double_jump as grid_find_double_jump
 
 
 def find_air_dribble_setup(agent):
-    """Own every air-dribble setup check and return a routine if valid."""
+    """Own setup eligibility and preserve an active setup's control priority."""
+    if any(
+        isinstance(routine, air_dribble_setup)
+        for routine in getattr(agent, "stack", [])
+    ):
+        return True
+
     if not agent.is_clear():
         last = getattr(agent, "_air_dribble_stack_debug", -999)
         if agent.time - last >= 1.0:
