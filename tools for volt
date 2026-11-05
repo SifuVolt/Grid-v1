@@ -1128,3 +1128,150 @@ def find_wall_shot(agent, target, cap_=6):
 
     return aerial
 
+def find_wall_reset_candidate(agent):
+    """
+    Find a grounded ball that Volt can deliberately drive toward a side wall.
+
+    Unlike find_wall_shot_candidate, this is the first phase of a wall-reset
+    play: it chooses a low, reachable ball and the wall on the opposite side
+    of Volt, so the setup touch can send the ball outward.
+    """
+    car = agent.me
+    ball = agent.ball.location
+    ball_velocity = agent.ball.velocity
+
+    def reject(reason, details=""):
+        last_debug = getattr(agent, "last_wall_reset_tool_debug", -999.0)
+        if agent.time - last_debug >= 0.75:
+            agent.last_wall_reset_tool_debug = agent.time
+            suffix = f" | {details}" if details else ""
+            print(f"[WALL RESET TOOL] rejected: {reason}{suffix}",
+                  flush=True)
+        return None
+
+    if car.airborne:
+        return reject("car is airborne")
+
+    if car.boost < 18:
+        return reject(
+            "not enough boost for the wall play",
+            f"boost={car.boost:.0f} required=18"
+        )
+
+    if ball.z > 250:
+        return reject(
+            "ball is already too high for the ground setup",
+            f"ball_z={ball.z:.0f}"
+        )
+
+    if abs(ball.y) > 4300:
+        return reject(
+            "ball is too close to an end-wall corner",
+            f"ball_y={ball.y:.0f}"
+        )
+
+    ball_position = Vector(ball.x, ball.y, ball.z)
+    distance = car.location.dist(ball_position)
+
+    if distance > 2600:
+        return reject(
+            "ball is outside setup range",
+            f"distance={distance:.0f} max=2600"
+        )
+
+    forward = car.forward.flatten()
+    car_velocity = car.velocity.flatten()
+    candidates = []
+
+    # Choose a wall that Volt can approach from the field-centre side.
+    # A car left of the ball can send it toward +X; a car right of it
+    # can send it toward -X.
+    for wall_side in (1, -1):
+        if (car.location.x - ball.x) * wall_side >= -100:
+            continue
+
+        contact_target = Vector(
+            ball.x - wall_side * 155,
+            ball.y,
+            92.75
+        )
+        approach = (contact_target - car.location).flatten()
+        if approach.magnitude() < 1:
+            heading_alignment = 1.0
+            approach_direction = forward
+        else:
+            approach_direction = approach.normalize()
+            heading_alignment = (
+                forward.normalize().dot(approach_direction)
+                if forward.magnitude() > 1 else 0.0
+            )
+
+        closing_speed = (
+            car_velocity.dot(approach_direction)
+            if approach_direction.magnitude() > 0.001 else 0.0
+        )
+        wallward_ball_speed = ball_velocity.x * wall_side
+
+        distance_score = cap(1.0 - distance / 2600.0, 0.0, 1.0)
+        facing_score = cap((heading_alignment + 1.0) * 0.5, 0.0, 1.0)
+        wall_lane_score = cap(abs(ball.x) / 3600.0, 0.0, 1.0)
+        boost_score = cap(car.boost / 50.0, 0.0, 1.0)
+        ball_motion_score = cap(
+            (wallward_ball_speed + 350.0) / 1000.0,
+            0.0,
+            1.0
+        )
+        speed_score = cap((closing_speed + 100.0) / 1800.0, 0.0, 1.0)
+
+        score = (
+            distance_score * 0.40
+            + facing_score * 0.23
+            + wall_lane_score * 0.12
+            + boost_score * 0.10
+            + ball_motion_score * 0.08
+            + speed_score * 0.07
+        )
+
+        candidates.append({
+            "score": score,
+            "wall_side": wall_side,
+            "ball_location": Vector(ball.x, ball.y, ball.z),
+            "distance": distance,
+            "contact_target": contact_target,
+            "heading_alignment": heading_alignment,
+            "wallward_ball_speed": wallward_ball_speed,
+        })
+
+    if not candidates:
+        return reject(
+            "Volt is not on the field-centre side of the ball",
+            f"car_x={car.location.x:.0f} ball_x={ball.x:.0f}"
+        )
+
+    candidate = max(candidates, key=lambda item: item["score"])
+
+    if candidate["score"] < 0.42:
+        return reject(
+            "setup approach is currently poor",
+            f"score={candidate['score']:.3f} "
+            f"distance={distance:.0f} "
+            f"facing={candidate['heading_alignment']:.2f} "
+            f"wallward_vx={candidate['wallward_ball_speed']:.0f}"
+        )
+
+    last_debug = getattr(agent, "last_wall_reset_tool_debug", -999.0)
+    if agent.time - last_debug >= 0.75:
+        agent.last_wall_reset_tool_debug = agent.time
+        print(
+            f"[WALL RESET TOOL] candidate "
+            f"score={candidate['score']:.3f} "
+            f"side={candidate['wall_side']:+d} "
+            f"distance={candidate['distance']:.0f} "
+            f"ball=({ball.x:.0f},{ball.y:.0f},{ball.z:.0f}) "
+            f"facing={candidate['heading_alignment']:.2f} "
+            f"wallward_vx={candidate['wallward_ball_speed']:.0f}",
+            flush=True
+        )
+
+    return candidate
+
