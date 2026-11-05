@@ -347,8 +347,6 @@ class air_dribble_setup:
             return reject(f"ball not in forward range local_x={local_ball.x:.0f}")
         if abs(local_ball.y) > 900:
             return reject(f"ball too far laterally local_y={local_ball.y:.0f}")
-        if wall_delta_x * wall_side < 180:
-            return reject("ball is not farther toward wall than car")
         if abs(ball.x) > 3500 or abs(car.location.x) > 3300:
             return reject("too close to side wall already")
         # Opponent position relative to Volt is irrelevant; only spacing matters.
