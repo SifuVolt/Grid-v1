@@ -683,6 +683,18 @@ class car_object:
         self.supersonic = False
         self.jumped = False
         self.doublejumped = False
+
+        # Preserve RLBot v5's authoritative jump/dodge state. The legacy
+        # jumped/doublejumped fields above are retained for existing routines.
+        self.air_state = AirState.OnGround
+        self.has_jumped = False
+        self.has_double_jumped = False
+        self.has_dodged = False
+        self.dodge_timeout = -1.0
+        self.dodge_elapsed = 0.0
+        self.dodge_dir = Vector()
+        self.flip_reset_available = False
+
         self.boost = 0
         self.index = index
 
@@ -777,10 +789,35 @@ class car_object:
             car.demolished_timeout != -1
         )
 
+        self.air_state = car.air_state
         self.airborne = car.air_state != AirState.OnGround
         self.supersonic = car.is_supersonic
+
+        # Keep the old transient AirState flags unchanged for compatibility.
         self.jumped = car.air_state in (AirState.Jumping, AirState.DoubleJumping)
         self.doublejumped = car.air_state == AirState.DoubleJumping
+
+        # These packet fields persist for the whole airborne jump sequence,
+        # unlike AirState.DoubleJumping, which only lasts a few ticks.
+        self.has_jumped = bool(car.has_jumped)
+        self.has_double_jumped = bool(car.has_double_jumped)
+        self.has_dodged = bool(car.has_dodged)
+        self.dodge_timeout = float(car.dodge_timeout)
+        self.dodge_elapsed = float(car.dodge_elapsed)
+        self.dodge_dir = Vector(
+            car.dodge_dir.x,
+            car.dodge_dir.y,
+            0
+        )
+
+        # RLBot v5 documents this state as the authoritative reset indicator.
+        self.flip_reset_available = (
+            car.air_state == AirState.InAir
+            and not self.has_jumped
+            and not self.has_double_jumped
+            and not self.has_dodged
+        )
+
         self.boost = int(car.boost)
 
     @property
