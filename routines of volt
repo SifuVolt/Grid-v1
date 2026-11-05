@@ -67,7 +67,7 @@ def _relative_goal_aim_point(agent, targets=None):
     elif car_location.x > goal_center.x + 50:
         goal_center.x -= horizontal_offset
 
-    if agent.me.on_ground:
+    if agent.me.has_wheel_contact:
         goal_center.z += 100
     else:
         goal_center.z -= 100
