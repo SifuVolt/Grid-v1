@@ -4370,6 +4370,17 @@ class FlipReset:
         return
 
     def _current_ball(self, agent):
+        # Once the reset has been confirmed, use the live ball rather than
+        # the pre-contact prediction (the reset touch invalidates that path).
+        if self.phase != self.APPROACH:
+            live_ball = agent.ball.location
+            live_velocity = agent.ball.velocity
+            return (
+                Vector(live_ball.x, live_ball.y, live_ball.z),
+                Vector(live_velocity.x, live_velocity.y, live_velocity.z),
+                agent.time
+            )
+
         prediction = getattr(agent, "ball_prediction_struct", None)
         slices = getattr(prediction, "slices", None) if prediction else None
         if not slices:
