@@ -1021,8 +1021,6 @@ class Bot(VirxERLU):
             "jump_shot",
             "double_jump",
             "Aerial",
-            "FlipReset",
-            "WallResetSetup",
             "short_shot"
         }
 
@@ -1362,7 +1360,7 @@ class Bot(VirxERLU):
 
                     release_time = max(
                         self.time + 0.05,
-                        contact_at + 0.18
+                        contact_at + 0.12
                     )
                     print(
                         f"[COVER FOLLOWUP] player={self.me.index} "
@@ -1688,71 +1686,6 @@ class Bot(VirxERLU):
 
         # if the stack is clear, then run the following - otherwise, if the stack isn't empty, then look for a shot every 4th tick while the other routine is running
         
-        # Evaluate wall-reset setups alongside normal shot selection.
-        # Shot routines are usually active, so requiring a clear stack made
-        # this opportunity almost unreachable. Aerial can also be replaced
-        # while the car is still grounded (it has not launched yet); once
-        # airborne, keep the aerial protected and do not interrupt it.
-        current_routine_name = (
-            self.stack[0].__class__.__name__
-            if not self.is_clear()
-            else None
-        )
-        ordinary_ground_shots = {
-            "ground_shot",
-            "jump_shot",
-            "double_jump",
-            "Aerial"
-        }
-        wall_reset_can_preempt = (
-            self.is_clear()
-            or (
-                self.odd_tick == 0
-                and current_routine_name in ordinary_ground_shots
-                and not self.me.airborne
-            )
-        )
-
-        if (
-            not wall_reset_can_preempt
-            and self.odd_tick == 0
-            and current_routine_name is not None
-        ):
-            last_debug = getattr(self, "last_wall_reset_trigger_debug", -999.0)
-            if self.time - last_debug >= 1.0:
-                self.last_wall_reset_trigger_debug = self.time
-                print(
-                    f"[WALL RESET] waiting: active routine {current_routine_name} is protected",
-                    flush=True
-                )
-
-        if wall_reset_can_preempt and not self.defensive_emergency():
-            reset_setup = tools.find_wall_reset_candidate(self)
-            if reset_setup is not None:
-                print(
-                    f"[WALL RESET] setup selected "
-                    f"score={reset_setup['score']:.2f} "
-                    f"side={reset_setup['wall_side']:+d} "
-                    f"d={reset_setup['distance']:.0f} "
-                    f"source={current_routine_name or 'clear'}",
-                    flush=True
-                )
-                if not self.is_clear():
-                    self.clear()
-                    self.shooting = False
-                self.push(routines.WallResetSetup(reset_setup))
-                return
-        
-        # WallResetSetup owns the entire sequence: setup touch, short wait,
-        # wall drive, and double-jump launch. Do not run ordinary shot
-        # selection while it is active, or a jump_shot can replace the
-        # wall-drive phase and pinch the ball instead.
-        if (
-            not self.is_clear()
-            and self.stack[0].__class__.__name__ == "WallResetSetup"
-        ):
-            return
-
         if self.is_clear() or self.odd_tick == 0:
             shot = self.teamplay_shot
 
