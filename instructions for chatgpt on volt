@@ -1742,6 +1742,16 @@ class Bot(VirxERLU):
                     self.shooting = False
                 self.push(routines.WallResetSetup(reset_setup))
                 return
+        
+        # WallResetSetup owns the entire sequence: setup touch, short wait,
+        # wall drive, and double-jump launch. Do not run ordinary shot
+        # selection while it is active, or a jump_shot can replace the
+        # wall-drive phase and pinch the ball instead.
+        if (
+            not self.is_clear()
+            and self.stack[0].__class__.__name__ == "WallResetSetup"
+        ):
+            return
 
         if self.is_clear() or self.odd_tick == 0:
             shot = self.teamplay_shot
