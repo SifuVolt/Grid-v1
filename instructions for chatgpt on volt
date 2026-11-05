@@ -1688,25 +1688,40 @@ class Bot(VirxERLU):
 
         # if the stack is clear, then run the following - otherwise, if the stack isn't empty, then look for a shot every 4th tick while the other routine is running
         
-        # Wall-reset attempts begin from a grounded, clear-stack setup.
-        # They deliberately create the wall-ball opportunity instead of
-        # taking over an unrelated aerial.
-        if (
+        # Evaluate wall-reset setups alongside normal shot selection.
+        # Shot routines are usually active, so requiring a clear stack made
+        # this opportunity almost unreachable. Only preempt a grounded
+        # ordinary ground shot, never a jump, aerial, kickoff or recovery.
+        current_routine_name = (
+            self.stack[0].__class__.__name__
+            if not self.is_clear()
+            else None
+        )
+        wall_reset_can_preempt = (
             self.is_clear()
-            and not self.defensive_emergency()
-            and self.me.boost >= routines.WallResetPlanner.MIN_BOOST
-        ):
+            or (
+                self.odd_tick == 0
+                and current_routine_name == "ground_shot"
+                and not self.me.airborne
+            )
+        )
+
+        if wall_reset_can_preempt and not self.defensive_emergency():
             reset_setup = routines.WallResetPlanner().find_candidate(self)
-            if reset_setup is not None and reset_setup["score"] >= 0.48:
-                print(
-                    f"[WALL RESET] setup selected "
-                    f"score={reset_setup['score']:.2f} "
-                    f"side={reset_setup['wall_side']:+d} "
-                    f"d={reset_setup['distance']:.0f}",
-                    flush=True
-                )
-                self.push(routines.WallResetSetup(reset_setup))
-                return
+            if reset_setup is not None:
+                if reset_setup["score"] >= routines.WallResetPlanner.MIN_SCORE:
+                    print(
+                        f"[WALL RESET] setup selected "
+                        f"score={reset_setup['score']:.2f} "
+                        f"side={reset_setup['wall_side']:+d} "
+                        f"d={reset_setup['distance']:.0f} "
+                        f"source={current_routine_name or 'clear'}",
+                        flush=True
+                    )
+                    if not self.is_clear():
+                        self.clear()
+                    self.push(routines.WallResetSetup(reset_setup))
+                    return
 
         if self.is_clear() or self.odd_tick == 0:
             shot = self.teamplay_shot
