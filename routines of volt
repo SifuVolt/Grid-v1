@@ -37,11 +37,11 @@ def _safe_prediction_slice(agent, time_remaining, round_up=False):
 
 def _relative_goal_aim_point(agent, targets=None):
     """
-    Select a goal target from the ball and goal positions relative to Volt.
+    Aim near the goal centre, with small offsets based on Volt's position.
 
-    Keep shots centred while the ball is in our half. In the attacking half,
-    if the ball and goal are both to Volt's left/right, target that post,
-    inset slightly toward the centre so the shot stays inside the frame.
+    Ground shots target slightly above centre; aerial shots target slightly
+    below centre. Volt aims slightly away from its own side of the goal.
+    When the ball is still in our half, keep the target at top-centre.
     """
     if targets is not None and len(targets) >= 2:
         post_a = targets[0] if isinstance(targets[0], Vector) else Vector(*targets[0])
@@ -54,30 +54,25 @@ def _relative_goal_aim_point(agent, targets=None):
     goal_center = (post_a + post_b) * 0.5
     goal_center.z = 300
 
-    # Do not try to pick a corner until the ball has crossed midfield.
+    # While the ball is in our half, favour a higher central target.
     if agent.ball.location.y * side(agent.team) <= 0:
+        goal_center.z = 470
         return goal_center
 
     car_location = agent.me.location
-    forward = agent.me.forward.flatten().normalize()
-    car_right = forward.cross(Vector(z=1)).normalize()
+    horizontal_offset = 100
 
-    ball_side = (agent.ball.location - car_location).dot(car_right)
-    goal_side = (goal_center - car_location).dot(car_right)
-    straight_threshold = 100
+    if car_location.x < goal_center.x - 50:
+        goal_center.x += horizontal_offset
+    elif car_location.x > goal_center.x + 50:
+        goal_center.x -= horizontal_offset
 
-    if ball_side < -straight_threshold and goal_side < -straight_threshold:
-        aim = post_a if (post_a - goal_center).dot(car_right) < (post_b - goal_center).dot(car_right) else post_b
-    elif ball_side > straight_threshold and goal_side > straight_threshold:
-        aim = post_a if (post_a - goal_center).dot(car_right) > (post_b - goal_center).dot(car_right) else post_b
+    if agent.me.on_ground:
+        goal_center.z += 100
     else:
-        return goal_center
+        goal_center.z -= 100
 
-    # Aim 35 uu inside the selected post, toward the middle of the goal.
-    inward = (goal_center - aim).flatten().normalize()
-    aim = aim + inward * 35
-    aim.z = 300
-    return aim
+    return goal_center
 def _shot_approach_target(agent, ball_location, offset_target, shot_vector, time_left):
     """
     Smoothly choose a direct or flank approach to the planned contact point.
