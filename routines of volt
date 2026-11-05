@@ -309,7 +309,6 @@ class air_dribble_setup:
         self.phase = 0
         self.start_time = -1
         self.phase_time = -1
-        self.wall_side = 0
         self.previous_ball_velocity = None
         self.jump_start = -1
         self.second_jump_sent = False
