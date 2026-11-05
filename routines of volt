@@ -37,11 +37,11 @@ def _safe_prediction_slice(agent, time_remaining, round_up=False):
 
 def _relative_goal_aim_point(agent, targets=None):
     """
-    Select a goal-side target from the ball and goal positions relative to Volt.
+    Select a goal target from the ball and goal positions relative to Volt.
 
-    If both the ball and goal are to Volt's left, target the left post.
-    If both are to Volt's right, target the right post. If the shot is
-    straight or the two positions are on opposite sides, target goal centre.
+    Keep shots centred while the ball is in our half. In the attacking half,
+    if the ball and goal are both to Volt's left/right, target that post,
+    inset slightly toward the centre so the shot stays inside the frame.
     """
     if targets is not None and len(targets) >= 2:
         post_a = targets[0] if isinstance(targets[0], Vector) else Vector(*targets[0])
@@ -54,6 +54,10 @@ def _relative_goal_aim_point(agent, targets=None):
     goal_center = (post_a + post_b) * 0.5
     goal_center.z = 300
 
+    # Do not try to pick a corner until the ball has crossed midfield.
+    if agent.ball.location.y * side(agent.team) <= 0:
+        return goal_center
+
     car_location = agent.me.location
     forward = agent.me.forward.flatten().normalize()
     car_right = forward.cross(Vector(z=1)).normalize()
@@ -63,15 +67,15 @@ def _relative_goal_aim_point(agent, targets=None):
     straight_threshold = 100
 
     if ball_side < -straight_threshold and goal_side < -straight_threshold:
-        # Pick whichever post is farther to Volt's left.
         aim = post_a if (post_a - goal_center).dot(car_right) < (post_b - goal_center).dot(car_right) else post_b
     elif ball_side > straight_threshold and goal_side > straight_threshold:
-        # Pick whichever post is farther to Volt's right.
         aim = post_a if (post_a - goal_center).dot(car_right) > (post_b - goal_center).dot(car_right) else post_b
     else:
-        aim = goal_center
+        return goal_center
 
-    aim = aim.copy()
+    # Aim 35 uu inside the selected post, toward the middle of the goal.
+    inward = (goal_center - aim).flatten().normalize()
+    aim = aim + inward * 35
     aim.z = 300
     return aim
 def _shot_approach_target(agent, ball_location, offset_target, shot_vector, time_left):
