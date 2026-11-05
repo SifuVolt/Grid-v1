@@ -4343,10 +4343,10 @@ class WallResetSetup:
     First-stage wall-reset setup.
 
     Sequence:
-      1. Hit a low ball from the field side toward the side wall.
-      2. Detect the ball climbing the wall and wait one second.
-      3. Drive onto the same wall and follow the ball.
-      4. Jump, release, and use the second jump while aiming toward the ball.
+      1. Drive through a low ball with enough pace to send it up a side wall.
+      2. Wait only 0.20 seconds after the climb is detected.
+      3. Drive onto the same wall and climb toward the ball with minimal boost.
+      4. Jump, release, and use the second jump toward the ball.
 
     This stage deliberately stops after validating the wall launch. Wheel
     contact aiming and restored-dodge follow-up are added only after this
@@ -4456,13 +4456,16 @@ class WallResetSetup:
             )
             local_target = car.local_location(contact_target)
             distance = car.location.dist(contact_target)
-            speed_required = min(1900, max(850, distance / 0.65))
+            # Give the setup touch more pace so the ball actually climbs
+            # the wall. Use boost only for a long, well-aligned approach.
+            speed_required = min(2100, max(1150, distance / 0.52))
 
             defaultDrive(agent, speed_required, local_target)
+            setup_angle = abs(Vector(x=1).angle(local_target))
             agent.controller.boost = (
-                car.boost > 0
-                and distance > 750
-                and abs(Vector(x=1).angle(local_target)) < 0.45
+                car.boost > 20
+                and distance > 1250
+                and setup_angle < 0.30
             )
 
             if wall_climb_detected:
@@ -4552,13 +4555,19 @@ class WallResetSetup:
             )
             local_target = car.local_location(wall_target)
             distance = car.location.dist(wall_target)
-            speed_required = min(1900, max(700, distance / 0.75))
+            # This is a wall-drive, not a new shot search. Keep driving
+            # toward the wall lane and then upward alongside the ball.
+            # Boost is reserved for a long, straight approach; once attached
+            # to the wall, use throttle and preserve boost for the jump.
+            speed_required = min(1950, max(1050, distance / 0.60))
+            wall_follow_angle = abs(Vector(x=1).angle(local_target))
 
             defaultDrive(agent, speed_required, local_target)
             agent.controller.boost = (
-                car.boost > 0
-                and distance > 800
-                and abs(Vector(x=1).angle(local_target)) < 0.55
+                not on_wall
+                and car.boost > 25
+                and distance > 1250
+                and wall_follow_angle < 0.28
             )
 
             vertical_gap = ball.z - car.location.z
@@ -4586,7 +4595,9 @@ class WallResetSetup:
                 agent,
                 f"wall={on_wall} d={distance:.0f} "
                 f"ball_d={ball_distance:.0f} gap={vertical_gap:.0f} "
-                f"ball_z={ball.z:.0f} boost={car.boost:.0f}"
+                f"ball_z={ball.z:.0f} boost={car.boost:.0f} "
+                f"speed_target={speed_required:.0f} "
+                f"boosting={agent.controller.boost}"
             )
             return
 
