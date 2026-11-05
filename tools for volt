@@ -1187,6 +1187,11 @@ def find_wall_reset_candidate(agent):
     # A car left of the ball can send it toward +X; a car right of it
     # can send it toward -X.
     for wall_side in (1, -1):
+        # Don't choose the opposite wall when the ball is already deep
+        # in the other half; that would create a cross-field setup route.
+        if ball.x * wall_side < -1000:
+            continue
+
         if (car.location.x - ball.x) * wall_side >= -100:
             continue
 
@@ -1214,7 +1219,7 @@ def find_wall_reset_candidate(agent):
 
         distance_score = cap(1.0 - distance / 2600.0, 0.0, 1.0)
         facing_score = cap((heading_alignment + 1.0) * 0.5, 0.0, 1.0)
-        wall_lane_score = cap(abs(ball.x) / 3600.0, 0.0, 1.0)
+        wall_lane_score = cap((ball.x * wall_side + 1000.0) / 4600.0, 0.0, 1.0)
         boost_score = cap(car.boost / 50.0, 0.0, 1.0)
         ball_motion_score = cap(
             (wallward_ball_speed + 350.0) / 1000.0,
