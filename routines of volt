@@ -37,10 +37,10 @@ def _safe_prediction_slice(agent, time_remaining, round_up=False):
 
 def _relative_goal_aim_point(agent, targets=None):
     """
-    Choose a goal point diagonally opposite Volt's position relative to goal.
+    Choose the nearest goal corner based on Volt's position relative to goal.
 
-    A car to the right and below the goal centre aims high-left.
-    A car to the left and above the goal centre aims low-right.
+    A car to the right and below the goal centre aims low-right.
+    A car to the left and above the goal centre aims high-left.
     """
     if targets is not None and len(targets) >= 2:
         left = targets[0] if isinstance(targets[0], Vector) else Vector(*targets[0])
@@ -56,20 +56,18 @@ def _relative_goal_aim_point(agent, targets=None):
     car_relative_x = agent.me.location.x - goal_center.x
     car_relative_z = agent.me.location.z - goal_center.z
 
-    # Aim across the goal from the side Volt is currently on.
+    # Aim toward the same side of the goal that Volt is positioned on.
     if car_relative_x > 200:
-        aim_x = goal_center.x - 650
-    elif car_relative_x < -200:
         aim_x = goal_center.x + 650
+    elif car_relative_x < -200:
+        aim_x = goal_center.x - 650
     else:
         aim_x = goal_center.x
 
-    # Low approach -> high target; high approach -> low target.
-    aim_z = 550 if car_relative_z <= 0 else 100
+    # Keep the vertical corner aligned with Volt's height relative to goal.
+    aim_z = 550 if car_relative_z > 0 else 100
 
     return Vector(aim_x, goal_center.y, aim_z)
-
-
 def _shot_approach_target(agent, ball_location, offset_target, shot_vector, time_left):
     """
     Smoothly choose a direct or flank approach to the planned contact point.
