@@ -1,0 +1,12 @@
+# RocketSim arena collision meshes are dumped locally from the user's game.
+collision_meshes/
+
+# Local build and Python artifacts.
+build/
+dist/
+*.pyd
+*.dll
+*.so
+__pycache__/
+*.py[cod]
+.venv/
