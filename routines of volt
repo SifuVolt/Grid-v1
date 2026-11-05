@@ -304,72 +304,8 @@ class air_dribble_setup:
     SECOND_TOUCH_SPEED = 1450
     MIN_SECOND_TOUCH_CAR_SPEED = 1250
 
-    @staticmethod
-    def should_start(agent):
-        car = agent.me
-        ball = agent.ball.location
-
-        def reject(reason):
-            last = getattr(agent, "_air_dribble_check_debug", -999)
-            if agent.time - last >= 0.75:
-                agent._air_dribble_check_debug = agent.time
-                print(
-                    f"[AIR DRIBBLE CHECK] rejected: {reason} | "
-                    f"car=({car.location.x:.0f},{car.location.y:.0f},{car.location.z:.0f}) "
-                    f"ball=({ball.x:.0f},{ball.y:.0f},{ball.z:.0f})",
-                    flush=True
-                )
-            return False
-
-        if car.airborne:
-            return reject("car airborne")
-        if ball.z > 125:
-            return reject(f"ball too high z={ball.z:.0f}")
-        if abs(agent.ball.velocity.z) > 220:
-            return reject(f"ball vertical speed={agent.ball.velocity.z:.0f}")
-
-        if agent.time < getattr(agent, "air_dribble_cooldown_until", -999):
-            return reject("cooldown")
-
-        # Choose the side wall from the ball's world-space position.
-        # Do not use car.forward here: this VirxERLU car wrapper can expose
-        # a zero vector for that field even while local_location is valid.
-        wall_delta_x = ball.x - car.location.x
-        if abs(wall_delta_x) < 180:
-            return reject("ball is not meaningfully toward either side wall")
-        wall_side = 1 if wall_delta_x > 0 else -1
-
-        # Use the car's own world-to-local transform to validate geometry.
-        # This checks that the ball is in front and generally on the wallward
-        # side without requiring the car to point almost exactly at the wall.
-        local_ball = car.local_location(ball)
-        if not 250 < local_ball.x < 1650:
-            return reject(f"ball not in forward range local_x={local_ball.x:.0f}")
-        if abs(local_ball.y) > 900:
-            return reject(f"ball too far laterally local_y={local_ball.y:.0f}")
-        if abs(ball.x) > 3500 or abs(car.location.x) > 3300:
-            return reject("too close to side wall already")
-        # Opponent position relative to Volt is irrelevant; only spacing matters.
-        if agent.foes:
-            nearest_opponent_distance = min(
-                min(
-                    foe.location.flat_dist(car.location),
-                    foe.location.flat_dist(ball)
-                )
-                for foe in agent.foes
-            )
-            if nearest_opponent_distance <= 1800:
-                return reject(
-                    f"opponent too close distance={nearest_opponent_distance:.0f}"
-                )
-
-        last = getattr(agent, "_air_dribble_check_debug", -999)
-        if agent.time - last >= 0.75:
-            agent._air_dribble_check_debug = agent.time
-            print("[AIR DRIBBLE CHECK] all geometry conditions passed", flush=True)
-        return True
-
-    def __init__(self):
+    def __init__(self, wall_side=0):
+        self.wall_side = 1 if wall_side >= 0 else -1
         self.phase = 0
         self.start_time = -1
         self.phase_time = -1
@@ -423,8 +359,6 @@ class air_dribble_setup:
         if self.start_time < 0:
             self.start_time = agent.time
             self.phase_time = agent.time
-            forward = car.forward.flatten().normalize()
-            self.wall_side = 1 if forward.x > 0 else -1
             self.previous_ball_velocity = ball_velocity.copy()
             agent.shooting = True
             print(
