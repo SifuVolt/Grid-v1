@@ -1,4 +1,5 @@
 import virxrlcu
+from rlbot.flat import AirState
 from util.agent import VirxERLU
 from util.utils import (Vector, almost_equals, cap, cap_in_field, defaultDrive,
                         defaultPD, lerp, math, peek_generator, side, sign,
