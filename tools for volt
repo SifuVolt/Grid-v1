@@ -479,8 +479,38 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
 
     gravity = tuple(agent.gravity)
 
-    max_aerial_height = 1200 if len(agent.friends) == 0 and len(agent.foes) == 1 else math.inf
-    min_aerial_height = 551 if max_aerial_height > 1200 and agent.me.location.z >= 2044 - agent.me.hitbox.height * 1.1 else (150 if agent.boost_amount == 'unlimited' or agent.me.airborne else 450)
+    airborne_aerial_override = (
+        can_aerial
+        and agent.me.airborne
+        and (
+            agent.boost_amount == 'unlimited'
+            or agent.me.boost >= 20
+        )
+    )
+
+    # In 1v1 the normal aerial search is capped to avoid challenging
+    # balls the opponent can comfortably reach. Once Volt is already
+    # airborne with useful boost, do not let that opponent cap veto the
+    # aerial continuation.
+    max_aerial_height = (
+        math.inf
+        if airborne_aerial_override
+        else (
+            1200
+            if len(agent.friends) == 0 and len(agent.foes) == 1
+            else math.inf
+        )
+    )
+    min_aerial_height = (
+        551
+        if max_aerial_height > 1200
+        and agent.me.location.z >= 2044 - agent.me.hitbox.height * 1.1
+        else (
+            150
+            if agent.boost_amount == 'unlimited' or agent.me.airborne
+            else 450
+        )
+    )
 
     is_on_ground = not agent.me.airborne
     can_ground = is_on_ground and can_ground
@@ -521,6 +551,19 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             return
 
         ball_location = (ball_slice.physics.location.x, ball_slice.physics.location.y, ball_slice.physics.location.z)
+
+        # Avoid an absurd cross-field airborne chase: if Volt is still near
+        # its own goal while the predicted ball is already at the opponent
+        # goal, the aerial is not a useful continuation even with boost.
+        if airborne_aerial_override:
+            own_goal_distance = agent.me.location.flat_dist(
+                agent.friend_goal.location
+            )
+            ball_to_enemy_goal = Vector(*ball_location).flat_dist(
+                agent.foe_goal.location
+            )
+            if own_goal_distance < 2500 and ball_to_enemy_goal < 2500:
+                continue
 
         if abs(ball_location[1]) > 5212.75:
             break  # abandon search if ball is scored at/after this point
@@ -1152,19 +1195,19 @@ def find_wall_reset_candidate(agent):
     if car.airborne:
         return reject("car is airborne")
 
-    if car.boost < 18:
+    if car.boost < 12:
         return reject(
             "not enough boost for the wall play",
-            f"boost={car.boost:.0f} required=18"
+            f"boost={car.boost:.0f} required=12"
         )
 
-    if ball.z > 250:
+    if ball.z > 320:
         return reject(
             "ball is already too high for the ground setup",
-            f"ball_z={ball.z:.0f}"
+            f"ball_z={ball.z:.0f} max=320"
         )
 
-    if abs(ball.y) > 4300:
+    if abs(ball.y) > 4600:
         return reject(
             "ball is too close to an end-wall corner",
             f"ball_y={ball.y:.0f}"
@@ -1173,10 +1216,10 @@ def find_wall_reset_candidate(agent):
     ball_position = Vector(ball.x, ball.y, ball.z)
     distance = car.location.dist(ball_position)
 
-    if distance > 2600:
+    if distance > 3200:
         return reject(
             "ball is outside setup range",
-            f"distance={distance:.0f} max=2600"
+            f"distance={distance:.0f} max=3200"
         )
 
     forward = car.forward.flatten()
@@ -1217,7 +1260,7 @@ def find_wall_reset_candidate(agent):
         )
         wallward_ball_speed = ball_velocity.x * wall_side
 
-        distance_score = cap(1.0 - distance / 2600.0, 0.0, 1.0)
+        distance_score = cap(1.0 - distance / 3200.0, 0.0, 1.0)
         facing_score = cap((heading_alignment + 1.0) * 0.5, 0.0, 1.0)
         wall_lane_score = cap((ball.x * wall_side + 1000.0) / 4600.0, 0.0, 1.0)
         boost_score = cap(car.boost / 50.0, 0.0, 1.0)
@@ -1255,7 +1298,7 @@ def find_wall_reset_candidate(agent):
 
     candidate = max(candidates, key=lambda item: item["score"])
 
-    if candidate["score"] < 0.42:
+    if candidate["score"] < 0.34:
         return reject(
             "setup approach is currently poor",
             f"score={candidate['score']:.3f} "
