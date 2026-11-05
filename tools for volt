@@ -1,0 +1,1130 @@
+from util.routines import Aerial, double_jump, ground_shot, jump_shot, virxrlcu
+from util.utils import Vector, math, side, cap
+from util.grid_double_jump import find_double_jump as grid_find_double_jump
+
+
+def find_ground_shot(agent, target, cap_=6):
+    return find_shot(agent, target, cap_, can_aerial=False, can_double_jump=False, can_jump=False)
+
+
+def find_any_ground_shot(agent, cap_=6):
+    return find_any_shot(agent, cap_, can_aerial=False, can_double_jump=False, can_jump=False)
+
+
+def find_jump_shot(agent, target, cap_=6):
+    return find_shot(agent, target, cap_, can_aerial=False, can_double_jump=False, can_ground=False)
+
+
+def find_any_jump_shot(agent, cap_=6):
+    return find_any_shot(agent, cap_, can_aerial=False, can_double_jump=False, can_ground=False)
+
+
+def find_double_jump(agent, target, cap_=6):
+    return find_shot(agent, target, cap_, can_aerial=False, can_jump=False, can_ground=False)
+
+
+def find_any_double_jump(agent, cap_=6):
+    return find_any_shot(agent, cap_, can_aerial=False, can_jump=False, can_ground=False)
+
+
+def find_aerial(agent, target, cap_=6):
+    return find_shot(agent, target, cap_, can_double_jump=False, can_jump=False, can_ground=False)
+
+
+def find_any_aerial(agent, cap_=6):
+    return find_any_shot(agent, cap_, can_double_jump=False, can_jump=False, can_ground=False)
+
+def useful_non_aerial_shot(agent, ball_location, ball_velocity, shot, intercept_time):
+    # Aerials are handled separately.
+    if shot['shot_type'] == 3:
+        return True
+
+    ball_pos = Vector(*ball_location)
+    ball_vel = Vector(
+        ball_velocity.x,
+        ball_velocity.y,
+        ball_velocity.z
+    )
+
+    time_remaining = intercept_time - agent.time
+
+    if time_remaining <= 0:
+        return False
+
+    # How far is the ball expected to travel before contact?
+    ball_travel = ball_vel.flatten().magnitude() * time_remaining
+
+    # Find the closest opponent.
+    if len(agent.foes) == 0:
+        return True
+
+    closest_foe = min(
+        agent.foes,
+        key=lambda foe: foe.location.flat_dist(ball_pos)
+    )
+
+    enemy_distance = closest_foe.location.flat_dist(ball_pos)
+
+    # Rough enemy arrival estimate.
+    enemy_speed = max(
+        1200,
+        closest_foe.velocity.flatten().magnitude()
+    )
+
+    enemy_time = enemy_distance / enemy_speed
+
+    # Don't accept a shot where the opponent is likely to arrive first.
+    if enemy_time + 0.35 < time_remaining:
+        return False
+
+    return True
+
+
+def select_ball_contact(agent, ball_location, targets):
+    """
+    Select which side of the ball Volt should approach.
+
+    Returns the surface contact point, car approach target,
+    selected normal, and a readable label.
+    """
+
+    if targets is not None:
+        target_left = Vector(*targets[0])
+        target_right = Vector(*targets[1])
+
+        target_center = (target_left + target_right) * 0.5
+    else:
+        target_center = agent.foe_goal.location
+
+    shot_dir = (target_center - ball_location).flatten().normalize()
+    if shot_dir.magnitude() < 0.001:
+        shot_dir = Vector(0, side(agent.team), 0)
+
+    lateral = Vector(-shot_dir.y, shot_dir.x, 0).normalize()
+    car_from_ball = (agent.me.location - ball_location).normalize()
+
+    candidates = [
+        ("centre", -shot_dir),
+        ("left", (-shot_dir + lateral * 0.55).normalize()),
+        ("right", (-shot_dir - lateral * 0.55).normalize()),
+        ("high", (-shot_dir + Vector(0, 0, 0.30)).normalize()),
+        ("low", (-shot_dir - Vector(0, 0, 0.30)).normalize()),
+    ]
+
+    best = None
+    best_score = -999
+
+    for label, normal in candidates:
+        approach_alignment = car_from_ball.dot(normal)
+
+        # How much this contact direction deviates from the
+        # direction needed to send the ball toward the target.
+        shot_alignment = (-normal).dot(shot_dir)
+
+        # Strongly favour contacts Volt can actually approach.
+        score = (
+            approach_alignment * 0.75
+            + shot_alignment * 0.25
+        )
+
+        if score > best_score:
+            best_score = score
+            best = (label, normal)
+
+    label, normal = best
+
+    ball_radius = 92.75
+    approach_distance = max(120, agent.best_shot_value)
+
+    return {
+        "label": label,
+        "normal": normal,
+        "contact_point": ball_location + normal * ball_radius,
+        "approach_target": ball_location + normal * approach_distance,
+        "score": best_score,
+    }
+def target_aim_point(ball_location, ball_velocity, target, gravity=-650):
+    """
+    Aim toward the centre of the target pair.
+    The pair defines a horizontal target window, NOT goal corners.
+    """
+
+    left, right = target
+
+    if not isinstance(left, Vector):
+        left = Vector(*left)
+
+    if not isinstance(right, Vector):
+        right = Vector(*right)
+
+    center = (left + right) * 0.5
+
+    # Target width is defined by the two supplied points.
+    half_width = (right - left).flatten().magnitude() * 0.5
+
+    # Keep the ball inside the target window.
+    margin = 100.0
+    usable_width = max(0.0, half_width - margin)
+
+    # Predict where the ball will reach the target's Y plane.
+    dy = center.y - ball_location.y
+
+    if abs(ball_velocity.y) > 100:
+        t = dy / ball_velocity.y
+    else:
+        t = -1
+
+    if 0.05 < t < 3.0:
+        predicted_x = ball_location.x + ball_velocity.x * t
+        predicted_z = (
+            ball_location.z
+            + ball_velocity.z * t
+            + 0.5 * gravity * t * t
+        )
+
+        # Clamp X to the actual target window.
+        aim_x = cap(
+            predicted_x,
+            center.x - usable_width,
+            center.x + usable_width
+        )
+
+        # Don't aim below the floor or above the crossbar.
+        aim_z = cap(predicted_z, 120, 550)
+    else:
+        aim_x = center.x
+        aim_z = 300
+
+    return Vector(aim_x, center.y, aim_z)
+
+def unrealistic_goal_shot(agent, ball_location, target):
+    """
+    Reject shots where the ball is already too deep behind
+    the opponent's goal plane to make a realistic scoring attempt.
+    """
+
+    left, right = target
+
+    if not isinstance(left, Vector):
+        left = Vector(*left)
+
+    if not isinstance(right, Vector):
+        right = Vector(*right)
+
+    center = (left + right) * 0.5
+    toward_opponent = -side(agent.team)
+
+    past_goal_line = (
+        ball_location.y - center.y
+    ) * toward_opponent
+
+    half_width = (
+        (right - left).flatten().magnitude() * 0.5
+    )
+
+    # The ball is beyond the target plane.
+    if past_goal_line > 250:
+        return True
+
+    # Reject a ball well outside the target window near the plane.
+    if past_goal_line > -300:
+        if abs(ball_location.x - center.x) > half_width + 450:
+            return True
+
+    return False
+def shot_candidate_score(agent, ball_slice, shot, time_remaining, target=None):
+    """Lower is better: favour useful shots and stronger likely contacts."""
+    ball = ball_slice.physics.location
+    car = agent.me.location
+
+    car_velocity = agent.me.velocity.flatten()
+    ball_velocity = Vector(
+        ball_slice.physics.velocity.x,
+        ball_slice.physics.velocity.y,
+        ball_slice.physics.velocity.z
+    )
+
+    # Time still matters, but it must not drown out a clearly better angle/contact.
+    # Full-horizon search below lets a clean setup 1-3 seconds out beat a poor touch now.
+    score = time_remaining * 0.22
+    shot_type = shot["shot_type"]
+
+    # Prefer simpler shots when their likely outcome is comparable.
+    if shot_type == 0:       # Ground shot
+        score += 0.00
+    elif shot_type == 1:     # Jump shot
+        score += 0.12
+    elif shot_type == 2:     # Double jump
+        score += 0.25
+    elif shot_type == 3:     # Aerial
+        score += 0.35
+
+    team_side = 1 if agent.team == 0 else -1
+
+    if target is not None:
+        if unrealistic_goal_shot(agent, ball, target):
+            return float("inf")
+
+        aim_point = target_aim_point(
+            ball,
+            ball_velocity,
+            target
+        )
+
+        goal_direction = Vector(
+            aim_point.x - ball.x,
+            aim_point.y - ball.y,
+            0
+        ).normalize()
+
+        goal = (
+            target[0] + target[1]
+        ) * 0.5
+
+        # Penalise deep-half shots only when targeting the opponent's side.
+        ball_depth = ball.y * team_side
+        target_is_opponent_side = (
+            (goal.y - ball.y) * team_side < 0
+        )
+
+        if ball_depth > 1500 and target_is_opponent_side:
+            score += min((ball_depth - 1500) / 2500, 1.0) * 0.20
+
+        # A goal target should not reward a contact that is already behind the
+        # opponent goal line: those often become shots into the back wall.
+        # Keep this as a penalty (not a hard rejection) so rebounds remain possible.
+    else:
+        # Untargeted shots should generally clear the ball upfield.
+        goal_direction = Vector(0, -team_side, 0)
+
+    # Direction from the car to the predicted ball position.
+    approach = Vector(
+        ball.x - car.x,
+        ball.y - car.y,
+        0
+    )
+
+    if approach.magnitude() > 1 and goal_direction.magnitude() > 1:
+        approach = approach.normalize()
+        goal_direction = goal_direction.normalize()
+
+        alignment = cap(approach.dot(goal_direction), -1, 1)
+
+        # Prefer approaching from behind the ball, in the desired direction.
+        angle_penalty = (1 - alignment) * 0.45
+        time_factor = cap(
+            1.5 / max(time_remaining, 0.1),
+            0.7,
+            1.8
+        )
+        score += angle_penalty * time_factor
+
+        # Estimate how quickly the car is closing on the ball.
+        # A small closing speed often means the car will push the ball
+        # instead of hitting it with much pace.
+        closing_speed = (
+            car_velocity.dot(approach)
+            - ball_velocity.dot(approach)
+        )
+
+        weak_contact_penalty = (
+            cap((850 - closing_speed) / 850, 0, 1) * 0.55
+        )
+
+        # Current speed matters less when there is more time to accelerate.
+        power_time_factor = cap(
+            1.2 / max(time_remaining, 0.1),
+            0.4,
+            1.0
+        )
+
+        score += weak_contact_penalty * power_time_factor
+
+        # Teammate-aware shot choice: don't automatically concede to the
+        # closest car. Penalise our candidate only when a teammate appears to
+        # have both a comparable arrival and a clearly better attack angle.
+        # Keep urgent own-goal saves exempt from this soft competition check.
+        own_goal = agent.friend_goal.location
+        ball_to_own_goal = Vector(
+            own_goal.x - ball.x, own_goal.y - ball.y, 0
+        )
+        ball_heading_to_own_goal = (
+            ball_velocity.dot(ball_to_own_goal.normalize())
+            if ball_to_own_goal.magnitude() > 1 else 0
+        )
+        urgent_save = (
+            ball_to_own_goal.magnitude() < 3000
+            and ball_heading_to_own_goal > 250
+        )
+
+        if agent.friends and not urgent_save:
+            our_arrival = time_remaining
+            our_alignment = alignment
+            best_friend_edge = 0.0
+            for friend in agent.friends:
+                friend_to_ball = Vector(
+                    ball.x - friend.location.x,
+                    ball.y - friend.location.y,
+                    0
+                )
+                friend_distance = friend_to_ball.magnitude()
+                friend_speed = friend.velocity.flatten().magnitude()
+                friend_arrival = friend_distance / max(1200, friend_speed + 350)
+                if friend_to_ball.magnitude() <= 1:
+                    continue
+                friend_approach = friend_to_ball.normalize()
+                friend_alignment = cap(
+                    friend_approach.dot(goal_direction), -1, 1
+                )
+                arrival_edge = our_arrival - friend_arrival
+                angle_edge = friend_alignment - our_alignment
+                if arrival_edge >= -0.15 and angle_edge > 0.18:
+                    edge = min(0.65, max(0.0, arrival_edge + 0.2) * 0.35
+                               + angle_edge * 0.75)
+                    best_friend_edge = max(best_friend_edge, edge)
+            score += best_friend_edge
+
+    # Low boost makes complicated shots less attractive.
+    if agent.me.boost < 12:
+        if shot_type == 2:
+            score += 0.20
+        elif shot_type == 3:
+            score += 0.10
+
+    return score
+
+
+def within_elevated_dodge_angle(agent, time_to_intercept, max_angle=75):
+    prediction = agent.ball_prediction_struct
+
+    if prediction is None or not prediction.slices:
+        return False
+
+    slice_n = max(
+        0,
+        min(
+            len(prediction.slices) - 1,
+            math.ceil(time_to_intercept * 120) - 1
+        )
+    )
+
+    physics = prediction.slices[slice_n].physics
+    ball_location = Vector(
+        physics.location.x,
+        physics.location.y,
+        physics.location.z
+    )
+
+    # Compare horizontal directions only.
+    to_ball = (ball_location - agent.me.location).flatten()
+    forward = agent.me.forward.flatten()
+
+    if to_ball.magnitude() < 1 or forward.magnitude() < 1:
+        return False
+
+    dot = cap(
+        forward.normalize().dot(to_ball.normalize()),
+        -1,
+        1
+    )
+
+    angle = math.degrees(math.acos(dot))
+    return angle <= max_angle
+def elevated_dodge_reachable(agent, ball_location, time_to_intercept):
+    if not isinstance(ball_location, Vector):
+        ball_location = Vector(*ball_location)
+
+    car_location = agent.me.location
+    distance = (ball_location - car_location).magnitude()
+
+    speed = agent.me.velocity.magnitude()
+    boost = agent.me.boost
+
+    time = max(0.0, time_to_intercept)
+
+    acceleration = 900 + min(boost, 50) * 8
+
+    reachable_distance = (
+        speed * time
+        + 0.5 * acceleration * time * time
+        + 250
+    )
+
+    return distance <= reachable_distance
+
+def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_jump=True, can_ground=True):
+    if not can_aerial and not can_double_jump and not can_jump and not can_ground:
+        agent.print("WARNING: All shots were disabled when find_shot was ran")
+        return
+
+    # Takes a tuple of (left,right) target pairs and finds routines that could hit the ball between those target pairs
+    # Only meant for routines that require a defined intercept time/place in the future
+
+    # Assemble data in a form that can be passed to C
+    targets = (
+        tuple(target[0]),
+        tuple(target[1])
+    )
+    print(
+        f"[TARGET DEBUG] left={target[0]} right={target[1]}",
+        flush=True
+    )
+
+    me = agent.me.get_raw(agent)
+
+    game_info = (
+        agent.boost_accel,
+        agent.best_shot_value
+    )
+
+    gravity = tuple(agent.gravity)
+
+    max_aerial_height = 1200 if len(agent.friends) == 0 and len(agent.foes) == 1 else math.inf
+    min_aerial_height = 551 if max_aerial_height > 1200 and agent.me.location.z >= 2044 - agent.me.hitbox.height * 1.1 else (150 if agent.boost_amount == 'unlimited' or agent.me.airborne else 450)
+
+    is_on_ground = not agent.me.airborne
+    can_ground = is_on_ground and can_ground
+    can_jump = is_on_ground and can_jump
+    can_double_jump = is_on_ground and can_double_jump
+
+    if not can_ground and not can_jump and not can_double_jump and not can_aerial:
+        return
+
+    # Here we get the slices that need to be searched - by defining a cap, we can reduce the number of slices and improve search times
+    slices = get_slices(agent, cap_)
+
+    if slices is None:
+        return
+    best_ball_z = None
+    best_shot = None
+    best_intercept_time = None
+    best_score = float("inf")
+    best_ball_location = None
+
+    # Calculate Grid's double-jump candidate ONCE per search.
+    grid_candidate = None
+
+    if can_double_jump and not agent.me.airborne:
+        grid_candidate = grid_find_double_jump(
+            agent,
+            targets=(Vector(*targets[0]), Vector(*targets[1])),
+            horizon=cap_
+        )
+
+    # Compare the whole available prediction horizon. The score still values
+    # urgency, but it can now select a substantially cleaner later intercept.
+    for ball_slice in slices:
+        intercept_time = ball_slice.game_seconds
+        time_remaining = intercept_time - agent.time - (1 / 120)
+
+        if time_remaining <= 0:
+            return
+
+        ball_location = (ball_slice.physics.location.x, ball_slice.physics.location.y, ball_slice.physics.location.z)
+
+        if abs(ball_location[1]) > 5212.75:
+            break  # abandon search if ball is scored at/after this point
+
+        ball_info = (ball_location, (ball_slice.physics.velocity.x, ball_slice.physics.velocity.y, ball_slice.physics.velocity.z))
+
+        # Check if we can make a shot at this slice
+
+        # This operation is very expensive, so we use C to improve run time
+        shot = virxrlcu.parse_slice_for_shot_with_target(can_ground, can_jump, can_double_jump, can_aerial and (min_aerial_height < ball_location[2] < max_aerial_height), time_remaining, *game_info, gravity, ball_info, me, targets)
+        if shot['found'] == 1:
+            if not useful_non_aerial_shot(
+                agent,
+                ball_location,
+                ball_slice.physics.velocity,
+                shot,
+                intercept_time
+            ):
+                continue
+
+            score = shot_candidate_score(
+                agent,
+                ball_slice,
+                shot,
+                time_remaining,
+                target
+            )
+
+            if score < best_score:
+                best_score = score
+                best_shot = shot
+                best_intercept_time = intercept_time
+                best_ball_z = ball_location[2]
+                best_ball_location = Vector(*ball_location)
+    # Compare Grid's candidate against Volt's best C-parser candidate.
+    if grid_candidate is not None:
+        grid_time = grid_candidate["time"]
+        grid_time_remaining = grid_time - agent.time - (1 / 120)
+
+        if grid_time_remaining > 0:
+            grid_slice = min(
+                slices,
+                key=lambda s: abs(s.game_seconds - grid_time)
+            )
+
+            grid_ball_location = Vector(
+                *grid_candidate["ball_location"]
+            )
+
+            grid_ball_tuple = (
+                grid_ball_location.x,
+                grid_ball_location.y,
+                grid_ball_location.z
+            )
+
+            grid_shot = {
+                "found": 1,
+                "shot_type": 2,
+                "fast": False,
+                "targets": grid_candidate["targets"]
+            }
+
+            if useful_non_aerial_shot(
+                agent,
+                grid_ball_tuple,
+                grid_slice.physics.velocity,
+                grid_shot,
+                grid_time
+            ):
+                grid_score = shot_candidate_score(
+                    agent,
+                    grid_slice,
+                    grid_shot,
+                    grid_time_remaining,
+                    target
+                )
+
+                if grid_score < best_score:
+                    best_score = grid_score
+                    best_shot = grid_shot
+                    best_intercept_time = grid_time
+                    best_ball_z = grid_ball_location.z
+                    best_ball_location = grid_ball_location
+
+                    print(
+                        f"[GRID DOUBLE JUMP] Selected | "
+                        f"time={grid_time_remaining:.2f} "
+                        f"score={grid_score:.3f} "
+                        f"height={grid_ball_location.z:.0f}",
+                        flush=True
+                    )
+    # The loop has ended; construct the best nearby feasible shot.
+    if best_shot is None:
+        return None
+    time_to_intercept = best_intercept_time - agent.time
+    best_targets = (
+        tuple(best_shot["targets"][0]),
+        tuple(best_shot["targets"][1])
+    )
+
+    contact = select_ball_contact(
+        agent,
+        best_ball_location,
+        best_targets
+    )
+
+    if best_shot["shot_type"] == 3:
+        routine = Aerial(
+            best_intercept_time,
+            best_targets,
+            best_shot["fast"]
+        )
+    else:
+        shot_routines = [ground_shot, jump_shot, double_jump]
+        routine = shot_routines[best_shot["shot_type"]](
+            best_intercept_time,
+            best_targets
+        )
+
+    routine.contact_label = contact["label"]
+    routine.contact_point = contact["contact_point"]
+    routine.contact_normal = contact["normal"]
+    routine.contact_approach_target = contact["approach_target"]
+
+    print(
+        f"[BALL CONTACT] {contact['label']} "
+        f"point={contact['contact_point']} "
+        f"approach={contact['approach_target']} "
+        f"score={contact['score']:.2f}",
+        flush=True
+    )
+
+    return routine
+
+
+
+
+def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
+                  can_jump=True, can_ground=True):
+    if not can_aerial and not can_double_jump and not can_jump and not can_ground:
+        agent.print("WARNING: All shots were disabled when find_any_shot was ran")
+        return
+
+    me = agent.me.get_raw(agent)
+
+    game_info = (
+        agent.boost_accel,
+        agent.best_shot_value
+    )
+
+    gravity = tuple(agent.gravity)
+
+    max_aerial_height = (
+        1200
+        if len(agent.friends) == 0 and len(agent.foes) == 1
+        else math.inf
+    )
+
+    min_aerial_height = (
+        551
+        if max_aerial_height > 1200
+        and agent.me.location.z >= 2044 - agent.me.hitbox.height * 1.1
+        else (
+            150
+            if agent.boost_amount == 'unlimited' or agent.me.airborne
+            else 450
+        )
+    )
+
+    is_on_ground = not agent.me.airborne
+    can_ground = is_on_ground and can_ground
+    can_jump = is_on_ground and can_jump
+    can_double_jump = is_on_ground and can_double_jump
+
+    if not can_ground and not can_jump and not can_double_jump and not can_aerial:
+        return
+
+    slices = get_slices(agent, cap_)
+    if slices is None:
+        return None
+    best_ball_z = None
+    best_shot = None
+    best_intercept_time = None
+    best_score = float("inf")
+    best_ball_location = None
+    grid_candidate = None
+
+    if can_double_jump and not agent.me.airborne:
+        grid_candidate = grid_find_double_jump(
+            agent,
+            targets=None,
+            horizon=cap_
+        )
+    # Search all sampled slices rather than locking onto the first valid touch.
+    for ball_slice in slices:
+        intercept_time = ball_slice.game_seconds
+
+        time_remaining = intercept_time - agent.time - (1 / 120)
+
+        if time_remaining <= 0:
+            return None
+
+        ball_location = (
+            ball_slice.physics.location.x,
+            ball_slice.physics.location.y,
+            ball_slice.physics.location.z
+        )
+
+        if abs(ball_location[1]) > 5212.75:
+            break
+
+        ball_info = (
+            ball_location,
+            (
+                ball_slice.physics.velocity.x,
+                ball_slice.physics.velocity.y,
+                ball_slice.physics.velocity.z
+            )
+        )
+
+        shot = virxrlcu.parse_slice_for_shot(
+            can_ground,
+            can_jump,
+            can_double_jump,
+            can_aerial and (
+                min_aerial_height
+                < ball_location[2]
+                < max_aerial_height
+            ),
+            time_remaining,
+            *game_info,
+            gravity,
+            ball_info,
+            me
+        )
+
+        if shot['found'] != 1:
+            continue
+
+        if not useful_non_aerial_shot(
+            agent,
+            ball_location,
+            ball_slice.physics.velocity,
+            shot,
+            intercept_time
+        ):
+            continue
+
+        # No fixed goal target is supplied for find_any_shot.
+        # Score its approach direction and likely contact quality instead.
+        score = shot_candidate_score(
+            agent,
+            ball_slice,
+            shot,
+            time_remaining,
+            target=None
+        )
+
+        if score < best_score:
+            best_score = score
+            best_shot = shot
+            best_intercept_time = intercept_time
+            best_ball_z = ball_location[2]
+            best_ball_location = Vector(*ball_location)
+    if grid_candidate is not None:
+        grid_time = grid_candidate["time"]
+        grid_time_remaining = grid_time - agent.time - (1 / 120)
+
+        if grid_time_remaining > 0:
+            grid_slice = min(
+                slices,
+                key=lambda s: abs(
+                    s.game_seconds - grid_time
+                )
+            )
+
+            grid_ball_location = Vector(
+                *grid_candidate["ball_location"]
+            )
+
+            grid_ball_tuple = (
+                grid_ball_location.x,
+                grid_ball_location.y,
+                grid_ball_location.z
+            )
+
+            grid_shot = {
+                "found": 1,
+                "shot_type": 2,
+                "fast": False,
+                "targets": grid_candidate["targets"]
+            }
+
+            if useful_non_aerial_shot(
+                agent,
+                grid_ball_tuple,
+                grid_slice.physics.velocity,
+                grid_shot,
+                grid_time
+            ):
+                grid_score = shot_candidate_score(
+                    agent,
+                    grid_slice,
+                    grid_shot,
+                    grid_time_remaining,
+                    target=None
+                )
+
+                if grid_score < best_score:
+                    best_score = grid_score
+                    best_shot = grid_shot
+                    best_intercept_time = grid_time
+                    best_ball_z = grid_ball_location.z
+                    best_ball_location = grid_ball_location
+
+                    print(
+                        f"[GRID DOUBLE JUMP] Selected untargeted | "
+                        f"time={grid_time_remaining:.2f} "
+                        f"score={grid_score:.3f} "
+                        f"height={grid_ball_location.z:.0f}",
+                        flush=True
+                    )
+    if best_shot is None:
+        return None
+    time_to_intercept = best_intercept_time - agent.time
+    if best_shot['shot_type'] == 3:
+        return Aerial(
+            best_intercept_time,
+            fast_aerial=best_shot['fast']
+        )
+
+    shot_switch = [
+        ground_shot,
+        jump_shot,
+        double_jump
+    ]
+
+    return shot_switch[best_shot['shot_type']](
+        best_intercept_time
+    )
+
+
+def find_pass_shot(agent, cap_=4):
+    """Try a simple ground/jump pass toward a point ahead of a teammate.
+
+    This is deliberately a last-resort target: main.py should call it only
+    after both the goal shot and untargeted shot finders return None.
+    """
+    if not agent.friends:
+        return None
+
+    me = agent.me.location
+    team_side = side(agent.team)
+
+    # Prefer a teammate who is upfield and reasonably available, not simply
+    # the nearest teammate. Score by forward position plus separation from us.
+    def teammate_value(friend):
+        forward = -friend.location.y * team_side
+        separation = friend.location.flat_dist(me)
+        return forward + min(separation, 1800) * 0.25
+
+    friend = max(agent.friends, key=teammate_value)
+    friend_pos = friend.location
+    friend_vel = friend.velocity.flatten()
+
+    # Aim a short distance ahead of the teammate. If they're moving, lead them
+    # modestly; otherwise make a safe forward pass toward the opponent half.
+    lead_x = friend_pos.x
+    if friend_vel.magnitude() > 250:
+        lead_x += friend_vel.x / friend_vel.magnitude() * 350
+    lead_y = friend_pos.y - team_side * 650
+    if friend_vel.magnitude() > 250:
+        lead_y += friend_vel.y / friend_vel.magnitude() * 250
+
+    lead_x = cap(lead_x, -3500, 3500)
+    lead_y = cap(lead_y, -4600, 4600)
+    target = (
+        Vector(lead_x - 350, lead_y, 120),
+        Vector(lead_x + 350, lead_y, 120)
+    )
+
+    # Keep this conservative: only grounded shot types, no aerial pass attempts.
+    return find_shot(
+        agent, target, cap_=cap_, can_aerial=False,
+        can_double_jump=False, can_jump=True, can_ground=True
+    )
+
+
+def get_slices(agent, cap_):
+    struct = agent.ball_prediction_struct
+
+    if struct is None or not struct.slices:
+        return None
+
+    max_time = cap_
+
+    # Respect an existing shot's useful window.
+    if agent.shooting and agent.stack:
+        current = agent.stack[0]
+
+        if current.__class__.__name__ != "short_shot":
+            intercept_time = getattr(
+                current, "intercept_time", None
+            )
+
+            if intercept_time is not None:
+                remaining = intercept_time - agent.time
+
+                if 0 <= remaining < 0.5:
+                    return None
+
+                if remaining > 0:
+                    max_time = min(
+                        max_time,
+                        remaining - 0.05
+                    )
+
+    if max_time <= 0.10:
+        return None
+
+    selected = []
+    last_sample = -999.0
+
+    for ball_slice in struct.slices:
+        relative_time = ball_slice.game_seconds - agent.time
+
+        if relative_time < 0.10:
+            continue
+
+        if relative_time > max_time:
+            break
+
+        # Search densely nearby, less densely at long range.
+        sample_interval = (
+            0.05 if relative_time < 1.5 else 0.10
+        )
+
+        if relative_time - last_sample < sample_interval:
+            continue
+
+        if abs(ball_slice.physics.location.y) > 5250:
+            break
+
+        selected.append(ball_slice)
+        last_sample = relative_time
+
+    return selected if selected else None
+
+
+def find_wall_shot_candidate(agent, target, cap_=4):
+    """
+    Find an aerial intercept that could justify approaching from a
+    straight section of the side wall.
+
+    Returns the existing Aerial shot if the predicted contact is a
+    plausible wall-shot candidate; otherwise returns None.
+    This function does not start movement or alter the routine stack.
+    """
+    if agent.me.airborne:
+        return None
+
+    aerial = find_aerial(agent, target, cap_)
+
+    if aerial is None:
+        return None
+
+    time_remaining = aerial.intercept_time - agent.time
+
+    # Don't select an intercept that is too close or too far away.
+    if not 0.65 <= time_remaining <= cap_:
+        return None
+
+    prediction = agent.ball_prediction_struct
+
+    if prediction is None or not prediction.slices:
+        return None
+
+    # Find the prediction slice nearest the aerial's intercept time.
+    intercept_slice = min(
+        prediction.slices,
+        key=lambda s: abs(s.game_seconds - aerial.intercept_time)
+    )
+
+    ball = intercept_slice.physics.location
+
+    # Require an elevated ball near a straight side wall, not the
+    # corners, where a wall approach needs different geometry.
+    if ball.z < 300:
+        return None
+
+    if abs(ball.x) < 3400:
+        return None
+
+    if abs(ball.y) > 4200:
+        return None
+
+    # Avoid attempting a wall route if the car is very far from the
+    # ball and has little time to reach the wall.
+    car_to_ball = agent.me.location.flat_dist(
+        Vector(ball.x, ball.y, ball.z)
+    )
+
+    if car_to_ball > 3000 and time_remaining < 1.45:
+        return None
+
+    return aerial
+
+
+def find_wall_shot(agent, target, cap_=6):
+    print(
+        f"[WALL SHOT] Finder | "
+        f"ball=({agent.ball.location.x:.0f}, "
+        f"{agent.ball.location.y:.0f}, "
+        f"{agent.ball.location.z:.0f})",
+        flush=True
+    )
+
+    prediction = agent.ball_prediction_struct
+
+    if prediction is None or not prediction.slices:
+        return None
+
+    if agent.me.airborne:
+        return None
+
+    aerial = find_aerial(agent, target, cap_)
+
+    if aerial is None:
+        return None
+
+    time_remaining = aerial.intercept_time - agent.time
+
+    # A wall redirect needs time to build speed, but should not
+    # select an intercept so distant that the approach becomes weak.
+    if not 0.65 <= time_remaining <= cap_:
+        print(
+            f"[WALL SHOT] Reject: bad timing | T={time_remaining:.2f}",
+            flush=True
+        )
+        return None
+
+    # Require the fast-aerial variant.
+    if not getattr(aerial, "fast_aerial", False):
+        print("[WALL SHOT] Reject: aerial is not fast", flush=True)
+        return None
+
+    intercept_slice = min(
+        prediction.slices,
+        key=lambda s: abs(s.game_seconds - aerial.intercept_time)
+    )
+    ball_velocity = Vector(
+        intercept_slice.physics.velocity.x,
+        intercept_slice.physics.velocity.y,
+        intercept_slice.physics.velocity.z
+    )
+
+    ball = intercept_slice.physics.location
+    ball_pos = Vector(ball.x, ball.y, ball.z)
+
+    # Keep this to elevated balls near a straight side wall.
+    if ball.z < 300 or abs(ball.x) < 3000 or abs(ball.y) > 4200:
+        return None
+
+    car = agent.me
+    distance = car.location.dist(ball_pos)
+    flat_distance = car.location.flat_dist(ball_pos)
+    car_speed = car.velocity.magnitude()
+    wall_side = 1 if ball.x >= 0 else -1
+    moving_toward_side_wall = ball_velocity.x * wall_side > 100
+
+    # Reject intercepts that require unrealistic average travel speed.
+    required_speed = distance / max(time_remaining, 0.01)
+    if abs(ball.x) < 3700 and not moving_toward_side_wall:
+        print(
+            "[WALL SHOT] Reject: ball is not approaching side wall",
+            flush=True
+        )
+        return None
+
+    if required_speed > 1900:
+        print(
+            f"[WALL SHOT] Reject: too far for time | "
+            f"distance={distance:.0f} T={time_remaining:.2f} "
+            f"required_avg={required_speed:.0f}",
+            flush=True
+        )
+        return None
+
+    # Don't select a distant, slow approach with too little time
+    # to accelerate before aerial contact.
+    if car_speed < 700 and flat_distance > 1800 and time_remaining < 1.5:
+        print(
+            f"[WALL SHOT] Reject: low approach speed | "
+            f"speed={car_speed:.0f} distance={flat_distance:.0f}",
+            flush=True
+        )
+        return None
+
+    print(
+        f"[WALL SHOT] Candidate accepted | "
+        f"distance={distance:.0f} speed={car_speed:.0f} "
+        f"T={time_remaining:.2f}",
+        flush=True
+    )
+
+    return aerial
+
