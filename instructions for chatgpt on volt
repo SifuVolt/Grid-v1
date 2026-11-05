@@ -1021,6 +1021,7 @@ class Bot(VirxERLU):
             "jump_shot",
             "double_jump",
             "Aerial",
+            "FlipReset",
             "short_shot"
         }
 
