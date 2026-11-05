@@ -4349,30 +4349,69 @@ class WallResetPlanner:
     MAX_BALL_Z = 230
     MAX_CAR_DISTANCE = 1900
     MIN_BOOST = 20
+    MIN_SCORE = 0.48
+    DEBUG_INTERVAL = 0.75
+
+    def reject(self, agent, reason, details=""):
+        # This planner is checked repeatedly. Keep the rate limit on the agent
+        # because a new planner instance may be created on each evaluation.
+        last_debug = getattr(agent, "last_wall_reset_debug", -999.0)
+        if agent.time - last_debug >= self.DEBUG_INTERVAL:
+            agent.last_wall_reset_debug = agent.time
+            suffix = f" | {details}" if details else ""
+            print(f"[WALL RESET] candidate rejected: {reason}{suffix}",
+                  flush=True)
+        return None
 
     def find_candidate(self, agent):
         car = agent.me
         ball = agent.ball.location
 
-        if car.airborne or car.boost < self.MIN_BOOST:
-            return None
+        if car.airborne:
+            return self.reject(agent, "car airborne")
+
+        if car.boost < self.MIN_BOOST:
+            return self.reject(
+                agent, "boost below minimum",
+                f"boost={car.boost:.0f} required={self.MIN_BOOST}"
+            )
 
         wall_side = 1 if ball.x >= 0 else -1
         distance = car.location.dist(ball)
+        abs_ball_x = abs(ball.x)
 
-        if not (
-            self.MIN_BALL_X <= abs(ball.x) <= self.MAX_BALL_X
-            and ball.z <= self.MAX_BALL_Z
-            and abs(ball.y) < 4300
-            and distance <= self.MAX_CAR_DISTANCE
-        ):
-            return None
+        if abs_ball_x < self.MIN_BALL_X or abs_ball_x > self.MAX_BALL_X:
+            return self.reject(
+                agent, "ball outside side-wall lane",
+                f"|x|={abs_ball_x:.0f} allowed={self.MIN_BALL_X}-{self.MAX_BALL_X}"
+            )
+
+        if ball.z > self.MAX_BALL_Z:
+            return self.reject(
+                agent, "ball too high for setup",
+                f"z={ball.z:.0f} max={self.MAX_BALL_Z}"
+            )
+
+        if abs(ball.y) >= 4300:
+            return self.reject(
+                agent, "ball too close to end wall",
+                f"|y|={abs(ball.y):.0f} max<4300"
+            )
+
+        if distance > self.MAX_CAR_DISTANCE:
+            return self.reject(
+                agent, "car too far from ball",
+                f"distance={distance:.0f} max={self.MAX_CAR_DISTANCE}"
+            )
 
         # Volt must approach from the field side so its hit sends the ball
         # toward the chosen side wall, rather than trapping itself outside it.
         center_side = (car.location.x - ball.x) * wall_side < -100
         if not center_side:
-            return None
+            return self.reject(
+                agent, "car is not on field-centre side",
+                f"car_x={car.location.x:.0f} ball_x={ball.x:.0f} side={wall_side:+d}"
+            )
 
         distance_score = cap(
             1.0 - distance / self.MAX_CAR_DISTANCE,
@@ -4380,7 +4419,7 @@ class WallResetPlanner:
             1.0
         )
         wall_lane_score = cap(
-            (abs(ball.x) - self.MIN_BALL_X)
+            (abs_ball_x - self.MIN_BALL_X)
             / (self.MAX_BALL_X - self.MIN_BALL_X),
             0.0,
             1.0
@@ -4392,13 +4431,30 @@ class WallResetPlanner:
             + boost_score * 0.20
         )
 
+        if score < self.MIN_SCORE:
+            return self.reject(
+                agent, "candidate score below threshold",
+                f"score={score:.3f} required={self.MIN_SCORE:.2f} "
+                f"distance={distance:.0f} |x|={abs_ball_x:.0f} boost={car.boost:.0f}"
+            )
+
+        last_debug = getattr(agent, "last_wall_reset_debug", -999.0)
+        if agent.time - last_debug >= self.DEBUG_INTERVAL:
+            agent.last_wall_reset_debug = agent.time
+            print(
+                f"[WALL RESET] candidate accepted "
+                f"score={score:.3f} distance={distance:.0f} "
+                f"ball=({ball.x:.0f},{ball.y:.0f},{ball.z:.0f}) "
+                f"boost={car.boost:.0f}",
+                flush=True
+            )
+
         return {
             "score": score,
             "wall_side": wall_side,
             "ball_location": Vector(ball.x, ball.y, ball.z),
             "distance": distance,
         }
-
 
 class WallResetSetup:
     """
