@@ -4363,7 +4363,7 @@ class WallResetSetup:
 
     WALL_X = 3850
     SETUP_CONTACT_OFFSET = 155
-    WAIT_DURATION = 1.0
+    WAIT_DURATION = 0.20
     MAX_TOTAL_TIME = 6.5
     MAX_LAUNCH_TRACK_TIME = 0.9
 
@@ -4503,7 +4503,7 @@ class WallResetSetup:
                 self.stop(agent, "ball fell away during climb wait")
                 return
 
-            # Hold a controlled position while the ball climbs for one second.
+            # Hold position only briefly after the ball starts climbing.
             hold_target = Vector(
                 self.wall_side * 3300,
                 ball.y,
@@ -4532,7 +4532,7 @@ class WallResetSetup:
 
         if self.phase == self.WALL_FOLLOW:
             if not wall_climb_detected and (
-                abs(ball.x) < 3300 or ball.z < self.initial_ball_z + 20
+                abs(ball.x) < 3100 or ball.z < self.initial_ball_z + 5
             ):
                 self.stop(agent, "wall climb lost while following")
                 return
@@ -4565,9 +4565,9 @@ class WallResetSetup:
             ball_distance = car.location.dist(ball)
             launch_ready = (
                 on_wall
-                and ball_distance < 760
-                and 100 < vertical_gap < 650
-                and abs(ball.x) > 3450
+                and ball_distance < 900
+                and 60 < vertical_gap < 850
+                and abs(ball.x) > 3350
             )
 
             if launch_ready:
