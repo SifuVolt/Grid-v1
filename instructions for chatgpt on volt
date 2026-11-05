@@ -1118,17 +1118,11 @@ class Bot(VirxERLU):
         # Share and compare shot opportunities with teammates.
         self.update_teamplay()
 
-        # Once committed, the air-dribble routine owns its controls until
-        # completion or abort; normal shot selection must not replace it.
-        if any(
-            isinstance(routine, routines.air_dribble_setup)
-            for routine in self.stack
-        ):
-            return
-
-        # Ask the tools decision layer for this specialised setup before
-        # ordinary shot/aerial candidates are considered.
+        # The tools layer owns both setup eligibility and active-routine
+        # commitment, so ordinary shot selection cannot override the setup.
         air_dribble_routine = tools.find_air_dribble_setup(self)
+        if air_dribble_routine is True:
+            return
         if air_dribble_routine is not None:
             self.push(air_dribble_routine)
             return
