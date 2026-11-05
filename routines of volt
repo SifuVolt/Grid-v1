@@ -289,6 +289,303 @@ class wall_approach:
             )
             self.last_debug_time = agent.time
     
+
+class air_dribble_setup:
+    """
+    Controlled ground-to-wall air-dribble setup.
+
+    The routine is deliberately phase based: it only starts from a strict
+    grounded-ball geometry, owns the sequence once committed, and does not
+    return to shot selection between touches.
+    """
+
+    INITIAL_TOUCH_SPEED = 1250
+    WALL_CHASE_SPEED = 1650
+    SECOND_TOUCH_SPEED = 1450
+    MIN_SECOND_TOUCH_CAR_SPEED = 1250
+
+    @staticmethod
+    def should_start(agent):
+        car = agent.me
+        ball = agent.ball.location
+
+        if car.airborne or ball.z > 125 or abs(agent.ball.velocity.z) > 220:
+            return False
+
+        if agent.time < getattr(agent, "air_dribble_cooldown_until", -999):
+            return False
+
+        if not agent.foes:
+            return False
+
+        forward = car.forward.flatten()
+        if forward.magnitude() < 1:
+            return False
+        forward = forward.normalize()
+
+        # Volt must be deliberately facing toward one of the side walls.
+        if abs(forward.x) < 0.72:
+            return False
+
+        wall_side = 1 if forward.x > 0 else -1
+        wall_direction = Vector(wall_side, 0, 0)
+
+        if forward.dot(wall_direction) < 0.78:
+            return False
+
+        # The ball must be clearly ahead of the bumper and on the route
+        # toward the wall, not behind the car or already on the wall.
+        local_ball = car.local_location(ball)
+        if not 280 < local_ball.x < 1450 or abs(local_ball.y) > 420:
+            return False
+        if (ball.x - car.location.x) * wall_side < 180:
+            return False
+        if abs(ball.x) > 3500 or abs(car.location.x) > 3300:
+            return False
+
+        # Require an opponent behind Volt in Volt's forward frame.
+        # A nearby opponent in front or beside Volt is not sufficient.
+        opponent_behind = False
+        for foe in agent.foes:
+            local_foe = car.local_location(foe.location)
+            if local_foe.x < -300 and foe.location.flat_dist(car.location) < 3400:
+                opponent_behind = True
+                break
+
+        return opponent_behind
+
+    def __init__(self):
+        self.phase = 0
+        self.start_time = -1
+        self.phase_time = -1
+        self.wall_side = 0
+        self.previous_ball_velocity = None
+        self.jump_start = -1
+        self.second_jump_sent = False
+        self.last_debug = -999
+
+    def _abort(self, agent, reason):
+        print(f"[AIR DRIBBLE] ABORT phase={self.phase} reason={reason}", flush=True)
+        agent.air_dribble_cooldown_until = agent.time + 3.0
+        agent.pop()
+        agent.shooting = False
+        if agent.me.airborne:
+            agent.push(ball_recovery())
+
+    def _handoff_to_aerial(self, agent):
+        prediction = agent.ball_prediction_struct
+        intercept_time = agent.time + 1.0
+
+        if prediction is not None and prediction.slices:
+            future_slice = next(
+                (
+                    s for s in prediction.slices
+                    if s.game_seconds >= agent.time + 0.65
+                ),
+                prediction.slices[-1]
+            )
+            intercept_time = future_slice.game_seconds
+
+        targets = agent.foe_goal_shot
+        print(
+            f"[AIR DRIBBLE] SECOND TOUCH CONFIRMED; "
+            f"double-jump sent; handing to Aerial T={intercept_time-agent.time:.2f}",
+            flush=True
+        )
+        agent.air_dribble_cooldown_until = agent.time + 4.0
+        agent.pop()
+        agent.push(Aerial(intercept_time, targets, fast_aerial=True))
+
+    def run(self, agent: VirxERLU):
+        car = agent.me
+        ball = agent.ball.location
+        ball_velocity = Vector(
+            agent.ball.velocity.x,
+            agent.ball.velocity.y,
+            agent.ball.velocity.z
+        )
+
+        if self.start_time < 0:
+            self.start_time = agent.time
+            self.phase_time = agent.time
+            forward = car.forward.flatten().normalize()
+            self.wall_side = 1 if forward.x > 0 else -1
+            self.previous_ball_velocity = ball_velocity.copy()
+            agent.shooting = True
+            print(
+                f"[AIR DRIBBLE] START wall_side={self.wall_side:+d} "
+                f"ball=({ball.x:.0f},{ball.y:.0f},{ball.z:.0f})",
+                flush=True
+            )
+
+        agent.shooting = True
+        ball_vector = Vector(ball.x, ball.y, ball.z)
+        car_ball_distance = car.location.dist(ball_vector)
+        car_speed = car.velocity.magnitude()
+        wall_side = self.wall_side
+
+        agent.sphere(ball_vector, 92.75)
+
+        if agent.time - self.start_time > 5.0 and self.phase < 3:
+            self._abort(agent, "sequence timeout")
+            return
+
+        # PHASE 0: one measured, centre-line touch toward the side wall.
+        if self.phase == 0:
+            touch_target = Vector(
+                ball.x - wall_side * 260,
+                ball.y,
+                car.location.z
+            )
+            local_target = car.local_location(touch_target)
+            defaultDrive(agent, self.INITIAL_TOUCH_SPEED, local_target)
+            agent.controller.boost = False
+
+            wallward_speed = ball_velocity.x * wall_side
+            if car_ball_distance < 330 and wallward_speed > 430:
+                self.phase = 1
+                self.phase_time = agent.time
+                print(
+                    f"[AIR DRIBBLE] PHASE 1 first touch confirmed "
+                                       f"ball_wall_speed={wallward_speed:.0f}",
+                    flush=True
+                )
+            elif agent.time - self.phase_time > 1.8:
+                self._abort(agent, "could not make controlled first touch")
+                return
+
+        # PHASE 1: follow the ball immediately toward the side wall.
+        elif self.phase == 1:
+            predicted_ball = ball_vector + ball_velocity * 0.12
+            wall_target = Vector(
+                wall_side * 4050,
+                predicted_ball.y,
+                max(120, predicted_ball.z)
+            )
+            local_target = car.local_location(wall_target)
+            defaultDrive(agent, self.WALL_CHASE_SPEED, local_target)
+            agent.controller.boost = (
+                car.boost > 0
+                and car_speed < 1450
+                and car.location.flat_dist(wall_target) > 800
+            )
+
+            if abs(ball.x) > 3650 and ball.z > 145:
+                self.phase = 2
+                self.phase_time = agent.time
+                print(
+                    f"[AIR DRIBBLE] PHASE 2 ball on wall "
+                    f"ball=({ball.x:.0f},{ball.y:.0f},{ball.z:.0f})",
+                    flush=True
+                )
+            elif agent.time - self.phase_time > 2.8:
+                self._abort(agent, "ball did not climb the side wall")
+                return
+
+        # PHASE 2: get onto the wall, build speed, and make the second touch.
+        elif self.phase == 2:
+            on_wall = (
+                abs(car.location.x) > 3500
+                and abs(car.up.x) > 0.65
+                and car.up.x * car.location.x < 0
+            )
+
+            if not on_wall:
+                wall_target = Vector(
+                    wall_side * 4050,
+                    ball.y,
+                    max(130, ball.z)
+                )
+                local_target = car.local_location(wall_target)
+                defaultDrive(agent, self.WALL_CHASE_SPEED, local_target)
+                agent.controller.boost = car.boost > 0 and car_speed < 1500
+            else:
+                goal_direction = (
+                    agent.foe_goal.location - ball_vector
+                ).flatten().normalize()
+                if goal_direction.magnitude() < 1:
+                    self._abort(agent, "invalid goal direction")
+                    return
+
+                contact_target = ball_vector - goal_direction * 285
+                contact_target = Vector(
+                    wall_side * 4050,
+                    contact_target.y,
+                    max(100, contact_target.z)
+                )
+                local_target = car.local_location(contact_target)
+                defaultDrive(agent, self.SECOND_TOUCH_SPEED, local_target)
+                agent.controller.boost = (
+                    car.boost > 0
+                    and car_speed < self.MIN_SECOND_TOUCH_CAR_SPEED
+                    and car.location.dist(contact_target) > 350
+                )
+
+                velocity_change = (
+                    ball_velocity - self.previous_ball_velocity
+                ).magnitude() if self.previous_ball_velocity is not None else 0
+
+                # Require close physical contact, sufficient car speed, and
+                # a fresh ball-velocity change; proximity alone is not a hit.
+                if (
+                    car_ball_distance < 235
+                    and car_speed >= self.MIN_SECOND_TOUCH_CAR_SPEED
+                    and velocity_change >= 65
+                    and ball_velocity.magnitude() > 700
+                ):
+                    self.phase = 3
+                    self.phase_time = agent.time
+                    self.jump_start = agent.time
+                    self.second_jump_sent = False
+                    print(
+                        f"[AIR DRIBBLE] SECOND WALL TOUCH CONFIRMED "
+                        f"car_speed={car_speed:.0f} "
+                        f"ball_speed={ball_velocity.magnitude():.0f} "
+                        f"delta_v={velocity_change:.0f}",
+                        flush=True
+                    )
+                elif agent.time - self.phase_time > 2.5:
+                    self._abort(agent, "could not reach a powered second wall touch")
+                    return
+
+        # PHASE 3: double-jump off the wall, then hand control to Aerial.
+        elif self.phase == 3:
+            jump_frames = max(0, round((agent.time - self.jump_start) * 120))
+
+            if jump_frames < 24:
+                agent.controller.jump = True
+            elif jump_frames == 24:
+                # Release between the first and second jump presses.
+                agent.controller.jump = False
+            elif jump_frames == 25 and not self.second_jump_sent:
+                agent.controller.jump = True
+                self.second_jump_sent = True
+            else:
+                agent.controller.jump = False
+
+            if self.second_jump_sent and car.airborne:
+                self._handoff_to_aerial(agent)
+                return
+
+            if jump_frames > 42 and not car.airborne:
+                self._abort(agent, "wall launch failed")
+                return
+
+        if self.previous_ball_velocity is not None:
+            self.previous_ball_velocity = ball_velocity.copy()
+
+        if agent.time - self.last_debug > 0.35:
+            self.last_debug = agent.time
+            print(
+                f"[AIR DRIBBLE] phase={self.phase} "
+                f"car_ball={car_ball_distance:.0f} "
+                f"car_speed={car_speed:.0f} "
+                f"ball=({ball.x:.0f},{ball.y:.0f},{ball.z:.0f}) "
+                f"ball_speed={ball_velocity.magnitude():.0f}",
+                flush=True
+            )
+
+
 class wall_dash:
     JUMP_TIME = 0.07
     RELEASE_TIME = 0.05
