@@ -1118,6 +1118,24 @@ class Bot(VirxERLU):
         # Share and compare shot opportunities with teammates.
         self.update_teamplay()
 
+        # Once committed, the air-dribble routine owns its controls until
+        # completion or abort; normal shot selection must not replace it.
+        active_routine = (
+            self.stack[0].__class__.__name__
+            if not self.is_clear()
+            else None
+        )
+        if active_routine == "air_dribble_setup":
+            return
+
+        # Start only from an empty stack and the strict grounded-ball setup.
+        if (
+            self.is_clear()
+            and routines.air_dribble_setup.should_start(self)
+        ):
+            self.push(routines.air_dribble_setup())
+            return
+
         side = utils.side(self.team)
         ball_depth = self.ball.location.y * side
         fast_intercept_zone = 0 < ball_depth <= 1280
