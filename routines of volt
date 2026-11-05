@@ -35,6 +35,41 @@ def _safe_prediction_slice(agent, time_remaining, round_up=False):
     return slices[index]
 
 
+def _relative_goal_aim_point(agent, targets=None):
+    """
+    Choose a goal point diagonally opposite Volt's position relative to goal.
+
+    A car to the right and below the goal centre aims high-left.
+    A car to the left and above the goal centre aims low-right.
+    """
+    if targets is not None and len(targets) >= 2:
+        left = targets[0] if isinstance(targets[0], Vector) else Vector(*targets[0])
+        right = targets[1] if isinstance(targets[1], Vector) else Vector(*targets[1])
+    else:
+        left_post, right_post = agent.foe_goal_shot
+        left = left_post if isinstance(left_post, Vector) else Vector(*left_post)
+        right = right_post if isinstance(right_post, Vector) else Vector(*right_post)
+
+    goal_center = (left + right) * 0.5
+    goal_center.z = 300
+
+    car_relative_x = agent.me.location.x - goal_center.x
+    car_relative_z = agent.me.location.z - goal_center.z
+
+    # Aim across the goal from the side Volt is currently on.
+    if car_relative_x > 200:
+        aim_x = goal_center.x - 650
+    elif car_relative_x < -200:
+        aim_x = goal_center.x + 650
+    else:
+        aim_x = goal_center.x
+
+    # Low approach -> high target; high approach -> low target.
+    aim_z = 550 if car_relative_z <= 0 else 100
+
+    return Vector(aim_x, goal_center.y, aim_z)
+
+
 def _shot_approach_target(agent, ball_location, offset_target, shot_vector, time_left):
     """
     Smoothly choose a direct or flank approach to the planned contact point.
@@ -477,6 +512,7 @@ class double_jump:
         self.intercept_time = intercept_time
         self.base_intercept_time = intercept_time
         self.targets = targets
+        self.goal_aim_point = None
 
         self.jumping = False
         self.jump_time = -1
@@ -659,13 +695,12 @@ class double_jump:
             self.ball_location - agent.me.location
         ).normalize()
 
-        if self.targets is not None:
-            self.shot_vector = direction.clamp2D(
-                (self.targets[0] - self.ball_location).normalize(),
-                (self.targets[1] - self.ball_location).normalize()
-            )
-        else:
-            self.shot_vector = direction
+        if self.goal_aim_point is None:
+            self.goal_aim_point = _relative_goal_aim_point(agent, self.targets)
+
+        self.shot_vector = (
+            self.goal_aim_point - self.ball_location
+        ).flatten().normalize()
 
         self.offset_target = (
             self.ball_location
@@ -903,6 +938,7 @@ class Aerial:
         self.intercept_time = intercept_time
         self.fast_aerial = fast_aerial
         self.targets = targets
+        self.goal_aim_point = None
         self.shot_vector = None
         self.target = None
         self.ball = None
@@ -1072,19 +1108,10 @@ class Aerial:
                 and not agent.me.jumped
             )
 
-        # Determine the intended scoring target.
-        if self.targets is not None and len(self.targets) >= 2:
-            shot_target = (
-                Vector(*self.targets[0]) + Vector(*self.targets[1])
-            ) / 2
-        else:
-            left_post, right_post = agent.foe_goal_shot
-
-            shot_target = Vector(
-                (left_post.x + right_post.x) / 2,
-                (left_post.y + right_post.y) / 2,
-                300
-            )
+        # Choose a goal corner based on Volt's position relative to the goal.
+        if self.goal_aim_point is None:
+            self.goal_aim_point = _relative_goal_aim_point(agent, self.targets)
+        shot_target = self.goal_aim_point.copy()
 
         # Party Cannon predicted post-contact shot direction.
         self.shot_vector = self.party_cannon_shot_direction(
@@ -1112,11 +1139,7 @@ class Aerial:
         # Detect a useful backboard rebound for an already-airborne car.
         left_post, right_post = agent.foe_goal_shot
 
-        goal_center = Vector(
-            (left_post.x + right_post.x) / 2,
-            (left_post.y + right_post.y) / 2,
-            300
-        )
+        goal_center = self.goal_aim_point.copy()
 
         # Read the predicted ball velocity at this aerial's intercept.
         prediction = agent.ball_prediction_struct
@@ -2896,6 +2919,7 @@ class jump_shot:
         self.offset_target = None
         self.intercept_time = intercept_time
         self.targets = targets
+        self.goal_aim_point = None
         # Flags for what part of the routine we are in
         self.jumping = False
         self.dodging = False
@@ -2986,13 +3010,9 @@ class jump_shot:
         # Always aim the contact toward the opponent's goal.
         # Never use car-to-ball direction as the shot direction:
         # that can put the approach point on the wrong side of the ball.
-        if self.targets is not None:
-            target_center = (
-                Vector(*self.targets[0])
-                + Vector(*self.targets[1])
-            ) * 0.5
-        else:
-            target_center = agent.foe_goal.location
+        if self.goal_aim_point is None:
+            self.goal_aim_point = _relative_goal_aim_point(agent, self.targets)
+        target_center = self.goal_aim_point
 
         self.shot_vector = (
             target_center - self.ball_location
@@ -3336,6 +3356,7 @@ class ground_shot:
         self.offset_target = None
         self.intercept_time = intercept_time
         self.targets = targets
+        self.goal_aim_point = None
         self.patience = shot_patience()
 
     def update(self, shot):
@@ -3405,7 +3426,11 @@ class ground_shot:
             self.ball_location = Vector(ball.x, ball.y, ball.z)
 
         direction = (self.ball_location - agent.me.location).normalize()
-        self.shot_vector = direction if self.targets is None else direction.clamp2D((self.targets[0] - self.ball_location).normalize(), (self.targets[1] - self.ball_location).normalize())
+        if self.goal_aim_point is None:
+            self.goal_aim_point = _relative_goal_aim_point(agent, self.targets)
+        self.shot_vector = (
+            self.goal_aim_point - self.ball_location
+        ).flatten().normalize()
         self.offset_target = self.ball_location - (self.shot_vector * agent.best_shot_value)
         contact_target = getattr(self, "contact_approach_target", None)
 
