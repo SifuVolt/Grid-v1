@@ -4338,6 +4338,232 @@ class boost_down:
             agent.controller.boost = True
 
 
+class FlipReset:
+    """
+    Opportunistic wall-ball reset attempt layered over an existing Aerial.
+
+    The routine only starts after the aerial has spent its jump/dodge. It
+    keeps the original Aerial instance for a safe fallback, confirms a reset
+    from the RLBot player-state transition, and only then spends the restored
+    dodge. Normal aerial selection is not changed by this class.
+    """
+
+    APPROACH = "APPROACH"
+    SEPARATE = "SEPARATE"
+    FOLLOWUP = "FOLLOWUP"
+
+    def __init__(self, aerial, candidate):
+        self.aerial = aerial
+        self.candidate = candidate
+        self.phase = self.APPROACH
+        self.start_time = None
+        self.phase_time = None
+        self.had_spent_jump = True
+        self.last_debug = -1.0
+        self.separation_direction = None
+
+    def _fallback(self, agent, reason):
+        print(f"[FLIP RESET] Abort: {reason}; resume normal aerial", flush=True)
+        agent.pop()
+        agent.push(self.aerial)
+        return
+
+    def _current_ball(self, agent):
+        prediction = getattr(agent, "ball_prediction_struct", None)
+        slices = getattr(prediction, "slices", None) if prediction else None
+        if not slices:
+            return None, None, None
+
+        best_slice = min(
+            slices,
+            key=lambda item: abs(
+                item.game_seconds - self.candidate["contact_time"]
+            )
+        )
+        if abs(best_slice.game_seconds - self.candidate["contact_time"]) > 0.45:
+            return None, None, None
+
+        physics = best_slice.physics
+        ball = Vector(
+            physics.location.x,
+            physics.location.y,
+            physics.location.z
+        )
+        velocity = Vector(
+            physics.velocity.x,
+            physics.velocity.y,
+            physics.velocity.z
+        )
+        return ball, velocity, best_slice.game_seconds
+
+    def _reset_confirmed(self, car):
+        # The routine can only be entered after the original aerial has spent
+        # a jump/dodge. A transition back to the documented reset state is
+        # therefore evidence of a newly acquired reset, not merely wall-fall.
+        return (
+            car.air_state == AirState.InAir
+            and not car.has_jumped
+            and not car.has_double_jumped
+            and not car.has_dodged
+            and car.flip_reset_available
+        )
+
+    def _log(self, agent, message):
+        if agent.time - self.last_debug >= 0.25:
+            self.last_debug = agent.time
+            print(f"[FLIP RESET] phase={self.phase} {message}", flush=True)
+
+    def run(self, agent: VirxERLU):
+        car = agent.me
+
+        if self.start_time is None:
+            self.start_time = agent.time
+            self.phase_time = agent.time
+
+        # The aerial must already have spent its original jump/dodge.
+        if not car.airborne or not (
+            car.has_double_jumped or car.has_dodged
+        ):
+            self._fallback(agent, "original dodge not spent / car grounded")
+            return
+
+        if agent.time - self.start_time > 2.8:
+            self._fallback(agent, "reset window expired")
+            return
+
+        ball, ball_velocity, contact_time = self._current_ball(agent)
+        if ball is None:
+            self._fallback(agent, "wall-ball prediction expired")
+            return
+
+        wall_side = 1 if ball.x >= 0 else -1
+        if (
+            abs(ball.x) < 3150
+            or ball.z < 300
+            or ball_velocity.z < 40
+            or abs(ball.y) > 5000
+        ):
+            self._fallback(agent, "ball is no longer climbing the side wall")
+            return
+
+        if self.phase == self.APPROACH:
+            if self._reset_confirmed(car):
+                self.phase = self.FOLLOWUP
+                self.phase_time = agent.time
+                self._log(agent, "reset confirmed from PlayerInfo state")
+            else:
+                # Come from the wall side of the ball. The car's wheels face
+                # inward from the side wall, allowing a multi-wheel contact.
+                contact_target = Vector(
+                    wall_side * 3900,
+                    ball.y,
+                    ball.z
+                )
+                local_target = car.local_location(contact_target)
+                distance = car.location.dist(contact_target)
+
+                defaultPD(agent, local_target)
+                agent.controller.throttle = 1
+                agent.controller.boost = (
+                    car.boost > 0
+                    and distance > 180
+                    and abs(Vector(x=1).angle(local_target)) < 0.75
+                )
+
+                self._log(
+                    agent,
+                    f"seeking wheel contact d={distance:.0f} "
+                    f"T={max(0.0, contact_time - agent.time):.2f} "
+                    f"boost={car.boost:.0f}"
+                )
+                return
+
+        if self.phase == self.FOLLOWUP:
+            # Decide whether the restored dodge can be used immediately.
+            local_ball = car.local_location(ball)
+            goal_direction = (
+                agent.foe_goal.location - ball
+            ).flatten().normalize()
+
+            ball_direction = (ball - car.location).flatten()
+            if ball_direction.magnitude() > 1:
+                ball_direction = ball_direction.normalize()
+
+            goal_alignment = (
+                ball_direction.dot(goal_direction)
+                if ball_direction.magnitude() > 0
+                else -1.0
+            )
+
+            immediate = (
+                local_ball.x > 80
+                and abs(local_ball.y) < 420
+                and goal_alignment > 0.45
+                and car.location.dist(ball) < 520
+            )
+
+            if immediate:
+                dodge_vector = local_ball.flatten().normalize()
+                print(
+                    f"[FLIP RESET] immediate follow-up "
+                    f"alignment={goal_alignment:.2f}",
+                    flush=True
+                )
+                agent.pop()
+                agent.push(flip(dodge_vector))
+                return
+
+            # If the ball is not lined up for a useful immediate hit, create
+            # a short separation window before aiming the restored dodge.
+            if self.phase_time == agent.time:
+                self.separation_direction = (
+                    car.location - ball
+                ).flatten().normalize()
+                if self.separation_direction.magnitude() < 1:
+                    self.separation_direction = (
+                        -goal_direction
+                    ).normalize()
+                self.phase = self.SEPARATE
+                self.phase_time = agent.time
+
+        if self.phase == self.SEPARATE:
+            elapsed = agent.time - self.phase_time
+            if elapsed < 0.18 and car.boost > 0:
+                away_target = (
+                    car.location + self.separation_direction * 500
+                )
+                defaultPD(
+                    agent,
+                    car.local_location(away_target),
+                    upside_down=False
+                )
+                agent.controller.boost = True
+                agent.controller.throttle = 1
+                return
+
+            self.phase = self.FOLLOWUP
+            self.phase_time = agent.time
+
+            local_ball = car.local_location(ball)
+            if (
+                local_ball.x > 0
+                and car.location.dist(ball) < 850
+            ):
+                dodge_vector = local_ball.flatten().normalize()
+                print(
+                    "[FLIP RESET] separated; using restored dodge",
+                    flush=True
+                )
+                agent.pop()
+                agent.push(flip(dodge_vector))
+                return
+
+            # Do not waste the restored flip on a poor angle. Return to the
+            # preserved aerial controller for a conventional contact attempt.
+            self._fallback(agent, "post-reset angle is not usable")
+            return
+
+
 class FlipResetPlanner:
     """
     Conservative, read-only planner for wall-play flip-reset opportunities.
