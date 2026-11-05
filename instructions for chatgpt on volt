@@ -1690,9 +1690,9 @@ class Bot(VirxERLU):
         
         # Evaluate wall-reset setups alongside normal shot selection.
         # Shot routines are usually active, so requiring a clear stack made
-        # this opportunity almost unreachable. Only preempt a grounded
-        # ordinary shot routine before it has left the ground; protect
-        # aerials, kickoffs, defence, recoveries and active airborne mechanics.
+        # this opportunity almost unreachable. Aerial can also be replaced
+        # while the car is still grounded (it has not launched yet); once
+        # airborne, keep the aerial protected and do not interrupt it.
         current_routine_name = (
             self.stack[0].__class__.__name__
             if not self.is_clear()
@@ -1701,7 +1701,8 @@ class Bot(VirxERLU):
         ordinary_ground_shots = {
             "ground_shot",
             "jump_shot",
-            "double_jump"
+            "double_jump",
+            "Aerial"
         }
         wall_reset_can_preempt = (
             self.is_clear()
