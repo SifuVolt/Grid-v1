@@ -331,32 +331,26 @@ class air_dribble_setup:
         if agent.time < getattr(agent, "air_dribble_cooldown_until", -999):
             return reject("cooldown")
 
-        forward = car.forward.flatten()
-        if forward.magnitude() < 1:
-            return reject("invalid forward vector")
-        forward = forward.normalize()
+        # Choose the side wall from the ball's world-space position.
+        # Do not use car.forward here: this VirxERLU car wrapper can expose
+        # a zero vector for that field even while local_location is valid.
+        wall_delta_x = ball.x - car.location.x
+        if abs(wall_delta_x) < 180:
+            return reject("ball is not meaningfully toward either side wall")
+        wall_side = 1 if wall_delta_x > 0 else -1
 
-        # Volt must be deliberately facing toward one of the side walls.
-        if abs(forward.x) < 0.72:
-            return reject(f"not facing side wall forward_x={forward.x:.2f}")
-
-        wall_side = 1 if forward.x > 0 else -1
-        wall_direction = Vector(wall_side, 0, 0)
-        if forward.dot(wall_direction) < 0.78:
-            return reject("wall-facing alignment too low")
-
-        # The ball must be clearly ahead of the bumper and on the route
-        # toward the wall, not behind the car or already on the wall.
+        # Use the car's own world-to-local transform to validate geometry.
+        # This checks that the ball is in front and generally on the wallward
+        # side without requiring the car to point almost exactly at the wall.
         local_ball = car.local_location(ball)
-        if not 280 < local_ball.x < 1450:
+        if not 250 < local_ball.x < 1650:
             return reject(f"ball not in forward range local_x={local_ball.x:.0f}")
-        if abs(local_ball.y) > 420:
+        if abs(local_ball.y) > 900:
             return reject(f"ball too far laterally local_y={local_ball.y:.0f}")
-        if (ball.x - car.location.x) * wall_side < 180:
+        if wall_delta_x * wall_side < 180:
             return reject("ball is not farther toward wall than car")
         if abs(ball.x) > 3500 or abs(car.location.x) > 3300:
             return reject("too close to side wall already")
-
         # Opponent position relative to Volt is irrelevant; only spacing matters.
         if agent.foes:
             nearest_opponent_distance = min(
