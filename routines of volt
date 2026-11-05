@@ -4512,6 +4512,7 @@ class WallResetSetup:
             f"[WALL RESET] STOP phase={self.phase} reason={reason}",
             flush=True
         )
+        agent.shooting = False
         agent.pop()
 
     def log(self, agent, message):
