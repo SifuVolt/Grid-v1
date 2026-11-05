@@ -1120,20 +1120,17 @@ class Bot(VirxERLU):
 
         # Once committed, the air-dribble routine owns its controls until
         # completion or abort; normal shot selection must not replace it.
-        active_routine = (
-            self.stack[0].__class__.__name__
-            if not self.is_clear()
-            else None
-        )
-        if active_routine == "air_dribble_setup":
+        if any(
+            isinstance(routine, routines.air_dribble_setup)
+            for routine in self.stack
+        ):
             return
 
-        # Start only from an empty stack and the strict grounded-ball setup.
-        if (
-            self.is_clear()
-            and routines.air_dribble_setup.should_start(self)
-        ):
-            self.push(routines.air_dribble_setup())
+        # Ask the tools decision layer for this specialised setup before
+        # ordinary shot/aerial candidates are considered.
+        air_dribble_routine = tools.find_air_dribble_setup(self)
+        if air_dribble_routine is not None:
+            self.push(air_dribble_routine)
             return
 
         side = utils.side(self.team)
