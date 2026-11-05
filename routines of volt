@@ -643,10 +643,11 @@ class double_jump:
         ball_location = Vector(ball.x, ball.y, ball.z)
 
         direction = (ball_location - agent.me.location).normalize()
-        shot_vector = direction.clamp2D(
-            (self.targets[0] - ball_location).normalize(),
-            (self.targets[1] - ball_location).normalize()
-        )
+        if self.goal_aim_point is None:
+            self.goal_aim_point = _relative_goal_aim_point(agent, self.targets)
+        shot_vector = (
+            self.goal_aim_point - ball_location
+        ).flatten().normalize()
 
         offset_target = ball_location - shot_vector * agent.best_shot_value
         return agent.me.local_location(offset_target).x < 0
@@ -2950,10 +2951,11 @@ class jump_shot:
 
         direction = (ball_location - agent.me.location).normalize()
 
-        shot_vector = direction.clamp2D(
-            (self.targets[0] - ball_location).normalize(),
-            (self.targets[1] - ball_location).normalize()
-        )
+        if self.goal_aim_point is None:
+            self.goal_aim_point = _relative_goal_aim_point(agent, self.targets)
+        shot_vector = (
+            self.goal_aim_point - ball_location
+        ).flatten().normalize()
 
         offset_target = ball_location - shot_vector * agent.best_shot_value
 
@@ -3384,10 +3386,11 @@ class ground_shot:
 
         direction = (ball_location - agent.me.location).normalize()
 
-        shot_vector = direction.clamp2D(
-            (self.targets[0] - ball_location).normalize(),
-            (self.targets[1] - ball_location).normalize()
-        )
+        if self.goal_aim_point is None:
+            self.goal_aim_point = _relative_goal_aim_point(agent, self.targets)
+        shot_vector = (
+            self.goal_aim_point - ball_location
+        ).flatten().normalize()
 
         offset_target = ball_location - shot_vector * agent.best_shot_value
 
