@@ -1,5 +1,4 @@
 import virxrlcu
-from rlbot.flat import AirState
 from util.agent import VirxERLU
 from util.utils import (Vector, almost_equals, cap, cap_in_field, defaultDrive,
                         defaultPD, lerp, math, peek_generator, side, sign,
@@ -4339,440 +4338,373 @@ class boost_down:
             agent.controller.boost = True
 
 
-class FlipReset:
+class WallResetPlanner:
     """
-    Opportunistic wall-ball reset attempt layered over an existing Aerial.
-
-    The routine only starts after the aerial has spent its jump/dodge. It
-    keeps the original Aerial instance for a safe fallback, confirms a reset
-    from the RLBot player-state transition, and only then spends the restored
-    dodge. Normal aerial selection is not changed by this class.
+    Finds grounded opportunities to deliberately send the ball up a side wall.
+    This is a setup planner, not an aerial/reset takeover planner.
     """
 
-    APPROACH = "APPROACH"
-    SEPARATE = "SEPARATE"
-    FOLLOWUP = "FOLLOWUP"
+    MIN_BALL_X = 2550
+    MAX_BALL_X = 3800
+    MAX_BALL_Z = 230
+    MAX_CAR_DISTANCE = 1900
+    MIN_BOOST = 20
 
-    def __init__(self, aerial, candidate):
-        self.aerial = aerial
-        self.candidate = candidate
-        self.phase = self.APPROACH
-        self.start_time = None
-        self.phase_time = None
-        self.had_spent_jump = True
-        self.last_debug = -1.0
-        self.separation_direction = None
-
-    def _fallback(self, agent, reason):
-        print(f"[FLIP RESET] Abort: {reason}; resume normal aerial", flush=True)
-        agent.pop()
-        agent.push(self.aerial)
-        return
-
-    def _current_ball(self, agent):
-        # Once the reset has been confirmed, use the live ball rather than
-        # the pre-contact prediction (the reset touch invalidates that path).
-        if self.phase != self.APPROACH:
-            live_ball = agent.ball.location
-            live_velocity = agent.ball.velocity
-            return (
-                Vector(live_ball.x, live_ball.y, live_ball.z),
-                Vector(live_velocity.x, live_velocity.y, live_velocity.z),
-                agent.time
-            )
-
-        prediction = getattr(agent, "ball_prediction_struct", None)
-        slices = getattr(prediction, "slices", None) if prediction else None
-        if not slices:
-            return None, None, None
-
-        best_slice = min(
-            slices,
-            key=lambda item: abs(
-                item.game_seconds - self.candidate["contact_time"]
-            )
-        )
-        if abs(best_slice.game_seconds - self.candidate["contact_time"]) > 0.45:
-            return None, None, None
-
-        physics = best_slice.physics
-        ball = Vector(
-            physics.location.x,
-            physics.location.y,
-            physics.location.z
-        )
-        velocity = Vector(
-            physics.velocity.x,
-            physics.velocity.y,
-            physics.velocity.z
-        )
-        return ball, velocity, best_slice.game_seconds
-
-    def _reset_confirmed(self, car):
-        # The routine can only be entered after the original aerial has spent
-        # a jump/dodge. A transition back to the documented reset state is
-        # therefore evidence of a newly acquired reset, not merely wall-fall.
-        return (
-            car.air_state == AirState.InAir
-            and not car.has_jumped
-            and not car.has_double_jumped
-            and not car.has_dodged
-            and car.flip_reset_available
-        )
-
-    def _log(self, agent, message):
-        if agent.time - self.last_debug >= 0.25:
-            self.last_debug = agent.time
-            print(f"[FLIP RESET] phase={self.phase} {message}", flush=True)
-
-    def run(self, agent: VirxERLU):
+    def find_candidate(self, agent):
         car = agent.me
+        ball = agent.ball.location
 
-        if self.start_time is None:
-            self.start_time = agent.time
-            self.phase_time = agent.time
-
-        # The aerial must already have spent its original jump/dodge.
-        if not car.airborne or not (
-            car.has_double_jumped or car.has_dodged
-        ):
-            self._fallback(agent, "original dodge not spent / car grounded")
-            return
-
-        if agent.time - self.start_time > 2.8:
-            self._fallback(agent, "reset window expired")
-            return
-
-        ball, ball_velocity, contact_time = self._current_ball(agent)
-        if ball is None:
-            self._fallback(agent, "wall-ball prediction expired")
-            return
+        if car.airborne or car.boost < self.MIN_BOOST:
+            return None
 
         wall_side = 1 if ball.x >= 0 else -1
-        if (
-            abs(ball.x) < 3150
-            or ball.z < 300
-            or ball_velocity.z < 40
-            or abs(ball.y) > 5000
+        distance = car.location.dist(ball)
+
+        if not (
+            self.MIN_BALL_X <= abs(ball.x) <= self.MAX_BALL_X
+            and ball.z <= self.MAX_BALL_Z
+            and abs(ball.y) < 4300
+            and distance <= self.MAX_CAR_DISTANCE
         ):
-            self._fallback(agent, "ball is no longer climbing the side wall")
-            return
+            return None
 
-        if self.phase == self.APPROACH:
-            if self._reset_confirmed(car):
-                self.phase = self.FOLLOWUP
-                self.phase_time = agent.time
-                self._log(agent, "reset confirmed from PlayerInfo state")
-            else:
-                # Come from the wall side of the ball. The car's wheels face
-                # inward from the side wall, allowing a multi-wheel contact.
-                contact_target = Vector(
-                    wall_side * 3900,
-                    ball.y,
-                    ball.z
-                )
-                local_target = car.local_location(contact_target)
-                distance = car.location.dist(contact_target)
+        # Volt must approach from the field side so its hit sends the ball
+        # toward the chosen side wall, rather than trapping itself outside it.
+        center_side = (car.location.x - ball.x) * wall_side < -100
+        if not center_side:
+            return None
 
-                defaultPD(agent, local_target)
-                agent.controller.throttle = 1
-                agent.controller.boost = (
-                    car.boost > 0
-                    and distance > 180
-                    and abs(Vector(x=1).angle(local_target)) < 0.75
-                )
+        distance_score = cap(
+            1.0 - distance / self.MAX_CAR_DISTANCE,
+            0.0,
+            1.0
+        )
+        wall_lane_score = cap(
+            (abs(ball.x) - self.MIN_BALL_X)
+            / (self.MAX_BALL_X - self.MIN_BALL_X),
+            0.0,
+            1.0
+        )
+        boost_score = cap(car.boost / 60.0, 0.0, 1.0)
+        score = (
+            distance_score * 0.55
+            + wall_lane_score * 0.25
+            + boost_score * 0.20
+        )
 
-                self._log(
-                    agent,
-                    f"seeking wheel contact d={distance:.0f} "
-                    f"T={max(0.0, contact_time - agent.time):.2f} "
-                    f"boost={car.boost:.0f}"
-                )
-                return
-
-        if self.phase == self.FOLLOWUP:
-            # Decide whether the restored dodge can be used immediately.
-            local_ball = car.local_location(ball)
-            goal_direction = (
-                agent.foe_goal.location - ball
-            ).flatten().normalize()
-
-            ball_direction = (ball - car.location).flatten()
-            if ball_direction.magnitude() > 1:
-                ball_direction = ball_direction.normalize()
-
-            goal_alignment = (
-                ball_direction.dot(goal_direction)
-                if ball_direction.magnitude() > 0
-                else -1.0
-            )
-
-            immediate = (
-                local_ball.x > 80
-                and abs(local_ball.y) < 420
-                and goal_alignment > 0.45
-                and car.location.dist(ball) < 520
-            )
-
-            if immediate:
-                dodge_vector = local_ball.flatten().normalize()
-                print(
-                    f"[FLIP RESET] immediate follow-up "
-                    f"alignment={goal_alignment:.2f}",
-                    flush=True
-                )
-                agent.pop()
-                agent.push(flip(dodge_vector))
-                return
-
-            # If the ball is not lined up for a useful immediate hit, create
-            # a short separation window before aiming the restored dodge.
-            if self.phase_time == agent.time:
-                self.separation_direction = (
-                    car.location - ball
-                ).flatten().normalize()
-                if self.separation_direction.magnitude() < 1:
-                    self.separation_direction = (
-                        -goal_direction
-                    ).normalize()
-                self.phase = self.SEPARATE
-                self.phase_time = agent.time
-
-        if self.phase == self.SEPARATE:
-            elapsed = agent.time - self.phase_time
-            if elapsed < 0.18 and car.boost > 0:
-                away_target = (
-                    car.location + self.separation_direction * 500
-                )
-                defaultPD(
-                    agent,
-                    car.local_location(away_target),
-                    upside_down=False
-                )
-                agent.controller.boost = True
-                agent.controller.throttle = 1
-                return
-
-            self.phase = self.FOLLOWUP
-            self.phase_time = agent.time
-
-            local_ball = car.local_location(ball)
-            if (
-                local_ball.x > 0
-                and car.location.dist(ball) < 850
-            ):
-                dodge_vector = local_ball.flatten().normalize()
-                print(
-                    "[FLIP RESET] separated; using restored dodge",
-                    flush=True
-                )
-                agent.pop()
-                agent.push(flip(dodge_vector))
-                return
-
-            # Do not waste the restored flip on a poor angle. Return to the
-            # preserved aerial controller for a conventional contact attempt.
-            self._fallback(agent, "post-reset angle is not usable")
-            return
+        return {
+            "score": score,
+            "wall_side": wall_side,
+            "ball_location": Vector(ball.x, ball.y, ball.z),
+            "distance": distance,
+        }
 
 
-class FlipResetPlanner:
+class WallResetSetup:
     """
-    Conservative, read-only planner for wall-play flip-reset opportunities.
+    First-stage wall-reset setup.
 
-    This class deliberately does not take control of the car. It identifies
-    predicted side-wall climbs that may justify a reset attempt and compares
-    their geometry score with a caller-supplied normal-aerial score. Keeping
-    this separate means existing aerial decisions remain unchanged until the
-    planner has been validated in live matches.
+    Sequence:
+      1. Hit a low ball from the field side toward the side wall.
+      2. Detect the ball climbing the wall and wait one second.
+      3. Drive onto the same wall and follow the ball.
+      4. Jump, release, and use the second jump while aiming toward the ball.
+
+    This stage deliberately stops after validating the wall launch. Wheel
+    contact aiming and restored-dodge follow-up are added only after this
+    setup sequence is confirmed in live matches.
     """
 
-    MIN_TIME = 0.65
-    MAX_TIME = 2.8
-    MIN_WALL_X = 3150
-    MIN_BALL_Z = 300
-    MIN_RISE_SPEED = 60
-    MIN_VERTICAL_GAP = 120
-    MAX_VERTICAL_GAP = 1500
-    SIDE_WALL_X = 4096
+    SETUP = "SETUP"
+    WAIT_FOR_CLIMB = "WAIT_FOR_CLIMB"
+    WALL_FOLLOW = "WALL_FOLLOW"
+    LAUNCH_JUMP = "LAUNCH_JUMP"
+    LAUNCH_RELEASE = "LAUNCH_RELEASE"
+    LAUNCH_SECOND_JUMP = "LAUNCH_SECOND_JUMP"
+    LAUNCH_TRACK = "LAUNCH_TRACK"
 
-    def __init__(self, minimum_score=0.62, aerial_margin=0.10):
-        self.minimum_score = minimum_score
-        self.aerial_margin = aerial_margin
-        self.last_candidate = None
-        self.last_decision = "NOT_EVALUATED"
+    WALL_X = 3850
+    SETUP_CONTACT_OFFSET = 155
+    WAIT_DURATION = 1.0
+    MAX_TOTAL_TIME = 6.5
+    MAX_LAUNCH_TRACK_TIME = 0.9
 
-    @staticmethod
-    def _slice_vectors(ball_slice):
-        physics = ball_slice.physics
-        location = physics.location
-        velocity = physics.velocity
+    FIRST_JUMP_HOLD = 0.18
+    JUMP_RELEASE = 0.06
+    SECOND_JUMP_HOLD = 0.08
+
+    def __init__(self, candidate):
+        self.candidate = candidate
+        self.wall_side = candidate["wall_side"]
+        self.phase = self.SETUP
+        self.start_time = None
+        self.phase_start = None
+        self.initial_ball_z = candidate["ball_location"].z
+        self.initial_ball_x = candidate["ball_location"].x
+        self.last_debug_time = -1.0
+
+    def on_side_wall(self, agent):
+        car = agent.me
         return (
-            Vector(location.x, location.y, location.z),
+            abs(car.location.x) > 3500
+            and abs(car.up.x) > 0.65
+            and car.up.x * car.location.x < 0
+        )
+
+    def stop(self, agent, reason):
+        print(
+            f"[WALL RESET] STOP phase={self.phase} reason={reason}",
+            flush=True
+        )
+        agent.pop()
+
+    def log(self, agent, message):
+        if agent.time - self.last_debug_time >= 0.25:
+            self.last_debug_time = agent.time
+            print(
+                f"[WALL RESET] phase={self.phase} {message}",
+                flush=True
+            )
+
+    def current_ball(self, agent):
+        ball = agent.ball.location
+        velocity = agent.ball.velocity
+        return (
+            Vector(ball.x, ball.y, ball.z),
             Vector(velocity.x, velocity.y, velocity.z)
         )
 
-    def find_wall_candidate(self, agent):
-        """
-        Find the best future slice where the ball is already climbing a side
-        wall and the car has a plausible route to get underneath it.
-
-        Returns a dictionary of measured values, or None. It does not start
-        wall play or change the current shot routine.
-        """
-        prediction = getattr(agent, "ball_prediction_struct", None)
-        slices = getattr(prediction, "slices", None) if prediction else None
-
-        if not slices:
-            return None
-
+    def run(self, agent: VirxERLU):
         car = agent.me
-        best = None
+        ball, ball_velocity = self.current_ball(agent)
 
-        for ball_slice in slices:
-            contact_time = ball_slice.game_seconds - agent.time
-            if not self.MIN_TIME <= contact_time <= self.MAX_TIME:
-                continue
+        if self.start_time is None:
+            self.start_time = agent.time
+            self.phase_start = agent.time
+            print(
+                f"[WALL RESET] START side={self.wall_side:+d} "
+                f"ball=({ball.x:.0f},{ball.y:.0f},{ball.z:.0f}) "
+                f"boost={car.boost:.0f}",
+                flush=True
+            )
 
-            ball, velocity = self._slice_vectors(ball_slice)
-            wall_x = abs(ball.x)
+        if agent.time - self.start_time > self.MAX_TOTAL_TIME:
+            self.stop(agent, "overall setup timeout")
+            return
 
-            # Require a genuine side-wall position and upward ball movement.
-            if (
-                wall_x < self.MIN_WALL_X
-                or ball.z < self.MIN_BALL_Z
-                or abs(ball.y) > 5000
-                or velocity.z < self.MIN_RISE_SPEED
+        if car.demolished or car.airborne and self.phase in {
+            self.SETUP, self.WAIT_FOR_CLIMB, self.WALL_FOLLOW
+        }:
+            self.stop(agent, "car left the ground before wall launch")
+            return
+
+        elapsed = agent.time - self.phase_start
+        on_wall = self.on_side_wall(agent)
+        wall_climb_detected = (
+            abs(ball.x) > 3650
+            and (
+                ball.z > self.initial_ball_z + 70
+                or ball_velocity.z > 140
+            )
+        )
+
+        if self.phase == self.SETUP:
+            # Approach from the centre side and make contact toward the wall.
+            contact_target = Vector(
+                ball.x - self.wall_side * self.SETUP_CONTACT_OFFSET,
+                ball.y,
+                max(92.75, ball.z)
+            )
+            local_target = car.local_location(contact_target)
+            distance = car.location.dist(contact_target)
+            speed_required = min(1900, max(850, distance / 0.65))
+
+            defaultDrive(agent, speed_required, local_target)
+            agent.controller.boost = (
+                car.boost > 0
+                and distance > 750
+                and abs(Vector(x=1).angle(local_target)) < 0.45
+            )
+
+            if wall_climb_detected:
+                self.phase = self.WAIT_FOR_CLIMB
+                self.phase_start = agent.time
+                print(
+                    f"[WALL RESET] BALL CLIMB detected "
+                    f"ball=({ball.x:.0f},{ball.y:.0f},{ball.z:.0f}) "
+                    f"vz={ball_velocity.z:.0f}; waiting "
+                    f"{self.WAIT_DURATION:.1f}s",
+                    flush=True
+                )
+                return
+
+            # If the ball is not moving toward the wall after a reasonable
+            # setup window, do not keep chasing a failed setup.
+            if elapsed > 1.8 and (
+                (ball.x - self.initial_ball_x) * self.wall_side < 100
+                and ball.z <= self.initial_ball_z + 35
             ):
-                continue
+                self.stop(agent, "setup hit did not send ball up the wall")
+                return
+
+            self.log(
+                agent,
+                f"driving setup contact d={distance:.0f} "
+                f"ball=({ball.x:.0f},{ball.y:.0f},{ball.z:.0f}) "
+                f"boost={car.boost:.0f}"
+            )
+            return
+
+        if self.phase == self.WAIT_FOR_CLIMB:
+            # Do not blindly wait if the ball has fallen away from the wall.
+            if abs(ball.x) < 3300 or (
+                ball.z < self.initial_ball_z + 25
+                and ball_velocity.z < -100
+            ):
+                self.stop(agent, "ball fell away during climb wait")
+                return
+
+            # Hold a controlled position while the ball climbs for one second.
+            hold_target = Vector(
+                self.wall_side * 3300,
+                ball.y,
+                max(100, car.location.z)
+            )
+            local_target = car.local_location(hold_target)
+            defaultDrive(agent, 900, local_target)
+            agent.controller.throttle = 0.35
+            agent.controller.boost = False
+
+            if elapsed >= self.WAIT_DURATION:
+                self.phase = self.WALL_FOLLOW
+                self.phase_start = agent.time
+                print(
+                    f"[WALL RESET] WAIT complete; following wall "
+                    f"ball_z={ball.z:.0f} vz={ball_velocity.z:.0f}",
+                    flush=True
+                )
+            else:
+                self.log(
+                    agent,
+                    f"waiting {self.WAIT_DURATION - elapsed:.2f}s "
+                    f"ball_z={ball.z:.0f} vz={ball_velocity.z:.0f}"
+                )
+            return
+
+        if self.phase == self.WALL_FOLLOW:
+            if not wall_climb_detected and (
+                abs(ball.x) < 3300 or ball.z < self.initial_ball_z + 20
+            ):
+                self.stop(agent, "wall climb lost while following")
+                return
+
+            # First reach the wall at the ball's Y lane. Once attached,
+            # follow below the ball along the wall surface.
+            target_y = ball.y - ball_velocity.y * 0.18
+            if on_wall:
+                target_z = max(120, ball.z - 350)
+            else:
+                target_z = max(100, car.location.z)
+
+            wall_target = Vector(
+                self.wall_side * self.WALL_X,
+                target_y,
+                target_z
+            )
+            local_target = car.local_location(wall_target)
+            distance = car.location.dist(wall_target)
+            speed_required = min(1900, max(700, distance / 0.75))
+
+            defaultDrive(agent, speed_required, local_target)
+            agent.controller.boost = (
+                car.boost > 0
+                and distance > 800
+                and abs(Vector(x=1).angle(local_target)) < 0.55
+            )
 
             vertical_gap = ball.z - car.location.z
-            if not self.MIN_VERTICAL_GAP <= vertical_gap <= self.MAX_VERTICAL_GAP:
-                continue
-
-            distance = car.location.dist(ball)
-            reach_budget = 2300.0 * contact_time + 250.0
-            if distance > reach_budget:
-                continue
-
-            wall_side = 1 if ball.x >= 0 else -1
-            car_side = 1 if car.location.x >= 0 else -1
-            same_side = wall_side == car_side
-
-            on_side_wall = (
-                abs(car.location.x) > 3450
-                and abs(car.up.x) > 0.65
-                and car.up.x * car.location.x < 0
+            ball_distance = car.location.dist(ball)
+            launch_ready = (
+                on_wall
+                and ball_distance < 760
+                and 100 < vertical_gap < 650
+                and abs(ball.x) > 3450
             )
 
-            wall_score = cap(
-                (wall_x - self.MIN_WALL_X)
-                / (self.SIDE_WALL_X - self.MIN_WALL_X),
-                0,
-                1
+            if launch_ready:
+                self.phase = self.LAUNCH_JUMP
+                self.phase_start = agent.time
+                defaultPD(agent, car.local_location(ball))
+                agent.controller.jump = True
+                print(
+                    f"[WALL RESET] WALL LAUNCH start "
+                    f"gap={vertical_gap:.0f} d={ball_distance:.0f}",
+                    flush=True
+                )
+                return
+
+            self.log(
+                agent,
+                f"wall={on_wall} d={distance:.0f} "
+                f"ball_d={ball_distance:.0f} gap={vertical_gap:.0f} "
+                f"ball_z={ball.z:.0f} boost={car.boost:.0f}"
             )
-            rise_score = cap(
-                (velocity.z - self.MIN_RISE_SPEED) / 440.0,
-                0,
-                1
+            return
+
+        # Keep aiming at the live ball throughout the wall-jump sequence.
+        local_ball = car.local_location(ball)
+        defaultPD(agent, local_ball)
+        agent.controller.throttle = 1
+        agent.controller.boost = (
+            car.boost > 0
+            and local_ball.x > 250
+            and abs(local_ball.y) < 700
+        )
+
+        if self.phase == self.LAUNCH_JUMP:
+            agent.controller.jump = True
+            if elapsed >= self.FIRST_JUMP_HOLD:
+                self.phase = self.LAUNCH_RELEASE
+                self.phase_start = agent.time
+                agent.controller.jump = False
+                print("[WALL RESET] first wall jump released", flush=True)
+            return
+
+        if self.phase == self.LAUNCH_RELEASE:
+            agent.controller.jump = False
+            if elapsed >= self.JUMP_RELEASE:
+                self.phase = self.LAUNCH_SECOND_JUMP
+                self.phase_start = agent.time
+                agent.controller.jump = True
+                print("[WALL RESET] second jump sent", flush=True)
+            return
+
+        if self.phase == self.LAUNCH_SECOND_JUMP:
+            agent.controller.jump = True
+            if elapsed >= self.SECOND_JUMP_HOLD:
+                self.phase = self.LAUNCH_TRACK
+                self.phase_start = agent.time
+                agent.controller.jump = False
+                print(
+                    "[WALL RESET] double-jump launch complete; "
+                    "tracking ball for setup validation",
+                    flush=True
+                )
+            return
+
+        if self.phase == self.LAUNCH_TRACK:
+            agent.controller.jump = False
+            self.log(
+                agent,
+                f"airborne tracking d={car.location.dist(ball):.0f} "
+                f"local=({local_ball.x:.0f},{local_ball.y:.0f},"
+                f"{local_ball.z:.0f}) boost={car.boost:.0f}"
             )
-            height_score = cap(
-                1.0 - abs(vertical_gap - 650.0) / 1000.0,
-                0,
-                1
-            )
-            reach_score = cap(
-                1.0 - distance / max(reach_budget, 1.0),
-                0,
-                1
-            )
-            boost_score = cap(car.boost / 40.0, 0, 1)
-            side_score = 1.0 if same_side else 0.25
-            wall_car_bonus = 1.0 if on_side_wall else 0.0
+            if (
+                car.location.dist(ball) < 250
+                or elapsed >= self.MAX_LAUNCH_TRACK_TIME
+            ):
+                self.stop(agent, "stage-one wall launch validated; reset contact not yet enabled")
+                return
 
-            score = (
-                wall_score * 0.22
-                + rise_score * 0.18
-                + height_score * 0.18
-                + reach_score * 0.20
-                + boost_score * 0.10
-                + side_score * 0.07
-                + wall_car_bonus * 0.05
-            )
 
-            candidate = {
-                "score": score,
-                "contact_time": ball_slice.game_seconds,
-                "time_until_contact": contact_time,
-                "ball_location": ball,
-                "ball_velocity": velocity,
-                "distance": distance,
-                "vertical_gap": vertical_gap,
-                "boost": car.boost,
-                "wall_side": wall_side,
-                "same_side": same_side,
-                "car_on_wall": on_side_wall,
-                "components": {
-                    "wall": wall_score,
-                    "rise": rise_score,
-                    "height": height_score,
-                    "reach": reach_score,
-                    "boost": boost_score,
-                    "side": side_score,
-                    "car_on_wall": wall_car_bonus
-                }
-            }
-
-            if best is None or candidate["score"] > best["score"]:
-                best = candidate
-
-        self.last_candidate = best
-        return best
-
-    def evaluate(self, agent, normal_aerial_score=None):
-        """
-        Compare the best wall-reset opportunity with the normal aerial.
-
-        normal_aerial_score must be a score on the same 0..1 scale. If it is
-        omitted, the planner reports REVIEW_ONLY and never recommends taking
-        over the aerial.
-        """
-        candidate = self.find_wall_candidate(agent)
-
-        if candidate is None:
-            self.last_decision = "NO_WALL_CANDIDATE"
-            return {
-                "decision": self.last_decision,
-                "candidate": None,
-                "normal_aerial_score": normal_aerial_score
-            }
-
-        if normal_aerial_score is None:
-            self.last_decision = "REVIEW_ONLY"
-            return {
-                "decision": self.last_decision,
-                "candidate": candidate,
-                "normal_aerial_score": None
-            }
-
-        normal_aerial_score = cap(float(normal_aerial_score), 0, 1)
-        reset_score = candidate["score"]
-
-        if (
-            reset_score >= self.minimum_score
-            and reset_score >= normal_aerial_score + self.aerial_margin
-        ):
-            self.last_decision = "RESET_OUTSCORES_AERIAL"
-        else:
-            self.last_decision = "KEEP_NORMAL_AERIAL"
-
-        return {
-            "decision": self.last_decision,
-            "candidate": candidate,
-            "reset_score": reset_score,
-            "normal_aerial_score": normal_aerial_score,
-            "required_reset_score": max(
-                self.minimum_score,
-                normal_aerial_score + self.aerial_margin
-            )
-        }
