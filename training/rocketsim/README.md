@@ -44,7 +44,7 @@ From the Volt repository root, use the same virtual environment that can import 
 
 ```cmd
 venv\Scripts\python.exe -m pip install --upgrade pip
-venv\Scripts\python.exe -m pip install "git+https://github.com/mtheall/RocketSim.git@2da51b1dac7b8127127613a5ff30e490bdd70dd8"
+venv\Scripts\python.exe -m pip install -r training\rocketsim\requirements.txt
 ```
 
 This dependency is intentionally **not** added to the live bot's root `requirements.txt`. RocketSim is only needed when running the offline tools in this folder.
