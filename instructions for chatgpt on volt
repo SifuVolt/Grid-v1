@@ -1362,7 +1362,7 @@ class Bot(VirxERLU):
 
                     release_time = max(
                         self.time + 0.05,
-                        contact_at + 0.12
+                        contact_at + 0.18
                     )
                     print(
                         f"[COVER FOLLOWUP] player={self.me.index} "
