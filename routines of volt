@@ -37,37 +37,43 @@ def _safe_prediction_slice(agent, time_remaining, round_up=False):
 
 def _relative_goal_aim_point(agent, targets=None):
     """
-    Choose the nearest goal corner based on Volt's position relative to goal.
+    Select a goal-side target from the ball and goal positions relative to Volt.
 
-    A car to the right and below the goal centre aims low-right.
-    A car to the left and above the goal centre aims high-left.
+    If both the ball and goal are to Volt's left, target the left post.
+    If both are to Volt's right, target the right post. If the shot is
+    straight or the two positions are on opposite sides, target goal centre.
     """
     if targets is not None and len(targets) >= 2:
-        left = targets[0] if isinstance(targets[0], Vector) else Vector(*targets[0])
-        right = targets[1] if isinstance(targets[1], Vector) else Vector(*targets[1])
+        post_a = targets[0] if isinstance(targets[0], Vector) else Vector(*targets[0])
+        post_b = targets[1] if isinstance(targets[1], Vector) else Vector(*targets[1])
     else:
-        left_post, right_post = agent.foe_goal_shot
-        left = left_post if isinstance(left_post, Vector) else Vector(*left_post)
-        right = right_post if isinstance(right_post, Vector) else Vector(*right_post)
+        post_a, post_b = agent.foe_goal_shot
+        post_a = post_a if isinstance(post_a, Vector) else Vector(*post_a)
+        post_b = post_b if isinstance(post_b, Vector) else Vector(*post_b)
 
-    goal_center = (left + right) * 0.5
+    goal_center = (post_a + post_b) * 0.5
     goal_center.z = 300
 
-    car_relative_x = agent.me.location.x - goal_center.x
-    car_relative_z = agent.me.location.z - goal_center.z
+    car_location = agent.me.location
+    forward = agent.me.forward.flatten().normalize()
+    car_right = forward.cross(Vector(z=1)).normalize()
 
-    # Aim toward the same side of the goal that Volt is positioned on.
-    if car_relative_x > 200:
-        aim_x = goal_center.x + 650
-    elif car_relative_x < -200:
-        aim_x = goal_center.x - 650
+    ball_side = (agent.ball.location - car_location).dot(car_right)
+    goal_side = (goal_center - car_location).dot(car_right)
+    straight_threshold = 100
+
+    if ball_side < -straight_threshold and goal_side < -straight_threshold:
+        # Pick whichever post is farther to Volt's left.
+        aim = post_a if (post_a - goal_center).dot(car_right) < (post_b - goal_center).dot(car_right) else post_b
+    elif ball_side > straight_threshold and goal_side > straight_threshold:
+        # Pick whichever post is farther to Volt's right.
+        aim = post_a if (post_a - goal_center).dot(car_right) > (post_b - goal_center).dot(car_right) else post_b
     else:
-        aim_x = goal_center.x
+        aim = goal_center
 
-    # Keep the vertical corner aligned with Volt's height relative to goal.
-    aim_z = 550 if car_relative_z > 0 else 100
-
-    return Vector(aim_x, goal_center.y, aim_z)
+    aim = aim.copy()
+    aim.z = 300
+    return aim
 def _shot_approach_target(agent, ball_location, offset_target, shot_vector, time_left):
     """
     Smoothly choose a direct or flank approach to the planned contact point.
