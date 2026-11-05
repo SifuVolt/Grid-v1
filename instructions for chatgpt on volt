@@ -1725,7 +1725,7 @@ class Bot(VirxERLU):
                 )
 
         if wall_reset_can_preempt and not self.defensive_emergency():
-            reset_setup = routines.WallResetPlanner().find_candidate(self)
+            reset_setup = tools.find_wall_reset_candidate(self)
             if reset_setup is not None:
                 print(
                     f"[WALL RESET] setup selected "
