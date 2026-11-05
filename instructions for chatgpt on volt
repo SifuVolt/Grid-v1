@@ -1118,15 +1118,6 @@ class Bot(VirxERLU):
         # Share and compare shot opportunities with teammates.
         self.update_teamplay()
 
-        # The tools layer owns both setup eligibility and active-routine
-        # commitment, so ordinary shot selection cannot override the setup.
-        air_dribble_routine = tools.find_air_dribble_setup(self)
-        if air_dribble_routine is True:
-            return
-        if air_dribble_routine is not None:
-            self.push(air_dribble_routine)
-            return
-
         side = utils.side(self.team)
         ball_depth = self.ball.location.y * side
         fast_intercept_zone = 0 < ball_depth <= 1280
@@ -1369,7 +1360,7 @@ class Bot(VirxERLU):
 
                     release_time = max(
                         self.time + 0.05,
-                        contact_at + 0.12
+                        contact_at + 0.18
                     )
                     print(
                         f"[COVER FOLLOWUP] player={self.me.index} "
@@ -1695,6 +1686,23 @@ class Bot(VirxERLU):
 
         # if the stack is clear, then run the following - otherwise, if the stack isn't empty, then look for a shot every 4th tick while the other routine is running
         
+        # Evaluate wall-reset setups alongside normal shot selection.
+        # Shot routines are usually active, so requiring a clear stack made
+        # this opportunity almost unreachable. Aerial can also be replaced
+        # while the car is still grounded (it has not launched yet); once
+        # airborne, keep the aerial protected and do not interrupt it.
+        current_routine_name = (
+            self.stack[0].__class__.__name__
+            if not self.is_clear()
+            else None
+        )
+        ordinary_ground_shots = {
+            "ground_shot",
+            "jump_shot",
+            "double_jump",
+            "Aerial"
+        }
+
         if self.is_clear() or self.odd_tick == 0:
             shot = self.teamplay_shot
 
