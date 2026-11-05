@@ -10,6 +10,18 @@ def find_air_dribble_setup(agent):
     shot-finding tools. It never replaces an already active routine.
     """
     if not agent.is_clear():
+        last = getattr(agent, "_air_dribble_stack_debug", -999)
+        if agent.time - last >= 1.0:
+            agent._air_dribble_stack_debug = agent.time
+            active = (
+                agent.stack[0].__class__.__name__
+                if getattr(agent, "stack", None)
+                else "unknown"
+            )
+            print(
+                f"[AIR DRIBBLE CHECK] blocked by active routine: {active}",
+                flush=True
+            )
         return None
 
     if air_dribble_setup.should_start(agent):
