@@ -315,9 +315,6 @@ class air_dribble_setup:
         if agent.time < getattr(agent, "air_dribble_cooldown_until", -999):
             return False
 
-        if not agent.foes:
-            return False
-
         forward = car.forward.flatten()
         if forward.magnitude() < 1:
             return False
@@ -343,16 +340,21 @@ class air_dribble_setup:
         if abs(ball.x) > 3500 or abs(car.location.x) > 3300:
             return False
 
-        # Require an opponent behind Volt in Volt's forward frame.
-        # A nearby opponent in front or beside Volt is not sufficient.
-        opponent_behind = False
-        for foe in agent.foes:
-            local_foe = car.local_location(foe.location)
-            if local_foe.x < -300 and foe.location.flat_dist(car.location) < 3400:
-                opponent_behind = True
-                break
+        # Only attempt the setup when the opponent is well away from
+        # the play. Their position relative to Volt's facing direction
+        # is irrelevant; they do not need to be behind the car.
+        if not agent.foes:
+            return True
 
-        return opponent_behind
+        nearest_opponent_distance = min(
+            min(
+                foe.location.flat_dist(car.location),
+                foe.location.flat_dist(ball)
+            )
+            for foe in agent.foes
+        )
+
+        return nearest_opponent_distance > 1800
 
     def __init__(self):
         self.phase = 0
