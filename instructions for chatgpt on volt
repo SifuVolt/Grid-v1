@@ -1686,6 +1686,47 @@ class Bot(VirxERLU):
 
         # if the stack is clear, then run the following - otherwise, if the stack isn't empty, then look for a shot every 4th tick while the other routine is running
         
+        # A flip reset is only considered after the current Aerial has
+        # already spent its jump/dodge. This keeps ordinary aerials unchanged.
+        active_routine = self.stack[0] if not self.is_clear() else None
+        active_name = (
+            active_routine.__class__.__name__
+            if active_routine is not None
+            else None
+        )
+
+        if active_name == "FlipReset":
+            # Let the state machine own its short reset window; normal shot
+            # reselection must not replace it every fourth tick.
+            return
+
+        if (
+            active_name == "Aerial"
+            and self.me.airborne
+            and self.me.has_jumped
+            and (self.me.has_double_jumped or self.me.has_dodged)
+            and not self.me.flip_reset_available
+        ):
+            reset_candidate = routines.FlipResetPlanner().find_wall_candidate(self)
+
+            if (
+                reset_candidate is not None
+                and reset_candidate["score"] >= 0.62
+                and reset_candidate["time_until_contact"] <= 2.2
+                and reset_candidate["distance"] <= 1300
+            ):
+                aerial = active_routine
+                print(
+                    f"[FLIP RESET] taking over Aerial "
+                    f"score={reset_candidate['score']:.2f} "
+                    f"T={reset_candidate['time_until_contact']:.2f} "
+                    f"d={reset_candidate['distance']:.0f}",
+                    flush=True
+                )
+                self.clear()
+                self.push(routines.FlipReset(aerial, reset_candidate))
+                return
+
         if self.is_clear() or self.odd_tick == 0:
             shot = self.teamplay_shot
 
