@@ -4,11 +4,7 @@ from util.grid_double_jump import find_double_jump as grid_find_double_jump
 
 
 def find_air_dribble_setup(agent):
-    """Return the committed wall air-dribble routine when its setup is valid.
-
-    This is a high-priority routine candidate, evaluated before normal
-    shot-finding tools. It never replaces an already active routine.
-    """
+    """Own every air-dribble setup check and return a routine if valid."""
     if not agent.is_clear():
         last = getattr(agent, "_air_dribble_stack_debug", -999)
         if agent.time - last >= 1.0:
@@ -24,14 +20,72 @@ def find_air_dribble_setup(agent):
             )
         return None
 
-    if air_dribble_setup.should_start(agent):
-        print(
-            "[AIR DRIBBLE TOOL] setup accepted; prioritising wall setup",
-            flush=True
-        )
-        return air_dribble_setup()
+    car = agent.me
+    ball = agent.ball.location
 
-    return None
+    def reject(reason):
+        last = getattr(agent, "_air_dribble_check_debug", -999)
+        if agent.time - last >= 0.75:
+            agent._air_dribble_check_debug = agent.time
+            print(
+                f"[AIR DRIBBLE CHECK] rejected: {reason} | "
+                f"car=({car.location.x:.0f},{car.location.y:.0f},{car.location.z:.0f}) "
+                f"ball=({ball.x:.0f},{ball.y:.0f},{ball.z:.0f})",
+                flush=True
+            )
+        return None
+
+    if car.airborne:
+        return reject("car airborne")
+    if ball.z > 125:
+        return reject(f"ball too high z={ball.z:.0f}")
+    if abs(agent.ball.velocity.z) > 220:
+        return reject(f"ball vertical speed={agent.ball.velocity.z:.0f}")
+    if agent.time < getattr(agent, "air_dribble_cooldown_until", -999):
+        return reject("cooldown")
+
+    # The car wrapper's forward vector can be zero in some packets.
+    # local_location uses the car transform and is the reliable geometry test.
+    wall_delta_x = ball.x - car.location.x
+    if abs(wall_delta_x) < 180:
+        return reject("ball is not meaningfully toward either side wall")
+    wall_side = 1 if wall_delta_x > 0 else -1
+
+    local_ball = car.local_location(ball)
+    if local_ball is None:
+        return reject("local ball transform unavailable")
+    if not 250 < local_ball.x < 1650:
+        return reject(f"ball not in forward range local_x={local_ball.x:.0f}")
+    if abs(local_ball.y) > 900:
+        return reject(f"ball too far laterally local_y={local_ball.y:.0f}")
+    if abs(ball.x) > 3500 or abs(car.location.x) > 3300:
+        return reject("too close to side wall already")
+
+    # Opponents only need to be far away; their position behind/ahead of
+    # Volt is deliberately irrelevant.
+    if agent.foes:
+        nearest_opponent_distance = min(
+            min(
+                foe.location.flat_dist(car.location),
+                foe.location.flat_dist(ball)
+            )
+            for foe in agent.foes
+        )
+        if nearest_opponent_distance <= 1800:
+            return reject(
+                f"opponent too close distance={nearest_opponent_distance:.0f}"
+            )
+
+    last = getattr(agent, "_air_dribble_check_debug", -999)
+    if agent.time - last >= 0.75:
+        agent._air_dribble_check_debug = agent.time
+        print("[AIR DRIBBLE CHECK] all geometry conditions passed", flush=True)
+
+    print(
+        "[AIR DRIBBLE TOOL] setup accepted; prioritising wall setup",
+        flush=True
+    )
+    return air_dribble_setup(wall_side=wall_side)
 
 
 def find_ground_shot(agent, target, cap_=6):
