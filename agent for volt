@@ -1,1 +1,1270 @@
+from __future__ import annotations
+import json
+import itertools
+import math
+import os
+from datetime import datetime
+from time import time_ns
+from traceback import print_exc
+from typing import List, Tuple
 
+import numpy as np
+from gui import Gui
+from rlbot.flat import AirState, ControllerState, GamePacket, MatchPhase
+from rlbot.managers import Bot
+
+
+class VirxERLU(Bot):
+    # Massive thanks to ddthj/GoslingAgent (GitHub repo) for the basis of VirxERLU
+    # VirxERLU on VirxEC Showcase -> https://virxerlu.virxcase.dev/
+    # Wiki -> https://github.com/VirxEC/VirxERLU/wiki
+
+    def initialize(self):
+        # This is called once when the bot starts.
+        self.last_flip_time = -999.0
+        self.tournament = True
+        self.startup_time = time_ns()
+
+        self.debug = [[], []]
+        self.debugging = not self.tournament
+        self.debug_lines = True
+        self.debug_3d_bool = True
+        self.debug_stack_bool = True
+        self.debug_2d_bool = False
+        self.show_coords = False
+        self.debug_ball_path = False
+        self.debug_ball_path_precision = 10
+        self.disable_driving = False
+        
+
+        T = datetime.now()
+        T = T.strftime("%Y-%m-%d %H;%M")
+
+        self.traceback_file = (
+            os.getcwd(),
+            f"-traceback ({T}).txt"
+        )
+
+        if not self.tournament:
+            self.gui = Gui(self)
+            self.print("Starting the GUI...")
+            self.gui.start()
+
+        self.print("Building game information")
+
+        # RLBot v5 provides match configuration directly.
+        match_settings = self.match_config
+        mutators = match_settings.mutators
+
+        gravity = (
+            Vector(z=-650),
+            Vector(z=-325),
+            Vector(z=-1137.5),
+            Vector(z=-3250)
+        )
+
+        base_boost_accel = 991 + (2 / 3)
+
+        # RLBot v5 has an additional 5x boost-strength option.
+        boost_accel = (
+            base_boost_accel,
+            base_boost_accel * 1.5,
+            base_boost_accel * 2,
+            base_boost_accel * 5,
+            base_boost_accel * 10
+        )
+
+        boost_amount = (
+            "default",
+            "unlimited",
+            "slow recharge",
+            "fast recharge",
+            "no boost"
+        )
+
+        game_mode = (
+            "soccer",
+            "hoops",
+            "dropshot",
+            "hockey",
+            "rumble",
+            "heatseeker",
+            "gridiron",
+            "knockout"
+        )
+
+        self.gravity = gravity[int(mutators.gravity)]
+        self.boost_accel = boost_accel[int(mutators.boost_strength)]
+        self.boost_amount = boost_amount[int(mutators.boost_amount)]
+        self.game_mode = game_mode[int(match_settings.game_mode)]
+        # Latest teamplay information received from teammates.
+        self.teammate_comms = {}
+
+        # Last message sent, to avoid unnecessary communication.
+        self.last_comms_signature = None
+        self.last_comms_send_time = -999.0
+        self.friends = ()
+        self.foes = ()
+
+        self.me = car_object(self.index)
+        self.ball_to_goal = -1
+
+        self.ball = ball_object()
+        self.game = game_object()
+
+        self.boosts = ()
+
+        
+        # Our own goal: wider virtual target for defensive
+        # calculations, giving anti_target more room to avoid.
+        self.friend_goal = goal_object(
+            self.team,
+            half_width=820,
+            post_z = 350
+        )
+
+        # Opponent goal: narrower virtual target for shooting.
+        self.foe_goal = goal_object(
+            1 - self.team,
+            half_width=760,
+            post_z = 300
+        )
+
+
+        self.stack = []
+        self.time = 0
+
+        self.ready = False
+
+        self.controller = ControllerState()
+
+        self.kickoff_flag = False
+        self.kickoff_done = True
+        self.shooting = False
+        self.best_shot_value = 92.75
+        self.odd_tick = -1
+
+        self.future_ball_location_slice = 180
+
+        # Compatibility name used by the old VirxERLU routines.
+        self.ball_prediction_struct = None
+
+    def retire(self):
+        # RLBot v5 handles its own connection shutdown.
+
+        if not self.tournament and hasattr(self, "gui"):
+            self.gui.stop()
+
+    def get_ready(self, packet: GamePacket):
+        field_info = self.field_info
+
+        self.boosts = tuple(
+            boost_object(
+                i,
+                boost.location,
+                boost.is_full_boost
+            )
+            for i, boost in enumerate(field_info.boost_pads)
+        )
+
+        self.refresh_player_lists(packet)
+
+        self.ball.update(packet)
+
+        self.init()
+
+        load_time = (time_ns() - self.startup_time) / 1e+6
+
+        print(
+            f"{self.name}: Built game info in {load_time} milliseconds"
+        )
+
+        self.ready = True
+
+    def refresh_player_lists(self, packet: GamePacket):
+        # Useful to keep separate from get_ready because players
+        # can join or leave a match.
+
+        self.friends = tuple(
+            car_object(i, packet)
+            for i, player in enumerate(packet.players)
+            if player.team == self.team and i != self.index
+        )
+
+        self.foes = tuple(
+            car_object(i, packet)
+            for i, player in enumerate(packet.players)
+            if player.team != self.team
+        )
+
+        self.me = car_object(self.index, packet)
+
+    def push(self, routine):
+        self.stack.append(routine)
+        print(
+            f"[PUSH] {routine.__class__.__name__} | "
+            f"kickoff_done={self.kickoff_done} | "
+            f"stack={[r.__class__.__name__ for r in self.stack]}",
+            flush=True
+        )
+
+    def pop(self):
+        return self.stack.pop()
+
+    def line(self, start, end, color=None):
+        if self.debugging and self.debug_lines:
+            color = (
+                color
+                if color is not None
+                else self.renderer.grey
+            )
+
+            self.renderer.draw_line_3d(
+                start.copy(),
+                end.copy(),
+                self.renderer.create_color(
+                    255,
+                    *color
+                ) if type(color) in {list, tuple} else color
+            )
+
+    def polyline(self, vectors, color=None):
+        if self.debugging and self.debug_lines:
+            color = (
+                color
+                if color is not None
+                else self.renderer.grey
+            )
+
+            vectors = tuple(
+                vector.copy()
+                for vector in vectors
+            )
+
+            self.renderer.draw_polyline_3d(
+                vectors,
+                self.renderer.create_color(
+                    255,
+                    *color
+                ) if type(color) in {list, tuple} else color
+            )
+
+    def sphere(self, location, radius, color=None):
+        if self.debugging and self.debug_lines:
+            x = Vector(x=radius)
+            y = Vector(y=radius)
+            z = Vector(z=radius)
+
+            diag = Vector(
+                1.0,
+                1.0,
+                1.0
+            ).scale(radius).x
+
+            d1 = Vector(diag, diag, diag)
+            d2 = Vector(-diag, diag, diag)
+            d3 = Vector(-diag, -diag, diag)
+            d4 = Vector(-diag, diag, -diag)
+
+            self.line(location - x, location + x, color)
+            self.line(location - y, location + y, color)
+            self.line(location - z, location + z, color)
+            self.line(location - d1, location + d1, color)
+            self.line(location - d2, location + d2, color)
+            self.line(location - d3, location + d3, color)
+            self.line(location - d4, location + d4, color)
+
+    def print(self, item):
+        if not self.tournament:
+            print(f"{self.name}: {item}")
+
+    def dbg_3d(self, item):
+        self.debug[0].append(str(item))
+
+    def dbg_2d(self, item):
+        self.debug[1].append(str(item))
+
+    def clear(self):
+        self.shooting = False
+        self.stack = []
+
+    def is_clear(self):
+        return len(self.stack) < 1
+
+    def preprocess(self, packet: GamePacket):
+        if len(packet.players) != (
+            len(self.friends) + len(self.foes) + 1
+        ):
+            self.refresh_player_lists(packet)
+
+        for car in self.friends:
+            car.update(packet)
+
+        for car in self.foes:
+            car.update(packet)
+
+        for pad in self.boosts:
+            pad.update(packet)
+
+        self.ball.update(packet)
+        self.me.update(packet)
+        self.game.update(self.team, packet)
+
+        self.time = self.game.time
+        self.gravity = self.game.gravity
+
+        # When a new kickoff begins, empty the stack.
+        # When a new kickoff begins, reset the kickoff state once.
+        if (
+            not self.kickoff_flag
+            and self.game.round_active
+            and self.game.kickoff
+        ):
+            self.kickoff_done = False
+            self.kickoff_routine_started = False
+            self.clear()
+
+        self.kickoff_flag = (
+            self.game.round_active
+            and self.game.kickoff
+        )
+
+        self.ball_to_goal = (
+            self.friend_goal.location.flat_dist(
+                self.ball.location
+            )
+        )
+
+        self.odd_tick += 1
+
+        if self.odd_tick > 3:
+            self.odd_tick = 0
+
+        # RLBot v5 provides ball prediction directly.
+        # Keep the old attribute name for VirxERLU compatibility.
+        self.ball_prediction_struct = self.ball_prediction
+
+    def get_output(
+        self,
+        packet: GamePacket
+    ) -> ControllerState:
+        try:
+            # Reset controller every tick.
+            self.controller = ControllerState()
+
+            # Build our compatibility objects on the first packet.
+            if not self.ready:
+                self.get_ready(packet)
+
+            self.preprocess(packet)
+
+            if self.me.demolished:
+                if not self.is_clear():
+                    self.clear()
+
+            elif self.game.round_active:
+                stack_routine_name = (
+                    ""
+                    if self.is_clear()
+                    else self.stack[0].__class__.__name__
+                )
+
+                if stack_routine_name in {
+                    "Aerial",
+                    "jump_shot",
+                    "double_jump",
+                    "ground_shot",
+                    "short_shot"
+                }:
+                    self.shooting = True
+                else:
+                    self.shooting = False
+
+                try:
+                    # This is the actual ABot strategy.
+                    #
+                    # IMPORTANT:
+                    # Bot.run() belongs to RLBot v5.
+                    # Therefore the strategy is run_logic(), not run().
+                    self.run_logic()
+
+                except Exception:
+                    t_file = os.path.join(
+                        self.traceback_file[0],
+                        self.name + self.traceback_file[1]
+                    )
+
+                    print(
+                        f"ERROR in {self.name}; see '{t_file}'"
+                    )
+
+                    print_exc(
+                        file=open(t_file, "a")
+                    )
+
+                # Run the routine on the end of the stack.
+                if not self.is_clear():
+                    try:
+                        r_name = (
+                            self.stack[-1]
+                            .__class__
+                            .__name__
+                        )
+
+                        self.stack[-1].run(self)
+
+                    except Exception:
+                        t_file = os.path.join(
+                            self.traceback_file[0],
+                            r_name + self.traceback_file[1]
+                        )
+
+                        print(
+                            f"ERROR in {self.name}'s "
+                            f"{r_name} routine; see '{t_file}'"
+                        )
+
+                        print_exc(
+                            file=open(t_file, "a")
+                        )
+
+                # Debug rendering is currently disabled because
+                # tournament mode is enabled.
+                if self.debugging:
+                    if self.debug_3d_bool:
+                        if self.debug_stack_bool:
+                            self.debug[0] = itertools.chain(
+                                self.debug[0],
+                                ("STACK:",),
+                                (
+                                    item.__class__.__name__
+                                    for item in reversed(self.stack)
+                                )
+                            )
+
+                        self.renderer.draw_string_3d(
+                            tuple(self.me.location),
+                            2,
+                            2,
+                            "\n".join(self.debug[0]),
+                            self.renderer.team_color(
+                                alt_color=True
+                            )
+                        )
+
+                        self.debug[0] = []
+
+                    if self.show_coords:
+                        self.debug[1].insert(
+                            0,
+                            f"Hitbox: "
+                            f"[{self.me.hitbox.length} "
+                            f"{self.me.hitbox.width} "
+                            f"{self.me.hitbox.height}]"
+                        )
+
+                        self.debug[1].insert(
+                            0,
+                            f"Location: "
+                            f"{round(self.me.location)}"
+                        )
+
+                        car = self.me
+
+                        center = (
+                            car.local(car.hitbox.offset)
+                            + car.location
+                        )
+
+                        top = (
+                            car.up
+                            * (car.hitbox.height / 2)
+                        )
+
+                        front = (
+                            car.forward
+                            * (car.hitbox.length / 2)
+                        )
+
+                        right = (
+                            car.right
+                            * (car.hitbox.width / 2)
+                        )
+
+                        bottom_front_right = (
+                            center - top + front + right
+                        )
+
+                        bottom_front_left = (
+                            center - top + front - right
+                        )
+
+                        bottom_back_right = (
+                            center - top - front + right
+                        )
+
+                        bottom_back_left = (
+                            center - top - front - right
+                        )
+
+                        top_front_right = (
+                            center + top + front + right
+                        )
+
+                        top_front_left = (
+                            center + top + front - right
+                        )
+
+                        top_back_right = (
+                            center + top - front + right
+                        )
+
+                        top_back_left = (
+                            center + top - front - right
+                        )
+
+                        hitbox_color = (
+                            self.renderer.team_color(
+                                alt_color=True
+                            )
+                        )
+
+                        self.polyline(
+                            (
+                                top_back_left,
+                                top_front_left,
+                                top_front_right,
+                                bottom_front_right,
+                                bottom_front_left,
+                                top_front_left
+                            ),
+                            hitbox_color
+                        )
+
+                        self.polyline(
+                            (
+                                bottom_front_left,
+                                bottom_back_left,
+                                bottom_back_right,
+                                top_back_right,
+                                top_back_left,
+                                bottom_back_left
+                            ),
+                            hitbox_color
+                        )
+
+                        self.line(
+                            bottom_back_right,
+                            bottom_front_right,
+                            hitbox_color
+                        )
+
+                        self.line(
+                            top_back_right,
+                            top_front_right,
+                            hitbox_color
+                        )
+
+                    if self.debug_2d_bool:
+                        if (
+                            not self.is_clear()
+                            and self.stack[0]
+                            .__class__
+                            .__name__
+                            in {
+                                "Aerial",
+                                "jump_shot",
+                                "ground_shot",
+                                "double_jump"
+                            }
+                        ):
+                            self.dbg_2d(
+                                round(
+                                    self.stack[0].intercept_time
+                                    - self.time,
+                                    4
+                                )
+                            )
+
+                        self.renderer.draw_string_2d(
+                            20,
+                            300,
+                            2,
+                            2,
+                            "\n".join(self.debug[1]),
+                            self.renderer.team_color(
+                                alt_color=True
+                            )
+                        )
+
+                        self.debug[1] = []
+
+                    if (
+                        self.debug_ball_path
+                        and self.ball_prediction_struct is not None
+                    ):
+                        self.polyline(
+                            tuple(
+                                Vector(
+                                    ball_slice.physics.location.x,
+                                    ball_slice.physics.location.y,
+                                    ball_slice.physics.location.z
+                                )
+                                for ball_slice
+                                in self.ball_prediction_struct.slices[
+                                    ::self.debug_ball_path_precision
+                                ]
+                            )
+                        )
+
+                else:
+                    self.debug = [[], []]
+
+            return (
+                ControllerState()
+                if self.disable_driving
+                else self.controller
+            )
+
+        except Exception:
+            t_file = os.path.join(
+                self.traceback_file[0],
+                "VirxERLU" + self.traceback_file[1]
+            )
+
+            print(
+                f"ERROR with VirxERLU in {self.name}; "
+                f"see '{t_file}' and please report the bug at "
+                f"'https://github.com/VirxEC/VirxERLU/issues'"
+            )
+
+            print_exc(
+                file=open(t_file, "a")
+            )
+
+            return ControllerState()
+        print(
+            f"[STACK DEBUG] kickoff_done={self.kickoff_done} "
+            f"kickoff={self.game.kickoff} "
+            f"stack={[r.__class__.__name__ for r in self.stack]}",
+            flush=True
+        )
+
+    def handle_match_comm(
+        self,
+        index: int,
+        team: int,
+        content: bytes,
+        display: str | None,
+        team_only: bool
+    ):
+        # RLBot v5 uses this callback for match communication.
+        pass
+    
+    def run_logic(self):
+        # Implemented by the actual bot class in main.py.
+        pass
+
+    def init(self):
+        # Implemented by the actual bot class in main.py.
+        pass
+
+
+class car_object:
+    # Converts a GamePacket car into an object used by VirxERLU.
+
+    def __init__(self, index, packet=None):
+        self.location = Vector()
+        self.orientation = Matrix3()
+        self.velocity = Vector()
+        self.angular_velocity = Vector()
+        self.demolished = False
+        self.airborne = False
+        self.supersonic = False
+        self.jumped = False
+        self.doublejumped = False
+        self.boost = 0
+        self.index = index
+
+        if packet is not None:
+            car = packet.players[self.index]
+
+            self.hitbox = hitbox_object(
+                car.hitbox.length,
+                car.hitbox.width,
+                car.hitbox.height,
+                Vector(
+                    car.hitbox_offset.x,
+                    car.hitbox_offset.y,
+                    car.hitbox_offset.z
+                )
+            )
+
+            self.offset = self.hitbox.offset
+
+            self.update(packet)
+
+        else:
+            self.hitbox = hitbox_object()
+            self.offset = self.hitbox.offset
+
+    def local(self, value):
+        return self.orientation.dot(value)
+
+    def local_velocity(self, velocity=None):
+        if velocity is None:
+            velocity = self.velocity
+
+        return self.local(velocity)
+
+    def local_location(self, location):
+        return self.local(
+            location - self.location
+        )
+
+    def get_raw(self, agent, force_on_ground=False):
+        return (
+            tuple(self.location),
+            tuple(self.velocity),
+            (
+                tuple(self.forward),
+                tuple(self.right),
+                tuple(self.up)
+            ),
+            tuple(self.angular_velocity),
+            1 if self.demolished else 0,
+            1 if self.airborne and not force_on_ground else 0,
+            1 if self.supersonic else 0,
+            1 if self.jumped else 0,
+            1 if self.doublejumped else 0,
+            self.boost
+            if agent.boost_amount != "unlimited"
+            else 255,
+            self.index,
+            tuple(self.hitbox),
+            tuple(self.hitbox.offset)
+        )
+
+    def update(self, packet: GamePacket):
+        car = packet.players[self.index]
+        car_phy = car.physics
+
+        self.location = Vector(
+            car_phy.location.x,
+            car_phy.location.y,
+            car_phy.location.z
+        )
+
+        self.velocity = Vector(
+            car_phy.velocity.x,
+            car_phy.velocity.y,
+            car_phy.velocity.z
+        )
+
+        self.orientation = Matrix3(
+            car_phy.rotation.pitch,
+            car_phy.rotation.yaw,
+            car_phy.rotation.roll
+        )
+
+        self.angular_velocity = self.orientation.dot((
+            car_phy.angular_velocity.x,
+            car_phy.angular_velocity.y,
+            car_phy.angular_velocity.z
+        ))
+
+        self.demolished = (
+            car.demolished_timeout != -1
+        )
+
+        self.airborne = car.air_state != AirState.OnGround
+        self.supersonic = car.is_supersonic
+        self.jumped = car.air_state in (AirState.Jumping, AirState.DoubleJumping)
+        self.doublejumped = car.air_state == AirState.DoubleJumping
+        self.boost = int(car.boost)
+
+    @property
+    def forward(self):
+        return self.orientation.forward
+
+    @property
+    def right(self):
+        return self.orientation.right
+
+    @property
+    def up(self):
+        return self.orientation.up
+
+
+class hitbox_object:
+    def __init__(
+        self,
+        length=0,
+        width=0,
+        height=0,
+        offset=None
+    ):
+        self.length = length
+        self.width = width
+        self.height = height
+
+        if offset is None:
+            offset = Vector()
+
+        self.offset = offset
+
+    def __getitem__(self, index):
+        return (
+            self.length,
+            self.width,
+            self.height
+        )[index]
+
+
+class ball_object:
+    def __init__(self):
+        self.location = Vector()
+        self.velocity = Vector()
+
+        # Kept for compatibility with existing VirxERLU code.
+        self.latest_touched_time = 0
+        self.latest_touched_team = 0
+
+    def get_raw(self):
+        return (
+            tuple(self.location),
+            tuple(self.velocity)
+        )
+
+    def update(self, packet: GamePacket):
+        if not packet.balls:
+            return
+
+        ball = packet.balls[0]
+
+        self.location = Vector(
+            ball.physics.location.x,
+            ball.physics.location.y,
+            ball.physics.location.z
+        )
+
+        self.velocity = Vector(
+            ball.physics.velocity.x,
+            ball.physics.velocity.y,
+            ball.physics.velocity.z
+        )
+
+
+class boost_object:
+    def __init__(self, index, location, large):
+        self.index = index
+        self.location = Vector(
+            location.x,
+            location.y,
+            location.z
+        )
+        self.active = True
+        self.large = large
+
+    def update(self, packet: GamePacket):
+        self.active = (
+            packet.boost_pads[self.index].is_active
+        )
+
+
+
+class goal_object:
+    # Virtual goal geometry used by the bot.
+    # half_width controls the horizontal width.
+    # post_z controls the height of the post points.
+
+    def __init__(
+        self,
+        team,
+        half_width=750,
+        post_z=300
+    ):
+        team = 1 if team == 1 else -1
+
+        self.location = Vector(
+            0,
+            team * 5120,
+            post_z
+        )
+
+        self.left_post = Vector(
+            team * half_width,
+            team * 5120,
+            post_z
+        )
+
+        self.right_post = Vector(
+            -team * half_width,
+            team * 5120,
+            post_z
+        )
+
+
+
+class game_object:
+    # Holds information about the current match.
+
+    def __init__(self):
+        self.time = 0
+        self.time_remaining = 0
+        self.overtime = False
+        self.round_active = False
+        self.kickoff = False
+        self.match_ended = False
+        self.friend_score = 0
+        self.foe_score = 0
+        self.gravity = Vector()
+
+    def update(self, team, packet: GamePacket):
+        game = packet.match_info
+
+        self.time = game.seconds_elapsed
+        self.time_remaining = game.game_time_remaining
+        self.overtime = game.is_overtime
+
+        self.round_active = (
+            game.match_phase in (
+                MatchPhase.Active,
+                MatchPhase.Kickoff
+            )
+        )
+
+        self.kickoff = (
+            game.match_phase == MatchPhase.Kickoff
+        )
+
+        self.match_ended = (
+            game.match_phase == MatchPhase.Ended
+        )
+
+        self.friend_score = packet.teams[team].score
+        self.foe_score = packet.teams[1 - team].score
+
+        self.gravity.z = game.world_gravity_z
+
+
+class Matrix3:
+    # The Matrix3 converts roll, pitch, and yaw data into an
+    # orientation matrix.
+
+    def __init__(self, pitch=0, yaw=0, roll=0):
+        CP = math.cos(pitch)
+        SP = math.sin(pitch)
+        CY = math.cos(yaw)
+        SY = math.sin(yaw)
+        CR = math.cos(roll)
+        SR = math.sin(roll)
+
+        self.data = (
+            Vector(CP * CY, CP * SY, SP),
+            Vector(
+                CY * SP * SR - CR * SY,
+                SY * SP * SR + CR * CY,
+                -CP * SR
+            ),
+            Vector(
+                -CR * CY * SP - SR * SY,
+                -CR * SY * SP + SR * CY,
+                CP * CR
+            )
+        )
+
+        self.forward, self.right, self.up = self.data
+
+    def __getitem__(self, key):
+        return self.data[key]
+
+    def __str__(self):
+        return f"[{self.forward}\n{self.right}\n{self.up}]"
+
+    def dot(self, vector):
+        return Vector(
+            self.forward.dot(vector),
+            self.right.dot(vector),
+            self.up.dot(vector)
+        )
+
+    def det(self):
+        return (
+            self[0][0] * self[1][1] * self[2][2]
+            + self[0][1] * self[1][2] * self[2][0]
+            + self[0][2] * self[1][0] * self[2][1]
+            - self[0][0] * self[1][2] * self[2][1]
+            - self[0][1] * self[1][0] * self[2][2]
+            - self[0][2] * self[1][1] * self[2][0]
+        )
+
+
+class Vector:
+    # Vector supports 1D, 2D and 3D vectors.
+
+    def __init__(self, x: float = 0, y: float = 0, z: float = 0):
+        self._np = np.array([x, y, z])
+
+    def __getitem__(self, index):
+        return self._np[index].item()
+
+    def __setitem__(self, index, value):
+        self._np[index] = value
+
+    @property
+    def x(self):
+        return self._np[0].item()
+
+    @x.setter
+    def x(self, value):
+        self._np[0] = value
+
+    @property
+    def y(self):
+        return self._np[1].item()
+
+    @y.setter
+    def y(self, value):
+        self._np[1] = value
+
+    @property
+    def z(self):
+        return self._np[2].item()
+
+    @z.setter
+    def z(self, value):
+        self._np[2] = value
+
+    def __eq__(self, value):
+        if isinstance(value, (float, int)):
+            return self.magnitude() == value
+
+        if hasattr(value, "_np"):
+            value = value._np
+
+        return (self._np == value).all()
+
+    def __len__(self):
+        return 3
+
+    def __str__(self):
+        return f"[{self.x} {self.y} {self.z}]"
+
+    def __repr__(self):
+        return f"Vector(x={self.x}, y={self.y}, z={self.z})"
+
+    def __neg__(self):
+        return Vector(*(self._np * -1))
+
+    def __add__(self, value):
+        if hasattr(value, "_np"):
+            value = value._np
+
+        return Vector(*(self._np + value))
+
+    __radd__ = __add__
+
+    def __sub__(self, value):
+        if hasattr(value, "_np"):
+            value = value._np
+
+        return Vector(*(self._np - value))
+
+    def __rsub__(self, value):
+        return -self + value
+
+    def __mul__(self, value):
+        if hasattr(value, "_np"):
+            value = value._np
+
+        return Vector(*(self._np * value))
+
+    __rmul__ = __mul__
+
+    def __truediv__(self, value):
+        if hasattr(value, "_np"):
+            value = value._np
+
+        return Vector(*(self._np / value))
+
+    def __rtruediv__(self, value):
+        return self * (1 / value)
+
+    def __round__(self, decimals=0) -> Vector:
+        return Vector(
+            *np.around(
+                self._np,
+                decimals=decimals
+            )
+        )
+
+    def magnitude(self) -> float:
+        return np.linalg.norm(self._np).item()
+
+    def dot(self, value: Vector) -> float:
+        if hasattr(value, "_np"):
+            value = value._np
+
+        return np.dot(self._np, value).item()
+
+    def cross(self, value: Vector) -> Vector:
+        if hasattr(value, "_np"):
+            value = value._np
+
+        return Vector(*np.cross(self._np, value))
+
+    def copy(self) -> Vector:
+        return Vector(*self._np)
+
+    def normalize(
+        self,
+        return_magnitude=False
+    ) -> List[Vector, float] or Vector:
+
+        magnitude = self.magnitude()
+
+        if magnitude != 0:
+            norm_vec = Vector(
+                *(self._np / magnitude)
+            )
+
+            if return_magnitude:
+                return norm_vec, magnitude
+
+            return norm_vec
+
+        if return_magnitude:
+            return Vector(), 0
+
+        return Vector()
+
+    def flatten(self) -> Vector:
+        return Vector(
+            self._np[0],
+            self._np[1]
+        )
+
+    def angle2D(self, value: Vector) -> float:
+        return self.flatten().angle(
+            value.flatten()
+        )
+
+    def angle(self, value: Vector) -> float:
+        return math.acos(
+            max(
+                min(
+                    np.dot(
+                        self.normalize()._np,
+                        value.normalize()._np
+                    ).item(),
+                    1
+                ),
+                -1
+            )
+        )
+
+    def rotate(self, angle: float) -> Vector:
+        return Vector(
+            (math.cos(angle) * self.x)
+            - (math.sin(angle) * self.y),
+            (math.sin(angle) * self.x)
+            + (math.cos(angle) * self.y),
+            self.z
+        )
+
+    def clamp2D(
+        self,
+        start: Vector,
+        end: Vector
+    ) -> Vector:
+
+        s = self.normalize()._np
+
+        right = np.dot(
+            s,
+            np.cross(
+                end._np,
+                (0, 0, -1)
+            )
+        ) < 0
+
+        left = np.dot(
+            s,
+            np.cross(
+                start._np,
+                (0, 0, -1)
+            )
+        ) > 0
+
+        if (
+            right and left
+        ) if np.dot(
+            end._np,
+            np.cross(
+                start._np,
+                (0, 0, -1)
+            )
+        ) > 0 else (
+            right or left
+        ):
+            return self
+
+        if np.dot(start._np, s) < np.dot(end._np, s):
+            return end
+
+        return start
+
+    def clamp(
+        self,
+        start: Vector,
+        end: Vector
+    ) -> Vector:
+
+        s = self.clamp2D(start, end)
+
+        start_z = min(start.z, end.z)
+        end_z = max(start.z, end.z)
+
+        if s.z < start_z:
+            s.z = start_z
+
+        elif s.z > end_z:
+            s.z = end_z
+
+        return s
+
+    def dist(self, value: Vector) -> float:
+        if hasattr(value, "_np"):
+            value = value._np
+
+        return np.linalg.norm(
+            self._np - value
+        ).item()
+
+    def flat_dist(self, value: Vector) -> float:
+        return value.flatten().dist(
+            self.flatten()
+        )
+
+    def cap(self, low: float, high: float) -> Vector:
+        return Vector(
+            *(
+                max(
+                    min(item, high),
+                    low
+                )
+                for item in self._np
+            )
+        )
+
+    def midpoint(self, value: Vector) -> Vector:
+        if hasattr(value, "_np"):
+            value = value._np
+
+        return Vector(
+            *((self._np + value) / 2)
+        )
+
+    def scale(self, value: float) -> Vector:
+        return self.normalize() * value
