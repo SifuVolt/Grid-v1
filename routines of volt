@@ -4340,32 +4340,40 @@ class boost_down:
 
 class WallResetSetup:
     """
-    First-stage wall-reset setup.
+    Controlled two-touch wall-reset attempt.
 
-    Sequence:
-      1. Drive through a low ball with enough pace to send it up a side wall.
-      2. Wait only 0.20 seconds after the climb is detected.
-      3. Drive onto the same wall and climb toward the ball with minimal boost.
-      4. Jump, release, and use the second jump toward the ball.
-
-    This stage deliberately stops after validating the wall launch. Wheel
-    contact aiming and restored-dodge follow-up are added only after this
-    setup sequence is confirmed in live matches.
+    1. Hit the setup ball through its horizontal centreline, keeping the car
+       level so the ball travels toward the side wall rather than being chipped.
+    2. Do not advance until the ball reaches the wall line at useful height.
+    3. Drive up the same wall and make a second touch at a minimum speed.
+    4. Confirm the second touch from the ball's velocity/trajectory change.
+    5. Only then double-jump and orient the car's wheels toward the ball.
     """
 
     SETUP = "SETUP"
     WAIT_FOR_CLIMB = "WAIT_FOR_CLIMB"
     WALL_FOLLOW = "WALL_FOLLOW"
+    WALL_TOUCH_CONFIRM = "WALL_TOUCH_CONFIRM"
     LAUNCH_JUMP = "LAUNCH_JUMP"
     LAUNCH_RELEASE = "LAUNCH_RELEASE"
     LAUNCH_SECOND_JUMP = "LAUNCH_SECOND_JUMP"
     LAUNCH_TRACK = "LAUNCH_TRACK"
 
     WALL_X = 3850
-    SETUP_CONTACT_OFFSET = 155
+    WALL_LINE_X = 3750
+    SETUP_CONTACT_OFFSET = 150
+    MIN_SETUP_WALL_HEIGHT = 250
+    MIN_SETUP_WALL_PROGRESS = 180
+
     WAIT_DURATION = 0.20
-    MAX_TOTAL_TIME = 6.5
-    MAX_LAUNCH_TRACK_TIME = 0.9
+    MAX_TOTAL_TIME = 7.0
+    MAX_LAUNCH_TRACK_TIME = 1.6
+
+    MIN_WALL_TOUCH_SPEED = 900
+    WALL_TOUCH_DISTANCE = 340
+    WALL_TOUCH_CONFIRM_TIME = 0.55
+    MIN_TOUCH_VELOCITY_CHANGE = 180
+    MIN_TOUCH_PATH_CHANGE = 35
 
     FIRST_JUMP_HOLD = 0.18
     JUMP_RELEASE = 0.06
@@ -4380,6 +4388,11 @@ class WallResetSetup:
         self.initial_ball_z = candidate["ball_location"].z
         self.initial_ball_x = candidate["ball_location"].x
         self.last_debug_time = -1.0
+
+        self.touch_ball_velocity = None
+        self.touch_ball_location = None
+        self.touch_car_speed = 0.0
+        self.closest_reset_distance = float("inf")
 
     def on_side_wall(self, agent):
         car = agent.me
@@ -4431,97 +4444,111 @@ class WallResetSetup:
             self.stop(agent, "overall setup timeout")
             return
 
-        if car.demolished or car.airborne and self.phase in {
-            self.SETUP, self.WAIT_FOR_CLIMB, self.WALL_FOLLOW
-        }:
+        if car.demolished or (
+            car.airborne
+            and self.phase in {
+                self.SETUP, self.WAIT_FOR_CLIMB, self.WALL_FOLLOW
+            }
+        ):
             self.stop(agent, "car left the ground before wall launch")
             return
 
         elapsed = agent.time - self.phase_start
         on_wall = self.on_side_wall(agent)
-        wall_climb_detected = (
-            abs(ball.x) > 3650
-            and (
-                ball.z > self.initial_ball_z + 70
-                or ball_velocity.z > 140
-            )
+        wallward_progress = (
+            ball.x - self.initial_ball_x
+        ) * self.wall_side
+
+        setup_ball_reached_wall = (
+            ball.x * self.wall_side >= self.WALL_LINE_X
+            and ball.z >= self.MIN_SETUP_WALL_HEIGHT
+            and wallward_progress >= self.MIN_SETUP_WALL_PROGRESS
         )
 
         if self.phase == self.SETUP:
-            # Approach from the centre side and make contact toward the wall.
+            # Aim through the ball's horizontal centreline. Keep the target
+            # at the car's current height so the grounded approach stays level.
             contact_target = Vector(
                 ball.x - self.wall_side * self.SETUP_CONTACT_OFFSET,
                 ball.y,
-                max(92.75, ball.z)
+                car.location.z
             )
             local_target = car.local_location(contact_target)
             distance = car.location.dist(contact_target)
-            # Give the setup touch more pace so the ball actually climbs
-            # the wall. Use boost only for a long, well-aligned approach.
-            speed_required = min(2100, max(1150, distance / 0.52))
+
+            # Firm but controlled setup pace; boost is only an assist.
+            speed_required = min(1900, max(1450, distance / 0.50))
+            setup_angle = abs(Vector(x=1).angle(local_target))
 
             defaultDrive(agent, speed_required, local_target)
-            setup_angle = abs(Vector(x=1).angle(local_target))
             agent.controller.boost = (
                 car.boost > 20
-                and distance > 1250
-                and setup_angle < 0.30
+                and distance > 1100
+                and setup_angle < 0.24
+                and car.velocity.magnitude() < speed_required - 150
             )
 
-            if wall_climb_detected:
+            if setup_ball_reached_wall:
                 self.phase = self.WAIT_FOR_CLIMB
                 self.phase_start = agent.time
+                agent.controller.boost = False
                 print(
-                    f"[WALL RESET] BALL CLIMB detected "
-                    f"ball=({ball.x:.0f},{ball.y:.0f},{ball.z:.0f}) "
-                    f"vz={ball_velocity.z:.0f}; waiting "
-                    f"{self.WAIT_DURATION:.1f}s",
+                    f"[WALL RESET] SETUP HIT CONFIRMED "
+                    f"wall_x={ball.x * self.wall_side:.0f} "
+                    f"height={ball.z:.0f} "
+                    f"progress={wallward_progress:.0f} "
+                    f"ball_v=({ball_velocity.x:.0f},"
+                    f"{ball_velocity.y:.0f},{ball_velocity.z:.0f}); "
+                    f"waiting {self.WAIT_DURATION:.1f}s",
                     flush=True
                 )
                 return
 
-            # If the ball is not moving toward the wall after a reasonable
-            # setup window, do not keep chasing a failed setup.
-            if elapsed > 1.8 and (
-                (ball.x - self.initial_ball_x) * self.wall_side < 100
-                and ball.z <= self.initial_ball_z + 35
+            if elapsed > 2.2 and (
+                wallward_progress < self.MIN_SETUP_WALL_PROGRESS
+                and ball.z < self.initial_ball_z + 50
             ):
-                self.stop(agent, "setup hit did not send ball up the wall")
+                self.stop(
+                    agent,
+                    "setup touch failed to carry ball to wall line"
+                )
                 return
 
             self.log(
                 agent,
-                f"driving setup contact d={distance:.0f} "
-                f"ball=({ball.x:.0f},{ball.y:.0f},{ball.z:.0f}) "
+                f"driving centreline setup d={distance:.0f} "
+                f"progress={wallward_progress:.0f} "
+                f"wall_x={ball.x * self.wall_side:.0f} "
+                f"ball_z={ball.z:.0f} "
+                f"speed_target={speed_required:.0f} "
+                f"car_speed={car.velocity.magnitude():.0f} "
                 f"boost={car.boost:.0f}"
             )
             return
 
         if self.phase == self.WAIT_FOR_CLIMB:
-            # Do not blindly wait if the ball has fallen away from the wall.
-            if abs(ball.x) < 3300 or (
-                ball.z < self.initial_ball_z + 25
-                and ball_velocity.z < -100
+            if (
+                ball.x * self.wall_side < self.WALL_LINE_X - 100
+                or ball.z < self.MIN_SETUP_WALL_HEIGHT - 30
             ):
-                self.stop(agent, "ball fell away during climb wait")
+                self.stop(agent, "ball dropped back inside wall line")
                 return
 
-            # Hold position only briefly after the ball starts climbing.
             hold_target = Vector(
-                self.wall_side * 3300,
+                self.wall_side * 3450,
                 ball.y,
                 max(100, car.location.z)
             )
             local_target = car.local_location(hold_target)
-            defaultDrive(agent, 900, local_target)
-            agent.controller.throttle = 0.35
+            defaultDrive(agent, 1000, local_target)
+            agent.controller.throttle = 0.45
             agent.controller.boost = False
 
             if elapsed >= self.WAIT_DURATION:
                 self.phase = self.WALL_FOLLOW
                 self.phase_start = agent.time
                 print(
-                    f"[WALL RESET] WAIT complete; following wall "
+                    f"[WALL RESET] WAIT complete; wall climb begins "
                     f"ball_z={ball.z:.0f} vz={ball_velocity.z:.0f}",
                     flush=True
                 )
@@ -4529,25 +4556,18 @@ class WallResetSetup:
                 self.log(
                     agent,
                     f"waiting {self.WAIT_DURATION - elapsed:.2f}s "
-                    f"ball_z={ball.z:.0f} vz={ball_velocity.z:.0f}"
+                    f"wall_x={ball.x * self.wall_side:.0f} "
+                    f"ball_z={ball.z:.0f}"
                 )
             return
 
         if self.phase == self.WALL_FOLLOW:
-            if not wall_climb_detected and (
-                abs(ball.x) < 3100 or ball.z < self.initial_ball_z + 5
-            ):
-                self.stop(agent, "wall climb lost while following")
-                return
-
-            # First reach the wall at the ball's Y lane. Once attached,
-            # follow below the ball along the wall surface.
-            target_y = ball.y - ball_velocity.y * 0.18
-            if on_wall:
-                target_z = max(120, ball.z - 350)
-            else:
-                target_z = max(100, car.location.z)
-
+            target_y = ball.y - ball_velocity.y * 0.12
+            target_z = (
+                max(120, ball.z - 150)
+                if on_wall
+                else max(100, car.location.z)
+            )
             wall_target = Vector(
                 self.wall_side * self.WALL_X,
                 target_y,
@@ -4555,38 +4575,36 @@ class WallResetSetup:
             )
             local_target = car.local_location(wall_target)
             distance = car.location.dist(wall_target)
-            # This is a wall-drive, not a new shot search. Keep driving
-            # toward the wall lane and then upward alongside the ball.
-            # Boost is reserved for a long, straight approach; once attached
-            # to the wall, use throttle and preserve boost for the jump.
-            speed_required = min(1950, max(1050, distance / 0.60))
+            speed_required = min(1850, max(1200, distance / 0.48))
+            wall_forward_speed = car.velocity.dot(car.forward)
             wall_follow_angle = abs(Vector(x=1).angle(local_target))
 
             defaultDrive(agent, speed_required, local_target)
             agent.controller.boost = (
                 not on_wall
                 and car.boost > 25
-                and distance > 1250
-                and wall_follow_angle < 0.28
+                and distance > 1100
+                and wall_follow_angle < 0.25
+                and car.velocity.magnitude() < speed_required - 150
             )
 
-            vertical_gap = ball.z - car.location.z
             ball_distance = car.location.dist(ball)
-            launch_ready = (
-                on_wall
-                and ball_distance < 900
-                and 60 < vertical_gap < 850
-                and abs(ball.x) > 3350
-            )
 
-            if launch_ready:
-                self.phase = self.LAUNCH_JUMP
+            # Near the ball is not enough: require a fast wall approach first.
+            if (
+                on_wall
+                and ball_distance <= self.WALL_TOUCH_DISTANCE
+                and wall_forward_speed >= self.MIN_WALL_TOUCH_SPEED
+            ):
+                self.phase = self.WALL_TOUCH_CONFIRM
                 self.phase_start = agent.time
-                defaultPD(agent, car.local_location(ball))
-                agent.controller.jump = True
+                self.touch_ball_velocity = ball_velocity
+                self.touch_ball_location = ball
+                self.touch_car_speed = wall_forward_speed
                 print(
-                    f"[WALL RESET] WALL LAUNCH start "
-                    f"gap={vertical_gap:.0f} d={ball_distance:.0f}",
+                    f"[WALL RESET] WALL TOUCH attempt "
+                    f"car_speed={wall_forward_speed:.0f} "
+                    f"ball_d={ball_distance:.0f}; confirming contact",
                     flush=True
                 )
                 return
@@ -4594,21 +4612,88 @@ class WallResetSetup:
             self.log(
                 agent,
                 f"wall={on_wall} d={distance:.0f} "
-                f"ball_d={ball_distance:.0f} gap={vertical_gap:.0f} "
-                f"ball_z={ball.z:.0f} boost={car.boost:.0f} "
-                f"speed_target={speed_required:.0f} "
-                f"boosting={agent.controller.boost}"
+                f"ball_d={ball_distance:.0f} "
+                f"wall_speed={wall_forward_speed:.0f} "
+                f"min_speed={self.MIN_WALL_TOUCH_SPEED} "
+                f"ball_z={ball.z:.0f} boost={car.boost:.0f}"
             )
             return
 
-        # Keep aiming at the live ball throughout the wall-jump sequence.
+        if self.phase == self.WALL_TOUCH_CONFIRM:
+            target = Vector(
+                self.wall_side * self.WALL_X,
+                ball.y,
+                max(120, ball.z - 120)
+            )
+            local_target = car.local_location(target)
+            defaultDrive(agent, 1500, local_target)
+            agent.controller.boost = False
+
+            confirm_elapsed = agent.time - self.phase_start
+            ball_distance = car.location.dist(ball)
+            velocity_change = (
+                ball_velocity - self.touch_ball_velocity
+            ).magnitude()
+            expected_ball_position = (
+                self.touch_ball_location
+                + self.touch_ball_velocity * confirm_elapsed
+            )
+            path_change = ball.dist(expected_ball_position)
+
+            confirmed = (
+                velocity_change >= self.MIN_TOUCH_VELOCITY_CHANGE
+                or path_change >= self.MIN_TOUCH_PATH_CHANGE
+            )
+
+            if (
+                confirmed
+                and ball_distance < 650
+                and self.touch_car_speed >= self.MIN_WALL_TOUCH_SPEED
+            ):
+                self.phase = self.LAUNCH_JUMP
+                self.phase_start = agent.time
+                self.closest_reset_distance = ball_distance
+                defaultPD(agent, car.local_location(ball))
+                agent.controller.jump = True
+                print(
+                    f"[WALL RESET] WALL TOUCH CONFIRMED "
+                    f"speed={self.touch_car_speed:.0f} "
+                    f"dv={velocity_change:.0f} "
+                    f"path_change={path_change:.0f} "
+                    f"ball_d={ball_distance:.0f}; double-jump sequence",
+                    flush=True
+                )
+                return
+
+            if confirm_elapsed > self.WALL_TOUCH_CONFIRM_TIME:
+                self.stop(
+                    agent,
+                    f"wall touch not confirmed "
+                    f"speed={self.touch_car_speed:.0f} "
+                    f"dv={velocity_change:.0f}"
+                )
+                return
+
+            self.log(
+                agent,
+                f"checking wall touch d={ball_distance:.0f} "
+                f"speed={self.touch_car_speed:.0f} "
+                f"dv={velocity_change:.0f} "
+                f"path_change={path_change:.0f}"
+            )
+            return
+
+        # After the confirmed touch, turn the car's underside/wheels toward
+        # the ball while keeping its nose pointed at the contact target.
         local_ball = car.local_location(ball)
-        defaultPD(agent, local_ball)
+        away_from_ball = (car.location - ball).normalize()
+        local_up = car.local(away_from_ball)
+        defaultPD(agent, local_ball, up=local_up)
         agent.controller.throttle = 1
         agent.controller.boost = (
             car.boost > 0
-            and local_ball.x > 250
-            and abs(local_ball.y) < 700
+            and local_ball.x > 120
+            and ball.dist(car.location) > 180
         )
 
         if self.phase == self.LAUNCH_JUMP:
@@ -4617,7 +4702,7 @@ class WallResetSetup:
                 self.phase = self.LAUNCH_RELEASE
                 self.phase_start = agent.time
                 agent.controller.jump = False
-                print("[WALL RESET] first wall jump released", flush=True)
+                print("[WALL RESET] first jump released", flush=True)
             return
 
         if self.phase == self.LAUNCH_RELEASE:
@@ -4636,25 +4721,32 @@ class WallResetSetup:
                 self.phase_start = agent.time
                 agent.controller.jump = False
                 print(
-                    "[WALL RESET] double-jump launch complete; "
-                    "tracking ball for setup validation",
+                    "[WALL RESET] double jump complete; wheels aimed "
+                    "toward ball for flip-reset attempt",
                     flush=True
                 )
             return
 
         if self.phase == self.LAUNCH_TRACK:
             agent.controller.jump = False
+            self.closest_reset_distance = min(
+                self.closest_reset_distance,
+                car.location.dist(ball)
+            )
             self.log(
                 agent,
-                f"airborne tracking d={car.location.dist(ball):.0f} "
+                f"reset approach d={car.location.dist(ball):.0f} "
+                f"closest={self.closest_reset_distance:.0f} "
                 f"local=({local_ball.x:.0f},{local_ball.y:.0f},"
                 f"{local_ball.z:.0f}) boost={car.boost:.0f}"
             )
             if (
-                car.location.dist(ball) < 250
+                car.location.dist(ball) < 120
                 or elapsed >= self.MAX_LAUNCH_TRACK_TIME
             ):
-                self.stop(agent, "stage-one wall launch validated; reset contact not yet enabled")
+                self.stop(
+                    agent,
+                    "flip-reset contact attempt complete; "
+                    "wheel-contact/reset verification not yet wired"
+                )
                 return
-
-
