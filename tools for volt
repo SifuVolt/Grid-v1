@@ -1,6 +1,25 @@
-from util.routines import Aerial, double_jump, ground_shot, jump_shot, virxrlcu
+from util.routines import Aerial, air_dribble_setup, double_jump, ground_shot, jump_shot, virxrlcu
 from util.utils import Vector, math, side, cap
 from util.grid_double_jump import find_double_jump as grid_find_double_jump
+
+
+def find_air_dribble_setup(agent):
+    """Return the committed wall air-dribble routine when its setup is valid.
+
+    This is a high-priority routine candidate, evaluated before normal
+    shot-finding tools. It never replaces an already active routine.
+    """
+    if not agent.is_clear():
+        return None
+
+    if air_dribble_setup.should_start(agent):
+        print(
+            "[AIR DRIBBLE TOOL] setup accepted; prioritising wall setup",
+            flush=True
+        )
+        return air_dribble_setup()
+
+    return None
 
 
 def find_ground_shot(agent, target, cap_=6):
