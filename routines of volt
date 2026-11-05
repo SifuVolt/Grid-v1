@@ -4458,11 +4458,18 @@ class WallResetSetup:
         wallward_progress = (
             ball.x - self.initial_ball_x
         ) * self.wall_side
+        required_setup_progress = min(
+            self.MIN_SETUP_WALL_PROGRESS,
+            max(
+                40,
+                (self.WALL_LINE_X - self.initial_ball_x * self.wall_side) * 0.5
+            )
+        )
 
         setup_ball_reached_wall = (
             ball.x * self.wall_side >= self.WALL_LINE_X
             and ball.z >= self.MIN_SETUP_WALL_HEIGHT
-            and wallward_progress >= self.MIN_SETUP_WALL_PROGRESS
+            and wallward_progress >= required_setup_progress
         )
 
         if self.phase == self.SETUP:
