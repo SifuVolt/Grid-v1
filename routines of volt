@@ -4336,3 +4336,205 @@ class boost_down:
             agent.pop()
         elif abs(Vector(x=1).angle(target)) < 0.5:
             agent.controller.boost = True
+
+
+class FlipResetPlanner:
+    """
+    Conservative, read-only planner for wall-play flip-reset opportunities.
+
+    This class deliberately does not take control of the car. It identifies
+    predicted side-wall climbs that may justify a reset attempt and compares
+    their geometry score with a caller-supplied normal-aerial score. Keeping
+    this separate means existing aerial decisions remain unchanged until the
+    planner has been validated in live matches.
+    """
+
+    MIN_TIME = 0.65
+    MAX_TIME = 2.8
+    MIN_WALL_X = 3150
+    MIN_BALL_Z = 300
+    MIN_RISE_SPEED = 60
+    MIN_VERTICAL_GAP = 120
+    MAX_VERTICAL_GAP = 1500
+    SIDE_WALL_X = 4096
+
+    def __init__(self, minimum_score=0.62, aerial_margin=0.10):
+        self.minimum_score = minimum_score
+        self.aerial_margin = aerial_margin
+        self.last_candidate = None
+        self.last_decision = "NOT_EVALUATED"
+
+    @staticmethod
+    def _slice_vectors(ball_slice):
+        physics = ball_slice.physics
+        location = physics.location
+        velocity = physics.velocity
+        return (
+            Vector(location.x, location.y, location.z),
+            Vector(velocity.x, velocity.y, velocity.z)
+        )
+
+    def find_wall_candidate(self, agent):
+        """
+        Find the best future slice where the ball is already climbing a side
+        wall and the car has a plausible route to get underneath it.
+
+        Returns a dictionary of measured values, or None. It does not start
+        wall play or change the current shot routine.
+        """
+        prediction = getattr(agent, "ball_prediction_struct", None)
+        slices = getattr(prediction, "slices", None) if prediction else None
+
+        if not slices:
+            return None
+
+        car = agent.me
+        best = None
+
+        for ball_slice in slices:
+            contact_time = ball_slice.game_seconds - agent.time
+            if not self.MIN_TIME <= contact_time <= self.MAX_TIME:
+                continue
+
+            ball, velocity = self._slice_vectors(ball_slice)
+            wall_x = abs(ball.x)
+
+            # Require a genuine side-wall position and upward ball movement.
+            if (
+                wall_x < self.MIN_WALL_X
+                or ball.z < self.MIN_BALL_Z
+                or abs(ball.y) > 5000
+                or velocity.z < self.MIN_RISE_SPEED
+            ):
+                continue
+
+            vertical_gap = ball.z - car.location.z
+            if not self.MIN_VERTICAL_GAP <= vertical_gap <= self.MAX_VERTICAL_GAP:
+                continue
+
+            distance = car.location.dist(ball)
+            reach_budget = 2300.0 * contact_time + 250.0
+            if distance > reach_budget:
+                continue
+
+            wall_side = 1 if ball.x >= 0 else -1
+            car_side = 1 if car.location.x >= 0 else -1
+            same_side = wall_side == car_side
+
+            on_side_wall = (
+                abs(car.location.x) > 3450
+                and abs(car.up.x) > 0.65
+                and car.up.x * car.location.x < 0
+            )
+
+            wall_score = cap(
+                (wall_x - self.MIN_WALL_X)
+                / (self.SIDE_WALL_X - self.MIN_WALL_X),
+                0,
+                1
+            )
+            rise_score = cap(
+                (velocity.z - self.MIN_RISE_SPEED) / 440.0,
+                0,
+                1
+            )
+            height_score = cap(
+                1.0 - abs(vertical_gap - 650.0) / 1000.0,
+                0,
+                1
+            )
+            reach_score = cap(
+                1.0 - distance / max(reach_budget, 1.0),
+                0,
+                1
+            )
+            boost_score = cap(car.boost / 40.0, 0, 1)
+            side_score = 1.0 if same_side else 0.25
+            wall_car_bonus = 1.0 if on_side_wall else 0.0
+
+            score = (
+                wall_score * 0.22
+                + rise_score * 0.18
+                + height_score * 0.18
+                + reach_score * 0.20
+                + boost_score * 0.10
+                + side_score * 0.07
+                + wall_car_bonus * 0.05
+            )
+
+            candidate = {
+                "score": score,
+                "contact_time": ball_slice.game_seconds,
+                "time_until_contact": contact_time,
+                "ball_location": ball,
+                "ball_velocity": velocity,
+                "distance": distance,
+                "vertical_gap": vertical_gap,
+                "boost": car.boost,
+                "wall_side": wall_side,
+                "same_side": same_side,
+                "car_on_wall": on_side_wall,
+                "components": {
+                    "wall": wall_score,
+                    "rise": rise_score,
+                    "height": height_score,
+                    "reach": reach_score,
+                    "boost": boost_score,
+                    "side": side_score,
+                    "car_on_wall": wall_car_bonus
+                }
+            }
+
+            if best is None or candidate["score"] > best["score"]:
+                best = candidate
+
+        self.last_candidate = best
+        return best
+
+    def evaluate(self, agent, normal_aerial_score=None):
+        """
+        Compare the best wall-reset opportunity with the normal aerial.
+
+        normal_aerial_score must be a score on the same 0..1 scale. If it is
+        omitted, the planner reports REVIEW_ONLY and never recommends taking
+        over the aerial.
+        """
+        candidate = self.find_wall_candidate(agent)
+
+        if candidate is None:
+            self.last_decision = "NO_WALL_CANDIDATE"
+            return {
+                "decision": self.last_decision,
+                "candidate": None,
+                "normal_aerial_score": normal_aerial_score
+            }
+
+        if normal_aerial_score is None:
+            self.last_decision = "REVIEW_ONLY"
+            return {
+                "decision": self.last_decision,
+                "candidate": candidate,
+                "normal_aerial_score": None
+            }
+
+        normal_aerial_score = cap(float(normal_aerial_score), 0, 1)
+        reset_score = candidate["score"]
+
+        if (
+            reset_score >= self.minimum_score
+            and reset_score >= normal_aerial_score + self.aerial_margin
+        ):
+            self.last_decision = "RESET_OUTSCORES_AERIAL"
+        else:
+            self.last_decision = "KEEP_NORMAL_AERIAL"
+
+        return {
+            "decision": self.last_decision,
+            "candidate": candidate,
+            "reset_score": reset_score,
+            "normal_aerial_score": normal_aerial_score,
+            "required_reset_score": max(
+                self.minimum_score,
+                normal_aerial_score + self.aerial_margin
+            )
+        }
