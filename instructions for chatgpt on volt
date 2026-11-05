@@ -1691,7 +1691,8 @@ class Bot(VirxERLU):
         # Evaluate wall-reset setups alongside normal shot selection.
         # Shot routines are usually active, so requiring a clear stack made
         # this opportunity almost unreachable. Only preempt a grounded
-        # ordinary ground shot, never a jump, aerial, kickoff or recovery.
+        # ordinary shot routine before it has left the ground; protect
+        # aerials, kickoffs, defence, recoveries and active airborne mechanics.
         current_routine_name = (
             self.stack[0].__class__.__name__
             if not self.is_clear()
