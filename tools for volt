@@ -11,20 +11,42 @@ def find_air_dribble_setup(agent):
     ):
         return True
 
-    if not agent.is_clear():
+    stack = getattr(agent, "stack", [])
+    active_name = (
+        stack[0].__class__.__name__
+        if stack
+        else None
+    )
+
+    # Grid's passive defensive positioning must not suppress a valid,
+    # specialised wall setup. The new routine is pushed above grid_defense
+    # and takes control; unrelated active routines remain protected.
+    can_override_defense = (
+        active_name is not None
+        and active_name.lower() in {"grid_defense", "defense", "defence"}
+        and all(
+            routine.__class__.__name__.lower()
+            in {"grid_defense", "defense", "defence"}
+            for routine in stack
+        )
+    )
+
+    if not agent.is_clear() and not can_override_defense:
         last = getattr(agent, "_air_dribble_stack_debug", -999)
         if agent.time - last >= 1.0:
             agent._air_dribble_stack_debug = agent.time
-            active = (
-                agent.stack[0].__class__.__name__
-                if getattr(agent, "stack", None)
-                else "unknown"
-            )
+            active = active_name or "unknown"
             print(
                 f"[AIR DRIBBLE CHECK] blocked by active routine: {active}",
                 flush=True
             )
         return None
+
+    if can_override_defense:
+        print(
+            "[AIR DRIBBLE TOOL] evaluating setup; may override grid_defense",
+            flush=True
+        )
 
     car = agent.me
     ball = agent.ball.location
