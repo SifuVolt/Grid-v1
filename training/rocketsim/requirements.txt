@@ -1,0 +1,5 @@
+# Install this file with the Volt virtual environment when you want to run
+# the offline RocketSim training tools. The native binding is pinned to the
+# exact upstream python-dev commit inspected for this integration.
+numpy>=2.0,<3
+RocketSim @ git+https://github.com/mtheall/RocketSim.git@2da51b1dac7b8127127613a5ff30e490bdd70dd8
