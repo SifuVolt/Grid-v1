@@ -537,6 +537,159 @@ class Bot(VirxERLU):
 
         return ball_velocity.normalize().dot(ball_to_car) > 0.65
     
+    def one_v_one_urgent_clear(self):
+        """Return True when a goal-bound ball or committed opponent needs an immediate clear."""
+        if self.friends or not self.foes:
+            return False
+
+        ball = self.ball.location
+        velocity = self.ball.velocity
+        side = utils.side(self.team)
+        ball_depth = ball.y * side
+
+        # Only treat the ball as a defensive threat once it has entered our half.
+        if ball_depth < 0:
+            return False
+
+        toward_goal_speed = velocity.y * side
+        goal_distance = (
+            self.friend_goal.location.y - ball.y
+        ) * side
+
+        goal_eta = float("inf")
+        if toward_goal_speed > 80 and goal_distance > 0:
+            goal_eta = goal_distance / toward_goal_speed
+
+        goal_x = ball.x
+        goal_z = ball.z
+        if math.isfinite(goal_eta) and goal_eta <= 3.0:
+            goal_x += velocity.x * goal_eta
+            goal_z += velocity.z * goal_eta + 0.5 * self.gravity.z * goal_eta * goal_eta
+
+        # Include a small margin around the posts. A low projected crossing is
+        # an emergency even when the ball is not yet close to the goal mouth.
+        projected_goal_threat = (
+            math.isfinite(goal_eta)
+            and 0.0 < goal_eta < 3.0
+            and abs(goal_x) < 980
+            and -50 < goal_z < 650
+            and ball_depth > 300
+        )
+        doorstep_threat = (
+            ball_depth > 4450
+            and ball.z < 500
+            and abs(ball.x) < 1000
+        )
+
+        my_speed = self.me.velocity.flatten().magnitude()
+        my_distance = self.me.location.dist(ball)
+        my_eta = my_distance / max(900.0, my_speed + 500.0)
+
+        opponent_committed = False
+        for foe in self.foes:
+            foe_distance = foe.location.flat_dist(ball)
+            if foe_distance > 850:
+                continue
+
+            toward_goal = (
+                self.friend_goal.location - foe.location
+            ).flatten().normalize()
+            foe_forward = foe.forward.flatten().normalize()
+            goal_alignment = foe_forward.dot(toward_goal)
+            ball_in_front = foe.local_location(ball).x > -150
+
+            # A nearby opponent already lined up toward our net can turn a
+            # harmless-looking ball into a shot before we can rotate back.
+            if (
+                ball_depth > 500
+                and goal_alignment > 0.58
+                and ball_in_front
+                and toward_goal_speed > -100
+            ):
+                foe_speed = foe.velocity.flatten().magnitude()
+                foe_eta = foe_distance / max(900.0, foe_speed + 500.0)
+                if foe_eta + 0.12 < my_eta or foe_distance < 500:
+                    opponent_committed = True
+                    break
+
+        urgent = (
+            doorstep_threat
+            or (
+                projected_goal_threat
+                and goal_eta < my_eta + 0.35
+            )
+            or opponent_committed
+        )
+
+        if urgent:
+            print(
+                f"[1V1 CLEAR CHECK] urgent=True "
+                f"goal_eta={goal_eta:.2f} my_eta={my_eta:.2f} "
+                f"ball_depth={ball_depth:.0f} "
+                f"opponent_committed={opponent_committed}",
+                flush=True
+            )
+
+        return urgent
+
+    def one_v_one_shadow_needed(self):
+        """Shadow a committed opponent instead of diving into a losing challenge."""
+        if self.friends or len(self.foes) == 0 or self.me.boost < 55:
+            return False
+
+        ball = self.ball.location
+        side = utils.side(self.team)
+        ball_depth = ball.y * side
+
+        # Shadow only while the ball is in or approaching our half.
+        if not -250 < ball_depth < 3300:
+            return False
+
+        my_distance = self.me.location.flat_dist(ball)
+        if my_distance <= 1000:
+            return False
+
+        my_speed = self.me.velocity.flatten().magnitude()
+        my_eta = my_distance / max(900.0, my_speed + 500.0)
+
+        toward_goal_speed = self.ball.velocity.y * side
+
+        for foe in self.foes:
+            foe_distance = foe.location.flat_dist(ball)
+            if foe_distance > 850:
+                continue
+
+            toward_goal = (
+                self.friend_goal.location - foe.location
+            ).flatten().normalize()
+            foe_forward = foe.forward.flatten().normalize()
+            goal_alignment = foe_forward.dot(toward_goal)
+            ball_in_front = foe.local_location(ball).x > -150
+
+            if (
+                goal_alignment < 0.58
+                or not ball_in_front
+                or toward_goal_speed < -100
+            ):
+                continue
+
+            foe_speed = foe.velocity.flatten().magnitude()
+            foe_eta = foe_distance / max(900.0, foe_speed + 500.0)
+
+            # Let the opponent show their touch while Volt stays goal-side.
+            # Leave shadow as soon as Volt is close enough to challenge.
+            if foe_eta + 0.12 < my_eta:
+                print(
+                    f"[1V1 SHADOW CHECK] foe_dist={foe_distance:.0f} "
+                    f"my_dist={my_distance:.0f} "
+                    f"foe_eta={foe_eta:.2f} my_eta={my_eta:.2f} "
+                    f"boost={self.me.boost:.0f}",
+                    flush=True
+                )
+                return True
+
+        return False
+
     def defensive_emergency(self):
         side = utils.side(self.team)
         ball = self.ball.location
@@ -1115,6 +1268,86 @@ class Bot(VirxERLU):
                 self.push(routines.goto_boost(closest_boost))
 
 
+        # 1v1 defensive reads run before shot selection and boost detours.
+        # An urgent clear must not be displaced by a cached attacking target.
+        if not self.friends:
+            root_name = (
+                self.stack[0].__class__.__name__
+                if not self.is_clear()
+                else None
+            )
+            active_name = (
+                self.stack[-1].__class__.__name__
+                if not self.is_clear()
+                else None
+            )
+
+            if root_name in {"power_clear", "emergency_clear"}:
+                return
+
+            if self.one_v_one_urgent_clear():
+                protected = {
+                    "flip", "half_flip", "recovery", "wave_dash",
+                    "speed_flip", "speedflip_kickoff", "Aerial"
+                }
+                if active_name not in protected:
+                    # Use the directional emergency clear for a projected
+                    # own-goal, otherwise the rolling-ball power clear.
+                    ball_depth = (
+                        self.ball.location.y * utils.side(self.team)
+                    )
+                    goal_distance = (
+                        self.friend_goal.location.y - self.ball.location.y
+                    ) * utils.side(self.team)
+                    toward_goal_speed = (
+                        self.ball.velocity.y * utils.side(self.team)
+                    )
+                    goal_eta = (
+                        goal_distance / toward_goal_speed
+                        if toward_goal_speed > 80 and goal_distance > 0
+                        else float("inf")
+                    )
+                    if (
+                        self.me.airborne
+                        or (
+                            math.isfinite(goal_eta)
+                            and goal_eta < 2.0
+                        )
+                        or ball_depth > 4200
+                    ):
+                        clear_routine = routines.emergency_clear()
+                    else:
+                        clear_routine = routines.power_clear()
+
+                    print(
+                        f"[1V1 CLEAR] replacing={root_name} "
+                        f"with={clear_routine.__class__.__name__}",
+                        flush=True
+                    )
+                    self.clear()
+                    self.push(clear_routine)
+                    return
+
+            if self.one_v_one_shadow_needed():
+                if root_name == "shadow":
+                    return
+
+                # Shadow only replaces passive movement/detours, not a shot
+                # already being executed or a mechanical action in progress.
+                if root_name in {
+                    None, "goto_boost", "grid_defense", "support"
+                }:
+                    print(
+                        f"[1V1 SHADOW] replacing={root_name} boost={self.me.boost:.0f}",
+                        flush=True
+                    )
+                    self.clear()
+                    self.push(routines.shadow())
+                    return
+            elif root_name == "shadow":
+                print("[1V1 SHADOW] opponent threat ended; resume interception", flush=True)
+                self.clear()
+
         # Share and compare shot opportunities with teammates.
         self.update_teamplay()
 
@@ -1379,7 +1612,10 @@ class Bot(VirxERLU):
         if current_name == "half_flip":
             return
 
-        if self.should_defensive_aerial():
+        if (
+            self.should_defensive_aerial()
+            and not (current_name == "jump_shot" and self.me.airborne)
+        ):
             if current_name == "Aerial":
                 return
 
