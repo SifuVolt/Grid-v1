@@ -1937,6 +1937,51 @@ class support:
         return agent.me.location.flat_dist(self.get_target(agent)) > 300
 
 
+class transition_bump:
+    """
+    Pursue a specific opponent who is screening the teammate's attacking lane.
+    The target is re-led every tick so the routine follows a moving defender.
+    """
+
+    def __init__(self, target_index):
+        self.target_index = target_index
+        self.goto = goto(Vector(), brake=False)
+        self.goto.allow_wall_dash = False
+
+    def run(self, agent: VirxERLU):
+        target_car = next(
+            (
+                foe for foe in agent.foes
+                if foe.index == self.target_index
+                and not getattr(foe, "demolished", False)
+            ),
+            None
+        )
+
+        if target_car is None or agent.me.airborne:
+            agent.pop()
+            return
+
+        distance = agent.me.location.flat_dist(target_car.location)
+        if distance < 260 or distance > 4200:
+            agent.pop()
+            return
+
+        # Lead the defender modestly; this is a bump/demo route, not a
+        # prediction-heavy aerial or a long chase across the field.
+        car_speed = agent.me.velocity.flatten().magnitude()
+        lead_time = min(
+            0.55,
+            max(0.12, distance / max(1100.0, car_speed + 650.0))
+        )
+        self.goto.target = (
+            target_car.location
+            + target_car.velocity.flatten() * lead_time
+        )
+        self.goto.vector = None
+        self.goto.run(agent, manual=True)
+
+
 class grid_defense:
     """
     Grid's ground defensive movement, adapted to the VirxERLU routine API.
