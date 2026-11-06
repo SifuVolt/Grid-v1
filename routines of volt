@@ -2991,6 +2991,8 @@ class jump_shot:
         self.needed_jump_time = -1
         self._orientation_logged = False
         self.quick_shot = False
+        self.side_mode = False
+        self.last_side_debug_time = -1
         self.patience = shot_patience()
 
     def update(self, shot):
@@ -3107,6 +3109,39 @@ class jump_shot:
                 f"point={self.contact_point} approach={self.offset_target}",
                 flush=True
             )
+
+        if self.side_mode:
+            # Rebuild the lateral setup from the latest predicted intercept
+            # every frame. The car approaches from the side opposite the goal.
+            left_of_shot = Vector(
+                -self.shot_vector.y,
+                self.shot_vector.x,
+                0
+            ).normalize()
+            intercept_length = agent.me.location.flat_dist(
+                self.ball_location
+            )
+            lateral_distance = intercept_length * 0.5
+            self.offset_target = (
+                self.ball_location - left_of_shot * lateral_distance
+            )
+            self.contact_point = (
+                self.ball_location - left_of_shot * 92.75
+            )
+            self.contact_approach_target = self.offset_target.copy()
+            if (
+                self.last_side_debug_time < 0
+                or agent.time - self.last_side_debug_time >= 0.35
+            ):
+                self.last_side_debug_time = agent.time
+                print(
+                    f"[SIDE SHOT SETUP] intercept_distance={intercept_length:.0f} "
+                    f"lateral_distance={lateral_distance:.0f} "
+                    f"ball=({self.ball_location.x:.0f},{self.ball_location.y:.0f}) "
+                    f"setup=({self.offset_target.x:.0f},{self.offset_target.y:.0f})",
+                    flush=True
+                )
+
         print(
             f"[JUMP SHOT AIM FIX] "
             f"ball=({self.ball_location.x:.0f},{self.ball_location.y:.0f}) "
@@ -3214,7 +3249,26 @@ class jump_shot:
             time = distance_remaining / (velocity + dodge_impulse(agent))
 
 
-            if ((abs(velocity) < 100 and distance_remaining < agent.me.hitbox.length / 2) or (abs(local_offset_target.y) < 92 and direction * local_vf.x >= direction * (local_offset_target.x - agent.me.hitbox.length / 3) and direction * local_offset_target.x > 0)) and T <= self.needed_jump_time * 1.08:
+            if (
+                (
+                    self.side_mode
+                    and distance_remaining < 180
+                    and T <= self.needed_jump_time * 1.08
+                )
+                or (
+                    (
+                        abs(velocity) < 100
+                        and distance_remaining < agent.me.hitbox.length / 2
+                    )
+                    or (
+                        abs(local_offset_target.y) < 92
+                        and direction * local_vf.x >= direction * (
+                            local_offset_target.x - agent.me.hitbox.length / 3
+                        )
+                        and direction * local_offset_target.x > 0
+                    )
+                ) and T <= self.needed_jump_time * 1.08
+            ):
                 self.quick_shot = T <= 0.45
                 self.jumping = True
                 print(
@@ -3362,7 +3416,7 @@ class jump_shot:
                     < (92.75 + agent.me.hitbox.length) * 1.02
                 )
 
-                if close_enough and local_target.x > 0:
+                if close_enough and (local_target.x > 0 or self.side_mode):
                     # Aim the dodge at the predicted ball contact itself,
                     # not at the approach point behind the ball. The selected
                     # centre/left/right contact has already shaped that approach.
@@ -3438,6 +3492,14 @@ class jump_shot:
 
         l_vf = vf + agent.me.location
         agent.line(l_vf-Vector(z=100), l_vf+Vector(z=100), agent.renderer.red)
+
+class side_shot(jump_shot):
+    """Jump shot that deliberately approaches from the side and dodges inward."""
+
+    def __init__(self, intercept_time, targets=None):
+        super().__init__(intercept_time, targets)
+        self.side_mode = True
+
 
 class ground_shot:
     # Hits a target point at a target time towards a target direction
