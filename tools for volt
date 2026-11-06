@@ -702,7 +702,7 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             best_targets,
             best_shot["fast"]
         )
-    elif best_shot["shot_type"] == 1:
+    elif best_shot["shot_type"] in (0, 1) and can_jump:
         # A side shot is a goal-line correction, not a half-field choice.
         # Project the rolling ball to the opponent goal line and only use
         # the side dodge when its path would pass outside a post.
@@ -1015,7 +1015,7 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
             fast_aerial=best_shot['fast']
         )
 
-    if best_shot['shot_type'] == 1:
+    if best_shot['shot_type'] in (0, 1) and can_jump:
         # Even without a supplied target, use the real opponent goal posts.
         intercept_slice = min(
             slices,
