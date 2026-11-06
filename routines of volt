@@ -1075,16 +1075,6 @@ class Aerial:
         prediction = agent.ball_prediction_struct
 
         if prediction is None or not prediction.slices:
-            print(
-                "[AERIAL ABORT] reason=no_ball_prediction",
-                flush=True
-            )
-            agent.pop()
-            agent.shooting = False
-            agent.shot_weight = -1
-            agent.shot_time = -1
-            if agent.me.airborne:
-                agent.push(recovery())
             return
 
         # Find the prediction slice closest to the actual intercept time.
@@ -1719,19 +1709,10 @@ class shadow:
 
         return self_to_target > 320
     def get_ball_loc(self, agent, render=False):
-        prediction = getattr(agent, "ball_prediction_struct", None)
-        slices = getattr(prediction, "slices", None) if prediction is not None else None
+        slices = agent.ball_prediction_struct.slices
         if not slices:
-            return Vector(
-                agent.ball.location.x,
-                agent.ball.location.y * side(agent.team)
-            )
-
-        future_slice = getattr(agent, "future_ball_location_slice", 0)
-        index = max(
-            0,
-            min(len(slices) - 1, round(future_slice * 1.1))
-        )
+            return Vector(agent.ball.location.x, agent.ball.location.y * side(agent.team))
+        index = max(0, min(len(slices) - 1, round(agent.future_ball_location_slice * 1.1)))
         ball_slice = slices[index].physics.location
         ball_loc = Vector(ball_slice.x, ball_slice.y)
         if render: agent.sphere(ball_loc + Vector(z=93), 92.75, color=agent.renderer.black)
@@ -2944,7 +2925,6 @@ class jump_shot:
         self.jump_time = -1
         self.needed_jump_time = -1
         self._orientation_logged = False
-        self._reverse_throttle_logged = False
         self.patience = shot_patience()
 
     def update(self, shot):
@@ -2965,6 +2945,8 @@ class jump_shot:
 
         ball = ball_slice.physics.location
         ball_location = Vector(ball.x, ball.y, ball.z)
+
+        direction = (ball_location - agent.me.location).normalize()
 
         if self.goal_aim_point is None:
             self.goal_aim_point = _relative_goal_aim_point(agent, self.targets)
@@ -2997,44 +2979,32 @@ class jump_shot:
         # Capping T above 0 to prevent division problems
         time_remaining = cap(T, 0.000001, 6)
 
-        # Refresh the predicted contact point every packet, including after
-        # take-off. The old code froze ball_location once jumping began, so a
-        # moving ball could leave the car chasing yesterday's contact point.
-        prediction = getattr(agent, "ball_prediction_struct", None)
-        slices = getattr(prediction, "slices", None) if prediction is not None else None
+        if not self.jumping or self.ball_location is None:
+            prediction = getattr(agent, "ball_prediction_struct", None)
+            slices = getattr(prediction, "slices", None) if prediction is not None else None
 
-        if not slices:
-            agent.pop()
-            agent.shooting = False
-            agent.shot_weight = -1
-            agent.shot_time = -1
-            if agent.me.airborne:
-                agent.push(recovery())
-            return
+            if not slices:
+                agent.pop()
+                agent.shooting = False
+                agent.shot_weight = -1
+                agent.shot_time = -1
+                if agent.me.airborne:
+                    agent.push(recovery())
+                return
 
-        slice_n = round(T * 120) - 1
-        slice_n = max(0, min(slice_n, len(slices) - 1))
+            slice_n = round(T * 120) - 1
+            slice_n = max(0, min(slice_n, len(slices) - 1))
 
-        agent.dbg_2d(f"Shot slice #: {slice_n}")
+            agent.dbg_2d(f"Shot slice #: {slice_n}")
 
-        ball = slices[slice_n].physics.location
-        self.ball_location = Vector(ball.x, ball.y, ball.z)
+            ball = slices[slice_n].physics.location
+            self.ball_location = Vector(ball.x, ball.y, ball.z)
 
-        # Once take-off starts, keep the original jump-time estimate; only
-        # refresh the moving ball target. Before take-off, recalculate it.
-        if not self.jumping:
-            needed_jump_time = virxrlcu.get_jump_time(
+            self.needed_jump_time = virxrlcu.get_jump_time(
                 ball.z - agent.me.location.z,
                 agent.me.velocity.z,
                 agent.gravity.z
             )
-            if (
-                needed_jump_time is None
-                or not math.isfinite(needed_jump_time)
-                or needed_jump_time < 0
-            ):
-                needed_jump_time = float("inf")
-            self.needed_jump_time = needed_jump_time
 
         # Always aim the contact toward the opponent's goal.
         # Never use car-to-ball direction as the shot direction:
@@ -3053,19 +3023,10 @@ class jump_shot:
             - self.shot_vector * agent.best_shot_value
         )
         contact_target = getattr(self, "contact_approach_target", None)
-        contact_normal = getattr(self, "contact_normal", None)
-
-        if contact_normal is not None:
-            # Rebuild the selected surface approach from the latest predicted
-            # ball position instead of chasing the stale finder-time location.
-            self.offset_target = (
-                self.ball_location
-                + contact_normal * max(120, agent.best_shot_value)
-            )
-        elif contact_target is not None:
+    
+        if contact_target is not None:
             self.offset_target = contact_target.copy()
 
-        if contact_normal is not None or contact_target is not None:
             contact_point = getattr(self, "contact_point", None)
             contact_label = getattr(self, "contact_label", "unknown")
 
@@ -3085,6 +3046,7 @@ class jump_shot:
         )
         agent.sphere(self.ball_location, 92.75)
 
+        car_to_ball = self.ball_location - agent.me.location
         final_target = self.offset_target.copy().flatten()
         Tj = T - self.needed_jump_time * 1.15
         agent.dbg_2d(f"Needed jump time: {round(self.needed_jump_time, 2)}")
@@ -3099,10 +3061,8 @@ class jump_shot:
 
         distance_remaining = final_target.flat_dist(agent.me.location)
 
-        # Keep the final approach inside the playable field, then recalculate
-        # distance from the adjusted point rather than using the stale value.
+        # Some adjustment to the final target to ensure it's inside the field and we don't try to drive through any goalposts or walls to reach it (again)
         final_target = cap_in_field(agent, final_target)
-        distance_remaining = final_target.flat_dist(agent.me.location)
         local_final_target = agent.me.local_location(final_target)
 
         # whether we should go forwards or backwards
@@ -3116,17 +3076,8 @@ class jump_shot:
 
         vf = agent.me.velocity + agent.gravity * T
 
-        if agent.me.airborne:
-            # In the air, use forward distance only. A target behind the car
-            # must never turn the jump-shot drive command into reverse throttle.
-            distance_remaining = agent.me.local_location(
-                self.offset_target
-            ).x
-
-        distance_remaining = max(
-            0.0,
-            distance_remaining - agent.me.hitbox.length / 3
-        )
+        distance_remaining = agent.me.local_location(self.offset_target).x if agent.me.airborne else distance_remaining
+        distance_remaining -= agent.me.hitbox.length / 3
         speed_required = distance_remaining / time_remaining
         agent.dbg_2d(f"Speed required: {round(speed_required, 2)}")
 
@@ -3174,7 +3125,7 @@ class jump_shot:
                 and current_forward_speed > 700
             )
 
-            drive_speed = max(0.0, speed_required * direction)
+            drive_speed = speed_required * direction
 
             if power_dodge_window and direction == 1:
                 # Still slow down if we're substantially too fast, but don't allow
@@ -3182,29 +3133,14 @@ class jump_shot:
                 minimum_final_speed = min(current_forward_speed, 1200)
                 drive_speed = max(drive_speed, minimum_final_speed)
 
-            velocity = defaultDrive(
-                agent, drive_speed, local_final_target
-            )[1]
+            velocity = defaultDrive(agent, drive_speed, local_final_target)[1]
 
-            if agent.controller.throttle < 0:
-                if not self._reverse_throttle_logged:
-                    print(
-                        f"[JUMP SHOT DRIVE] blocked reverse throttle "
-                        f"raw={agent.controller.throttle:.2f} "
-                        f"target_x={local_final_target.x:.0f} "
-                        f"T={T:.3f}",
-                        flush=True
-                    )
-                    self._reverse_throttle_logged = True
-                agent.controller.throttle = 0
-
-            velocity = max(1.0, velocity)
+            if velocity == 0:
+                velocity = 1
 
             local_offset_target = agent.me.local_location(self.offset_target.flatten())
             local_vf = agent.me.local(vf.flatten())
-            time = distance_remaining / max(
-                1.0, velocity + dodge_impulse(agent)
-            )
+            time = distance_remaining / (velocity + dodge_impulse(agent))
 
 
             if ((abs(velocity) < 100 and distance_remaining < agent.me.hitbox.length / 2) or (abs(local_offset_target.y) < 92 and direction * local_vf.x >= direction * (local_offset_target.x - agent.me.hitbox.length / 3) and direction * local_offset_target.x > 0)) and T <= self.needed_jump_time * 1.08:
@@ -3247,6 +3183,15 @@ class jump_shot:
                     agent.push(wave_dash(agent.me.local_location(self.offset_target)))
                 else:
                     agent.push(flip(agent.me.local_location(self.offset_target)))
+            elif (
+                agent.boost_amount != 'unlimited'
+                and direction == -1
+                and distance_remaining > 2560
+                and velocity < 200
+                and time >= self.needed_jump_time * 1.15 + 2
+                and agent.me.local_location(agent.ball.location).x < -250
+            ):
+                agent.push(flip(agent.me.local_location(self.offset_target), True))
         else:
             if self.jump_time == -1:
                 self.jump_time = agent.time
@@ -3260,6 +3205,7 @@ class jump_shot:
                 vf += agent.me.up * jump_speed
                 xf += agent.me.up * jump_speed * T
 
+            hf = vf.z
             vf += agent.me.up * jump_acc * tau
             xf += agent.me.up * jump_acc * tau * (T - 0.5 * tau)
 
@@ -3275,38 +3221,31 @@ class jump_shot:
                 local_ball = agent.me.local_location(self.ball_location)
                 defaultPD(agent, local_ball.flatten())
 
-                # Do not command positive pitch while the jump button is
-                # held. In Rocket League that is a backwards-dodge input once
-                # the first jump's dodge becomes available, which caused the
-                # unwanted backflip immediately before contact.
+                ball_is_airborne = self.ball_location.z > 130
+                ball_is_above_car = self.ball_location.z > agent.me.location.z + 65
+                hold_s = ball_is_airborne and ball_is_above_car
+
+                if hold_s:
+                    agent.controller.pitch = 1
+
                 if not self._orientation_logged:
                     print(
                         f"[JUMP SHOT ORIENT] T={T:.3f} "
                         f"ball_z={self.ball_location.z:.0f} "
                         f"car_z={agent.me.location.z:.0f} "
-                        f"pitch=PD counter={self.counter}",
+                        f"hold_S={hold_s} counter={self.counter}",
                         flush=True
                     )
                     self._orientation_logged = True
 
-            if (
-                direction == 1
-                and T > 1 / 120
-                and abs(agent.me.forward.dot(d_direction)) > 0.5
-                and self.counter < 3
-            ):
-                control_time = max(T, 1 / 120)
-                delta_v = delta_x.dot(agent.me.forward) / control_time
+            if direction == 1 and abs(agent.me.forward.dot(d_direction)) > 0.5 and self.counter < 3:
+                delta_v = delta_x.dot(agent.me.forward) / T
                 if agent.me.boost > 0 and delta_v >= agent.boost_accel * min_boost_time:
                     agent.controller.boost = True
                     delta_v -= agent.boost_accel * min_boost_time
 
-                if delta_v > throttle_accel * min_boost_time:
-                    agent.controller.throttle = cap(
-                        delta_v / (throttle_accel * min_boost_time),
-                        0,
-                        1
-                    )
+                if abs(delta_v) > throttle_accel * min_boost_time:
+                    agent.controller.throttle = cap(delta_v / (throttle_accel * min_boost_time), -1, 1)
 
             
             # Advance through the jump sequence without getting stuck
@@ -3346,20 +3285,10 @@ class jump_shot:
                 if close_enough and local_target.x > 0:
                     dodge_direction = local_target.normalize()
 
-                    # Forward dodge only: require a clearly forward
-                    # local target and never let the pitch sign reverse.
-                    dodge_pitch = -max(0.35, dodge_direction.x)
-                    agent.controller.pitch = dodge_pitch
+                    agent.controller.pitch = -dodge_direction.x
                     agent.controller.yaw = dodge_direction.y
                     agent.controller.jump = True
 
-                    print(
-                        f"[JUMP SHOT DODGE] FORWARD "
-                        f"local=({local_target.x:.1f},{local_target.y:.1f}) "
-                        f"pitch={dodge_pitch:.2f} "
-                        f"distance={agent.me.location.dist(self.offset_target):.1f}",
-                        flush=True
-                    )
                     agent.last_flip_time = agent.time
                     self.dodging = True
                     self.counter = 4
@@ -3399,35 +3328,21 @@ class jump_shot:
                 agent.push(ball_recovery())
                 return
 
-            # Hold jump for the initial impulse, then only while the car's
-            # actual height is still below the planned contact height. The
-            # previous code compared vertical velocity (hf) with world Z.
+            # Hold jump long enough to reliably leave the ground.
+            # The old hf <= offset_target.z check compared vertical
+            # velocity against world height and could release jump too early.
             minimum_jump_hold = 0.06
-            below_contact_height = (
-                agent.me.location.z < self.offset_target.z - 15
-            )
 
             if (
                 jump_elapsed <= jump_max_duration
                 and (
                     jump_elapsed <= minimum_jump_hold
-                    or below_contact_height
+                    or hf <= self.offset_target.z
                 )
             ):
                 agent.controller.jump = True
             elif self.counter < 3:
                 self.counter += 1
-
-        if agent.controller.throttle < 0:
-            if not self._reverse_throttle_logged:
-                print(
-                    f"[JUMP SHOT DRIVE] blocked reverse throttle "
-                    f"raw={agent.controller.throttle:.2f} "
-                    f"T={T:.3f} jumping={self.jumping}",
-                    flush=True
-                )
-                self._reverse_throttle_logged = True
-            agent.controller.throttle = 0
 
         l_vf = vf + agent.me.location
         agent.line(l_vf-Vector(z=100), l_vf+Vector(z=100), agent.renderer.red)
@@ -3736,8 +3651,6 @@ class power_clear:
         self.initial_ball_z = 0
         self.contact_time = -1
         self.debug_approach_printed = False
-        self.last_aerial_search_time = -999.0
-        self.last_phase2_debug_time = -999.0
 
     def run(self, agent: VirxERLU):
         ball = agent.ball
@@ -3840,23 +3753,16 @@ class power_clear:
         if self.phase == 2:
             elapsed = agent.time - self.contact_time
 
-            if agent.time - self.last_phase2_debug_time >= 0.25:
-                print(
-                    f"[POWER CLEAR] PHASE 2 | "
-                    f"z={ball_location.z:.1f} | "
-                    f"vz={ball_velocity.z:.1f} | "
-                    f"elapsed={elapsed:.2f}s",
-                    flush=True
-                )
-                self.last_phase2_debug_time = agent.time
+            print(
+                f"[POWER CLEAR] PHASE 2 | "
+                f"z={ball_location.z:.1f} | "
+                f"vz={ball_velocity.z:.1f} | "
+                f"elapsed={elapsed:.2f}s",
+                flush=True
+            )
 
-            # Start looking sooner after the pop, but don't rerun the full
-            # prediction search on every physics packet.
-            if (
-                (ball_location.z > 140 or ball_velocity.z > 100)
-                and agent.time - self.last_aerial_search_time >= 0.12
-            ):
-                self.last_aerial_search_time = agent.time
+            # Start looking sooner after the pop.
+            if ball_location.z > 140 or ball_velocity.z > 100:
                 from util import tools
 
                 print("[POWER CLEAR] TRYING TO FIND AERIAL", flush=True)
