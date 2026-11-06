@@ -3094,8 +3094,8 @@ class WallShot:
         Party Cannon AerialShot rule: if its 155-unit approach point is less
         than 50 units from a wall, make the shot direction flatter to it.
         """
-        distance, axis, plane, normal = cls.nearest_wall(ball_location)
         target = ball_location - shot_direction * 155
+        distance, axis, plane, normal = cls.nearest_wall(target)
         target_surface = cls.surface_point(target, axis, plane)
         target_height = (target - target_surface).dot(normal)
 
