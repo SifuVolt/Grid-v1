@@ -1,6 +1,91 @@
-from util.routines import Aerial, double_jump, ground_shot, jump_shot, side_shot, virxrlcu
+from util.routines import Aerial, double_jump, ground_shot, jump_shot, side_shot, virxrlcu, wall_approach
 from util.utils import Vector, math, side, cap
 from util.grid_double_jump import find_double_jump as grid_find_double_jump
+
+
+
+def find_wall_drive(agent, cap_=2.5):
+    """Find a reachable side-wall touch without treating wall driving as aerial."""
+    car = agent.me
+    on_side_wall = (
+        abs(car.location.x) > 3500
+        and abs(car.up.x) > 0.65
+        and car.up.x * car.location.x < 0
+    )
+
+    # airborne is also true for a car attached to a vertical wall.
+    # Reject free-flight cars, but allow a car whose local up vector proves
+    # that it is actually attached to the side wall.
+    if car.airborne and not on_side_wall:
+        return None
+
+    prediction = getattr(agent, "ball_prediction_struct", None)
+    slices = getattr(prediction, "slices", None) if prediction is not None else None
+    if not slices:
+        return None
+
+    ball = agent.ball.location
+    if abs(ball.x) < 3250 or ball.z < 210:
+        return None
+    if agent.ball.velocity.z < -420 and ball.z < 520:
+        return None
+
+    speed = math.hypot(car.velocity.x, car.velocity.y)
+    effective_speed = max(1050.0, min(1950.0, speed + 650.0))
+    best = None
+    max_index = min(len(slices), int(cap_ * 120))
+
+    for index in range(12, max_index):
+        ball_slice = slices[index]
+        physics = ball_slice.physics
+        loc = physics.location
+        vel = physics.velocity
+
+        if abs(loc.x) < 3350 or not 230 <= loc.z <= 1750:
+            continue
+        if vel.z < -520 and loc.z < 550:
+            continue
+
+        intercept_in = ball_slice.game_seconds - agent.time
+        if intercept_in <= 0:
+            continue
+
+        wall_side = 1 if loc.x >= 0 else -1
+        target = Vector(wall_side * 3850, loc.y, max(100.0, loc.z))
+        delta = target - car.location
+        distance = delta.magnitude()
+
+        facing = 0.0
+        flat_delta = delta.flatten()
+        flat_forward = car.forward.flatten()
+        if flat_delta.magnitude() > 1 and flat_forward.magnitude() > 1:
+            facing = max(
+                -1.0,
+                min(1.0, flat_forward.normalize().dot(flat_delta.normalize()))
+            )
+
+        eta = (
+            distance / effective_speed
+            + max(0.0, 1.0 - facing) * 0.30
+            + 0.12
+        )
+        if eta > intercept_in - 0.08:
+            continue
+
+        score = intercept_in + eta * 0.20
+        if best is None or score < best[0]:
+            best = (score, intercept_in, loc.x, loc.y, loc.z)
+
+    if best is None:
+        return None
+
+    _, intercept_in, x, y, z = best
+    print(
+        f"[WALL DRIVE FIND] airborne={car.airborne} wall={on_side_wall} "
+        f"intercept={intercept_in:.2f}s ball=({x:.0f},{y:.0f},{z:.0f})",
+        flush=True
+    )
+    return wall_approach(agent.time + intercept_in, agent.foe_goal_shot)
 
 
 def find_ground_shot(agent, target, cap_=6):
