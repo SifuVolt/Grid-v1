@@ -703,44 +703,85 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             best_shot["fast"]
         )
     elif best_shot["shot_type"] == 1:
-        # Side shots are only considered in the opponent's half and only
-        # when the car can reach the moving lateral setup point with time
-        # left to perform the jump and dodge.
-        goal_center = Vector(
-            (best_targets[0][0] + best_targets[1][0]) * 0.5,
-            (best_targets[0][1] + best_targets[1][1]) * 0.5,
-            (best_targets[0][2] + best_targets[1][2]) * 0.5
+        # A side shot is a goal-line correction, not a half-field choice.
+        # Project the rolling ball to the opponent goal line and only use
+        # the side dodge when its path would pass outside a post.
+        intercept_slice = min(
+            slices,
+            key=lambda s: abs(s.game_seconds - best_intercept_time)
         )
-        shot_direction = (goal_center - best_ball_location).flatten().normalize()
-        left_of_shot = Vector(
-            -shot_direction.y, shot_direction.x, 0
-        ).normalize()
-        lateral_distance = agent.me.location.flat_dist(
-            best_ball_location
-        ) * 0.5
-        side_setup = best_ball_location - left_of_shot * lateral_distance
-        side_setup_distance = agent.me.location.flat_dist(side_setup)
-        side_setup_speed = max(
-            1000,
-            min(1700, agent.me.velocity.flatten().magnitude() + 500)
+        ball_velocity = Vector(
+            intercept_slice.physics.velocity.x,
+            intercept_slice.physics.velocity.y,
+            intercept_slice.physics.velocity.z
         )
-        side_setup_time = side_setup_distance / side_setup_speed
-        opponent_half = best_ball_location.y * side(agent.team) > 0
-        if (
-            opponent_half
-            and time_to_intercept > side_setup_time + 0.35
-            and abs(side_setup.x) < 3900
-            and abs(side_setup.y) < 4900
-        ):
-            routine = side_shot(best_intercept_time, best_targets)
-            print(
-                f"[SHOT PLANNER] selected side_shot "
-                f"T={time_to_intercept:.2f} "
-                f"setup_distance={side_setup_distance:.0f} "
-                f"travel_estimate={side_setup_time:.2f}",
-                flush=True
+        left_post_x = min(best_targets[0][0], best_targets[1][0])
+        right_post_x = max(best_targets[0][0], best_targets[1][0])
+        goal_y = (best_targets[0][1] + best_targets[1][1]) * 0.5
+        time_to_goal_line = (
+            (goal_y - best_ball_location.y) / ball_velocity.y
+            if abs(ball_velocity.y) > 150 else -1
+        )
+        projected_goal_x = (
+            best_ball_location.x + ball_velocity.x * time_to_goal_line
+            if 0 < time_to_goal_line <= 2.5 else None
+        )
+        rolling_toward_goal = (
+            best_ball_location.z <= 260
+            and ball_velocity.flatten().magnitude() >= 300
+            and 0 < time_to_goal_line <= 2.5
+        )
+        approach_side = None
+        if rolling_toward_goal and projected_goal_x is not None:
+            if projected_goal_x > right_post_x - 92.75:
+                approach_side = "right"
+            elif projected_goal_x < left_post_x + 92.75:
+                approach_side = "left"
+
+        side_shot_selected = False
+        if approach_side is not None:
+            goal_center = Vector(
+                (best_targets[0][0] + best_targets[1][0]) * 0.5,
+                goal_y,
+                (best_targets[0][2] + best_targets[1][2]) * 0.5
             )
-        else:
+            shot_direction = (goal_center - best_ball_location).flatten().normalize()
+            left_of_shot = Vector(
+                -shot_direction.y, shot_direction.x, 0
+            ).normalize()
+            lateral_distance = agent.me.location.flat_dist(
+                best_ball_location
+            ) * 0.5
+            side_sign = 1 if approach_side == "right" else -1
+            side_setup = (
+                best_ball_location
+                - left_of_shot * lateral_distance * side_sign
+            )
+            side_setup_distance = agent.me.location.flat_dist(side_setup)
+            side_setup_speed = max(
+                1000,
+                min(1700, agent.me.velocity.flatten().magnitude() + 500)
+            )
+            side_setup_time = side_setup_distance / side_setup_speed
+            if (
+                time_to_intercept > side_setup_time + 0.35
+                and abs(side_setup.x) < 3900
+                and abs(side_setup.y) < 4900
+            ):
+                routine = side_shot(
+                    best_intercept_time, best_targets, approach_side
+                )
+                side_shot_selected = True
+                print(
+                    f"[SHOT PLANNER] selected {approach_side} side_shot "
+                    f"projected_x={projected_goal_x:.0f} "
+                    f"T={time_to_intercept:.2f} "
+                    f"setup_distance={side_setup_distance:.0f} "
+                    f"travel_estimate={side_setup_time:.2f}",
+                    flush=True
+                )
+
+        if not side_shot_selected:
             routine = jump_shot(best_intercept_time, best_targets)
     else:
         shot_routines = [ground_shot, jump_shot, double_jump]
@@ -962,42 +1003,80 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
         )
 
     if best_shot['shot_type'] == 1:
-        # With no explicit target, use the opponent goal centre as the
-        # intended shot direction when evaluating the lateral setup.
-        shot_direction = Vector(
-            0,
-            side(agent.team),
-            0
+        # Even without a supplied target, use the real opponent goal posts.
+        intercept_slice = min(
+            slices,
+            key=lambda s: abs(s.game_seconds - best_intercept_time)
         )
-        left_of_shot = Vector(
-            -shot_direction.y, shot_direction.x, 0
-        ).normalize()
-        lateral_distance = agent.me.location.flat_dist(
-            best_ball_location
-        ) * 0.5
-        side_setup = best_ball_location - left_of_shot * lateral_distance
-        side_setup_distance = agent.me.location.flat_dist(side_setup)
-        side_setup_speed = max(
-            1000,
-            min(1700, agent.me.velocity.flatten().magnitude() + 500)
+        ball_velocity = Vector(
+            intercept_slice.physics.velocity.x,
+            intercept_slice.physics.velocity.y,
+            intercept_slice.physics.velocity.z
         )
-        side_setup_time = side_setup_distance / side_setup_speed
-        opponent_half = best_ball_location.y * side(agent.team) > 0
-        if (
-            opponent_half
-            and time_to_intercept > side_setup_time + 0.35
-            and abs(side_setup.x) < 3900
-            and abs(side_setup.y) < 4900
-        ):
-            routine = side_shot(best_intercept_time)
-            print(
-                f"[SHOT PLANNER] selected untargeted side_shot "
-                f"T={time_to_intercept:.2f} "
-                f"setup_distance={side_setup_distance:.0f} "
-                f"travel_estimate={side_setup_time:.2f}",
-                flush=True
+        goal_posts = agent.foe_goal_shot
+        left_post_x = min(goal_posts[0][0], goal_posts[1][0])
+        right_post_x = max(goal_posts[0][0], goal_posts[1][0])
+        goal_y = (goal_posts[0][1] + goal_posts[1][1]) * 0.5
+        time_to_goal_line = (
+            (goal_y - best_ball_location.y) / ball_velocity.y
+            if abs(ball_velocity.y) > 150 else -1
+        )
+        projected_goal_x = (
+            best_ball_location.x + ball_velocity.x * time_to_goal_line
+            if 0 < time_to_goal_line <= 2.5 else None
+        )
+        rolling_toward_goal = (
+            best_ball_location.z <= 260
+            and ball_velocity.flatten().magnitude() >= 300
+            and 0 < time_to_goal_line <= 2.5
+        )
+        approach_side = None
+        if rolling_toward_goal and projected_goal_x is not None:
+            if projected_goal_x > right_post_x - 92.75:
+                approach_side = "right"
+            elif projected_goal_x < left_post_x + 92.75:
+                approach_side = "left"
+
+        if approach_side is not None:
+            shot_direction = Vector(
+                0,
+                side(agent.team),
+                0
             )
-            return routine
+            left_of_shot = Vector(
+                -shot_direction.y, shot_direction.x, 0
+            ).normalize()
+            lateral_distance = agent.me.location.flat_dist(
+                best_ball_location
+            ) * 0.5
+            side_sign = 1 if approach_side == "right" else -1
+            side_setup = (
+                best_ball_location
+                - left_of_shot * lateral_distance * side_sign
+            )
+            side_setup_distance = agent.me.location.flat_dist(side_setup)
+            side_setup_speed = max(
+                1000,
+                min(1700, agent.me.velocity.flatten().magnitude() + 500)
+            )
+            side_setup_time = side_setup_distance / side_setup_speed
+            if (
+                time_to_intercept > side_setup_time + 0.35
+                and abs(side_setup.x) < 3900
+                and abs(side_setup.y) < 4900
+            ):
+                routine = side_shot(
+                    best_intercept_time, approach_side=approach_side
+                )
+                print(
+                    f"[SHOT PLANNER] selected untargeted {approach_side} "
+                    f"side_shot projected_x={projected_goal_x:.0f} "
+                    f"T={time_to_intercept:.2f} "
+                    f"setup_distance={side_setup_distance:.0f} "
+                    f"travel_estimate={side_setup_time:.2f}",
+                    flush=True
+                )
+                return routine
 
     shot_switch = [
         ground_shot,
