@@ -1607,44 +1607,52 @@ class Bot(VirxERLU):
                     )
                     return
 
+        # The active routine is the last stack entry; stack[0] is the
+        # underlying/base routine when a flip or recovery is nested on top.
+        active_routine_name = (
+            self.stack[-1].__class__.__name__
+            if not self.is_clear()
+            else None
+        )
+
         # Keep a started half-flip intact until its own routine finishes.
-        if current_name == "half_flip":
+        if active_routine_name == "half_flip":
             return
 
-        if (
-            self.should_defensive_aerial()
-            and not (current_name == "jump_shot" and self.me.airborne)
-        ):
-            if current_name == "Aerial":
+        if self.should_defensive_aerial():
+            # A jump_shot's own lift-off is not a new aerial opportunity.
+            # Also preserve a mechanical routine already running on top.
+            if current_name == "jump_shot" and self.me.airborne:
+                pass
+            elif current_name == "Aerial" or active_routine_name == "Aerial":
                 return
+            else:
+                protected = {
+                    "flip",
+                    "half_flip",
+                    "recovery",
+                    "wave_dash",
+                    "speed_flip",
+                    "speedflip_kickoff"
+                }
 
-            # Don't interrupt an active flip or recovery.
-            protected = {
-                "flip",
-                "half_flip",
-                "recovery",
-                "wave_dash",
-                "speed_flip",
-                "speedflip_kickoff"
-            }
+                if active_routine_name not in protected:
+                    left_post = self.friend_goal.left_post
+                    right_post = self.friend_goal.right_post
 
-            if current_name not in protected:
-                left_post = self.friend_goal.left_post
-                right_post = self.friend_goal.right_post
+                    goal_width_direction = (
+                        right_post - left_post
+                    ).normalize()
+                    anti_target = (
+                        self.friend_goal.right_post,
+                        self.friend_goal.left_post
+                    )
+                    aerial = tools.find_aerial(self, anti_target)
 
-                goal_width_direction = (
-                    right_post - left_post
-                ).normalize()
-                anti_target = (
-                    self.friend_goal.right_post,
-                    self.friend_goal.left_post
-                )
-                aerial = tools.find_aerial(self, anti_target)
-
-                if aerial is not None:
-                    self.clear()
-                    self.push(aerial)
-                    return
+                    if aerial is not None:
+                        self.clear()
+                        self.push(aerial)
+                        return
 
         
 
@@ -1915,6 +1923,21 @@ class Bot(VirxERLU):
             return
 
     
+        # Do not let a newly discovered shot replace a flip/recovery that
+        # is already executing as a nested routine.
+        active_routine_name = (
+            self.stack[-1].__class__.__name__
+            if not self.is_clear()
+            else None
+        )
+        if active_routine_name in {
+            "flip", "half_flip", "recovery", "wave_dash",
+            "speed_flip", "speedflip_kickoff"
+        }:
+            return
+        if active_routine_name == "Aerial" and self.me.airborne:
+            return
+
         # Wall-shot attempt: only start from a clear stack so we don't
         # interrupt kickoff, recovery, defence, or an existing shot.
 
