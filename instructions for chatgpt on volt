@@ -66,78 +66,6 @@ class Bot(VirxERLU):
 
 
         # NOTE If you want to shoot the ball anywhere BUT between to targets, then make a tuple like (right_target, left_target) - I call this an anti-target
-    def find_wall_drive(self):
-        """Return a reachable drive-up-the-side-wall interception, if one exists."""
-        car = self.me
-        if car.airborne:
-            return None
-
-        prediction = getattr(self, "ball_prediction_struct", None)
-        slices = getattr(prediction, "slices", None) if prediction is not None else None
-        if not slices:
-            return None
-
-        ball = self.ball.location
-        if abs(ball.x) < 3250 or ball.z < 210:
-            return None
-        if self.ball.velocity.z < -420 and ball.z < 520:
-            return None
-
-        speed = math.hypot(car.velocity.x, car.velocity.y)
-        effective_speed = max(1050.0, min(1950.0, speed + 650.0))
-        best = None
-
-        # Search up to 2.5 seconds ahead for a ball that stays on the side wall.
-        for index in range(12, min(len(slices), 300)):
-            physics = slices[index].physics
-            loc = physics.location
-            vel = physics.velocity
-
-            if abs(loc.x) < 3350 or not 230 <= loc.z <= 1750:
-                continue
-            if vel.z < -520 and loc.z < 550:
-                continue
-
-            intercept_in = index / 120.0
-            wall_side = 1 if loc.x >= 0 else -1
-            target = Vector(wall_side * 3850, loc.y, max(100.0, loc.z))
-            delta = target - car.location
-            distance = delta.magnitude()
-
-            facing = 0.0
-            flat_delta = delta.flatten()
-            flat_forward = car.forward.flatten()
-            if flat_delta.magnitude() > 1 and flat_forward.magnitude() > 1:
-                facing = max(
-                    -1.0,
-                    min(1.0, flat_forward.normalize().dot(flat_delta.normalize()))
-                )
-
-            eta = (
-                distance / effective_speed
-                + max(0.0, 1.0 - facing) * 0.30
-                + 0.12
-            )
-            if eta > intercept_in - 0.08:
-                continue
-
-            score = intercept_in + eta * 0.20
-            if best is None or score < best[0]:
-                best = (score, intercept_in, loc.x, loc.y, loc.z)
-
-        if best is None:
-            return None
-
-        _, intercept_in, x, y, z = best
-        print(
-            f"[WALL DRIVE FIND] intercept={intercept_in:.2f}s "
-            f"ball=({x:.0f},{y:.0f},{z:.0f})",
-            flush=True
-        )
-        return routines.wall_approach(
-            self.time + intercept_in, self.foe_goal_shot
-        )
-
     def _cars(self):
         return [self.me] + list(self.friends)
     def should_prejump_defensive_read(self):
@@ -1262,6 +1190,15 @@ class Bot(VirxERLU):
                 self.push(routines.goto_boost(closest_boost))
 
 
+        # A selected wall-drive is a committed surface-driving action.
+        # Keep it alive until its own routine ends; teamplay/shot selection
+        # must not replace it on the next packet.
+        if (
+            not self.is_clear()
+            and self.stack[0].__class__.__name__ == "wall_approach"
+        ):
+            return
+
         # Share and compare shot opportunities with teammates.
         self.update_teamplay()
 
@@ -1911,14 +1848,18 @@ class Bot(VirxERLU):
                 or self.defensive_emergency()
             )
             if wall_allowed:
-                wall_drive = self.find_wall_drive()
+                wall_drive = tools.find_wall_drive(self)
                 if wall_drive is not None:
                     shot = wall_drive
 
             if shot is not None:
-                should_commit = self.should_commit_to_shot(
-                    self.teamplay_score,
-                    self.teamplay_contact_time
+                is_wall_drive = shot.__class__.__name__ == "wall_approach"
+                should_commit = (
+                    is_wall_drive
+                    or self.should_commit_to_shot(
+                        self.teamplay_score,
+                        self.teamplay_contact_time
+                    )
                 )
 
                 if not should_commit:
@@ -2005,7 +1946,7 @@ class Bot(VirxERLU):
 
             # Prefer a reachable wall drive over waiting for a later ground shot.
             wall_drive = (
-                self.find_wall_drive()
+                tools.find_wall_drive(self)
                 if can_take_first_challenge
                 else None
             )
