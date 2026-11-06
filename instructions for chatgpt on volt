@@ -539,7 +539,7 @@ class Bot(VirxERLU):
     
     def one_v_one_urgent_clear(self):
         """Return True when a goal-bound ball or committed opponent needs an immediate clear."""
-        if self.friends or not self.foes:
+        if self.friends:
             return False
 
         ball = self.ball.location
@@ -564,7 +564,12 @@ class Bot(VirxERLU):
         goal_z = ball.z
         if math.isfinite(goal_eta) and goal_eta <= 3.0:
             goal_x += velocity.x * goal_eta
-            goal_z += velocity.z * goal_eta + 0.5 * self.gravity.z * goal_eta * goal_eta
+            if ball.z < 150 and abs(velocity.z) < 120:
+                # A rolling ball stays on the floor; free-fall gravity must
+                # not project it through the ground before the goal line.
+                goal_z = ball.z + velocity.z * goal_eta
+            else:
+                goal_z += velocity.z * goal_eta + 0.5 * self.gravity.z * goal_eta * goal_eta
 
         # Include a small margin around the posts. A low projected crossing is
         # an emergency even when the ball is not yet close to the goal mouth.
