@@ -1072,11 +1072,9 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
                 approach_side = "right"
 
         if approach_side is not None:
-            shot_direction = Vector(
-                0,
-                side(agent.team),
-                0
-            )
+            shot_direction = (
+                goal_center - best_ball_location
+            ).flatten().normalize()
             left_of_shot = Vector(
                 -shot_direction.y, shot_direction.x, 0
             ).normalize()
