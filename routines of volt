@@ -3513,22 +3513,10 @@ class ground_shot:
         direction = (self.ball_location - agent.me.location).normalize()
         if self.goal_aim_point is None:
             self.goal_aim_point = _relative_goal_aim_point(agent, self.targets)
-        # Use the same goal-centre aim and shot-vector calculation as jump_shot.
-        target_center = self.goal_aim_point
         self.shot_vector = (
-            target_center - self.ball_location
+            self.goal_aim_point - self.ball_location
         ).flatten().normalize()
-        self.offset_target = (
-            self.ball_location
-            - self.shot_vector * agent.best_shot_value
-        )
-        print(
-            f"[GROUND SHOT AIM FIX] "
-            f"ball=({self.ball_location.x:.0f},{self.ball_location.y:.0f}) "
-            f"target=({target_center.x:.0f},{target_center.y:.0f}) "
-            f"shot_dir=({self.shot_vector.x:.2f},{self.shot_vector.y:.2f})",
-            flush=True
-        )
+        self.offset_target = self.ball_location - (self.shot_vector * agent.best_shot_value)
         contact_label = getattr(self, "contact_label", None)
         refreshed_contact = _contact_approach_from_label(
             self.ball_location,
