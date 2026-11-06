@@ -3159,10 +3159,9 @@ class jump_shot:
         Tj = T - self.needed_jump_time * 1.15
         agent.dbg_2d(f"Needed jump time: {round(self.needed_jump_time, 2)}")
 
-        if Tj > 0 and self.targets is not None:
-            # whether we are to the left or right of the shot vector
-            # Choose a flank route only when our current approach is poorly
-            # aligned. This offset fades away before the jump/contact.
+        if Tj > 0 and self.targets is not None and not self.side_mode:
+            # Normal jump shots may use the generic flank route. A side shot
+            # must preserve its deliberately selected lateral setup point.
             final_target = _shot_approach_target(
                 agent, self.ball_location, final_target, self.shot_vector, Tj
             )
