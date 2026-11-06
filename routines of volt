@@ -2990,6 +2990,7 @@ class jump_shot:
         self.jump_time = -1
         self.needed_jump_time = -1
         self._orientation_logged = False
+        self.quick_shot = False
         self.patience = shot_patience()
 
     def update(self, shot):
@@ -3214,7 +3215,12 @@ class jump_shot:
 
 
             if ((abs(velocity) < 100 and distance_remaining < agent.me.hitbox.length / 2) or (abs(local_offset_target.y) < 92 and direction * local_vf.x >= direction * (local_offset_target.x - agent.me.hitbox.length / 3) and direction * local_offset_target.x > 0)) and T <= self.needed_jump_time * 1.08:
+                self.quick_shot = T <= 0.45
                 self.jumping = True
+                print(
+                    f"[JUMP SHOT TYPE] quick={self.quick_shot} T={T:.3f}",
+                    flush=True
+                )
             elif T <= self.needed_jump_time or (
                 Tj > 0
                 and distance_remaining > 50
@@ -3293,7 +3299,11 @@ class jump_shot:
 
                 ball_is_airborne = self.ball_location.z > 130
                 ball_is_above_car = self.ball_location.z > agent.me.location.z + 65
-                hold_s = ball_is_airborne and ball_is_above_car
+                hold_s = (
+                    ball_is_airborne
+                    and ball_is_above_car
+                    and not self.quick_shot
+                )
 
                 if hold_s:
                     agent.controller.pitch = 1
@@ -3353,7 +3363,12 @@ class jump_shot:
                 )
 
                 if close_enough and local_target.x > 0:
-                    dodge_direction = local_target.normalize()
+                    if self.quick_shot:
+                        # There is no time for the backwards S-tilt first.
+                        # Commit directly to a straight forward flip.
+                        dodge_direction = Vector(x=1)
+                    else:
+                        dodge_direction = local_target.normalize()
 
                     agent.controller.pitch = -dodge_direction.x
                     agent.controller.yaw = dodge_direction.y
@@ -3498,10 +3513,22 @@ class ground_shot:
         direction = (self.ball_location - agent.me.location).normalize()
         if self.goal_aim_point is None:
             self.goal_aim_point = _relative_goal_aim_point(agent, self.targets)
+        # Use the same goal-centre aim and shot-vector calculation as jump_shot.
+        target_center = self.goal_aim_point
         self.shot_vector = (
-            self.goal_aim_point - self.ball_location
+            target_center - self.ball_location
         ).flatten().normalize()
-        self.offset_target = self.ball_location - (self.shot_vector * agent.best_shot_value)
+        self.offset_target = (
+            self.ball_location
+            - self.shot_vector * agent.best_shot_value
+        )
+        print(
+            f"[GROUND SHOT AIM FIX] "
+            f"ball=({self.ball_location.x:.0f},{self.ball_location.y:.0f}) "
+            f"target=({target_center.x:.0f},{target_center.y:.0f}) "
+            f"shot_dir=({self.shot_vector.x:.2f},{self.shot_vector.y:.2f})",
+            flush=True
+        )
         contact_label = getattr(self, "contact_label", None)
         refreshed_contact = _contact_approach_from_label(
             self.ball_location,
