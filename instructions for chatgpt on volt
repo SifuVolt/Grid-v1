@@ -1647,37 +1647,37 @@ class Bot(VirxERLU):
         
         # Give an incoming rolling ball priority over boost collection
         # and ordinary shot selection.
-        #if self.ball_rolling_toward_me():
-#
- #           current_name = (
-  #              self.stack[-1].__class__.__name__
-   #             if not self.is_clear()
-    #            else None
-     #       )
-#
- #           # Don't interrupt an action that must finish first.
-  #          protected = {
-   #             "flip",
-    #            "half_flip",
-     #           "recovery",
-      #          "wave_dash",
-       #         "speed_flip",
-        #        "speedflip_kickoff",
-         #       "Aerial",
-          #  }
+        if self.ball_rolling_toward_me():
 
-           # # Keep the existing power clear running.
-            #if current_name == "power_clear":
-             #   return
+            current_name = (
+                self.stack[-1].__class__.__name__
+                if not self.is_clear()
+                else None
+            )
+
+            # Don't interrupt an action that must finish first.
+            protected = {
+                "flip",
+                "half_flip",
+                "recovery",
+                "wave_dash",
+                "speed_flip",
+                "speedflip_kickoff",
+                "Aerial",
+            }
+
+            # Keep the existing power clear running.
+            if current_name == "power_clear":
+                return
 
             # Let protected routines finish.
-            #if current_name in protected:
-             #   return
+            if current_name in protected:
+               return
 
             # Interrupt boost collection, shadowing, or a normal shot.
-           # self.clear()
-           # self.push(routines.power_clear())
-           # return
+            self.clear()
+            self.push(routines.power_clear())
+            return
 
     
         # Wall-shot attempt: only start from a clear stack so we don't
