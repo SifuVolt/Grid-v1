@@ -65,13 +65,48 @@ def useful_non_aerial_shot(agent, ball_location, ball_velocity, shot, intercept_
 
     enemy_distance = closest_foe.location.flat_dist(ball_pos)
 
-    # Rough enemy arrival estimate.
-    enemy_speed = max(
-        1200,
-        closest_foe.velocity.flatten().magnitude()
-    )
+    # Approximate opponent reachability with heading correction, ground
+    # acceleration, boost reserve, and a speed cap. This remains a filter,
+    # not a full opponent physics simulation.
+    foe_velocity = closest_foe.velocity.flatten()
+    foe_speed = foe_velocity.magnitude()
+    foe_to_ball = (ball_pos - closest_foe.location).flatten()
+    approach_direction = foe_to_ball.normalize()
 
-    enemy_time = enemy_distance / enemy_speed
+    if approach_direction.magnitude() < 0.001:
+        enemy_time = 0.0
+    else:
+        forward = closest_foe.forward.flatten()
+        if forward.magnitude() < 0.001:
+            heading_error = math.pi
+        else:
+            heading_error = math.acos(cap(
+                forward.normalize().dot(approach_direction), -1, 1
+            ))
+
+        # Turns are slower at high speed; this deliberately errs slightly
+        # on the side of giving the opponent a realistic chance.
+        turn_rate = 2.0 if foe_speed > 1400 else 3.5
+        turn_time = heading_error / turn_rate
+
+        forward_speed = max(0.0, foe_velocity.dot(approach_direction))
+        boost = max(0.0, float(getattr(closest_foe, "boost", 0)))
+        acceleration = 900.0 + (650.0 if boost > 0 else 0.0)
+        max_speed = 2300.0
+        remaining_distance = max(0.0, enemy_distance - forward_speed * turn_time)
+        time_to_cap = max(0.0, (max_speed - forward_speed) / acceleration)
+        accel_distance = forward_speed * time_to_cap + 0.5 * acceleration * time_to_cap ** 2
+
+        if remaining_distance <= accel_distance:
+            discriminant = max(0.0, forward_speed ** 2 + 2 * acceleration * remaining_distance)
+            drive_time = (math.sqrt(discriminant) - forward_speed) / acceleration
+        else:
+            drive_time = time_to_cap + (remaining_distance - accel_distance) / max_speed
+
+        # Elevated contacts may be reachable with a jump, but jumping costs
+        # time; don't treat it as a free instant speed increase.
+        jump_adjustment = 0.12 if 180 < ball_pos.z < 650 else 0.0
+        enemy_time = turn_time + drive_time + jump_adjustment
 
     # Don't accept a shot where the opponent is likely to arrive first.
     if enemy_time + 0.35 < time_remaining:
