@@ -1,4 +1,4 @@
-from util.routines import Aerial, double_jump, ground_shot, jump_shot, virxrlcu
+from util.routines import Aerial, double_jump, ground_shot, jump_shot, side_shot, virxrlcu
 from util.utils import Vector, math, side, cap
 from util.grid_double_jump import find_double_jump as grid_find_double_jump
 
@@ -702,6 +702,46 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             best_targets,
             best_shot["fast"]
         )
+    elif best_shot["shot_type"] == 1:
+        # Side shots are only considered in the opponent's half and only
+        # when the car can reach the moving lateral setup point with time
+        # left to perform the jump and dodge.
+        goal_center = Vector(
+            (best_targets[0][0] + best_targets[1][0]) * 0.5,
+            (best_targets[0][1] + best_targets[1][1]) * 0.5,
+            (best_targets[0][2] + best_targets[1][2]) * 0.5
+        )
+        shot_direction = (goal_center - best_ball_location).flatten().normalize()
+        left_of_shot = Vector(
+            -shot_direction.y, shot_direction.x, 0
+        ).normalize()
+        lateral_distance = agent.me.location.flat_dist(
+            best_ball_location
+        ) * 0.5
+        side_setup = best_ball_location - left_of_shot * lateral_distance
+        side_setup_distance = agent.me.location.flat_dist(side_setup)
+        side_setup_speed = max(
+            1000,
+            min(1700, agent.me.velocity.flatten().magnitude() + 500)
+        )
+        side_setup_time = side_setup_distance / side_setup_speed
+        opponent_half = best_ball_location.y * side(agent.team) > 0
+        if (
+            opponent_half
+            and time_to_intercept > side_setup_time + 0.35
+            and abs(side_setup.x) < 3900
+            and abs(side_setup.y) < 4900
+        ):
+            routine = side_shot(best_intercept_time, best_targets)
+            print(
+                f"[SHOT PLANNER] selected side_shot "
+                f"T={time_to_intercept:.2f} "
+                f"setup_distance={side_setup_distance:.0f} "
+                f"travel_estimate={side_setup_time:.2f}",
+                flush=True
+            )
+        else:
+            routine = jump_shot(best_intercept_time, best_targets)
     else:
         shot_routines = [ground_shot, jump_shot, double_jump]
         routine = shot_routines[best_shot["shot_type"]](
@@ -920,6 +960,44 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
             best_intercept_time,
             fast_aerial=best_shot['fast']
         )
+
+    if best_shot['shot_type'] == 1:
+        # With no explicit target, use the opponent goal centre as the
+        # intended shot direction when evaluating the lateral setup.
+        shot_direction = Vector(
+            0,
+            side(agent.team),
+            0
+        )
+        left_of_shot = Vector(
+            -shot_direction.y, shot_direction.x, 0
+        ).normalize()
+        lateral_distance = agent.me.location.flat_dist(
+            best_ball_location
+        ) * 0.5
+        side_setup = best_ball_location - left_of_shot * lateral_distance
+        side_setup_distance = agent.me.location.flat_dist(side_setup)
+        side_setup_speed = max(
+            1000,
+            min(1700, agent.me.velocity.flatten().magnitude() + 500)
+        )
+        side_setup_time = side_setup_distance / side_setup_speed
+        opponent_half = best_ball_location.y * side(agent.team) > 0
+        if (
+            opponent_half
+            and time_to_intercept > side_setup_time + 0.35
+            and abs(side_setup.x) < 3900
+            and abs(side_setup.y) < 4900
+        ):
+            routine = side_shot(best_intercept_time)
+            print(
+                f"[SHOT PLANNER] selected untargeted side_shot "
+                f"T={time_to_intercept:.2f} "
+                f"setup_distance={side_setup_distance:.0f} "
+                f"travel_estimate={side_setup_time:.2f}",
+                flush=True
+            )
+            return routine
 
     shot_switch = [
         ground_shot,
