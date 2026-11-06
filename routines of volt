@@ -3075,7 +3075,6 @@ class jump_shot:
         )
         agent.sphere(self.ball_location, 92.75)
 
-        car_to_ball = self.ball_location - agent.me.location
         final_target = self.offset_target.copy().flatten()
         Tj = T - self.needed_jump_time * 1.15
         agent.dbg_2d(f"Needed jump time: {round(self.needed_jump_time, 2)}")
@@ -3090,8 +3089,10 @@ class jump_shot:
 
         distance_remaining = final_target.flat_dist(agent.me.location)
 
-        # Some adjustment to the final target to ensure it's inside the field and we don't try to drive through any goalposts or walls to reach it (again)
+        # Keep the final approach inside the playable field, then recalculate
+        # distance from the adjusted point rather than using the stale value.
         final_target = cap_in_field(agent, final_target)
+        distance_remaining = final_target.flat_dist(agent.me.location)
         local_final_target = agent.me.local_location(final_target)
 
         # whether we should go forwards or backwards
