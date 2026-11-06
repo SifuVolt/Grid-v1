@@ -945,12 +945,13 @@ class Bot(VirxERLU):
 
             defenders.append(foe)
 
-        # Only spend the transition player's rotation when there are at
-        # least two defenders screening the attack. Of those, pressure the
-        # one closest to the ball first.
-        if len(defenders) < 2:
+        # Only use this play when there are no more than two defenders
+        # screening the attack. If there are three or more, retain the
+        # transition shape instead of committing to a crowded defensive line.
+        if not defenders or len(defenders) > 2:
             return None
 
+        # When one or two defenders qualify, pressure the one closest to ball.
         return min(
             defenders,
             key=lambda foe: foe.location.flat_dist(ball)
