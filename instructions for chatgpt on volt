@@ -1358,7 +1358,14 @@ class Bot(VirxERLU):
                     "SHOT_FOUND", "ANY_SHOT_FOUND"
                 }
                 and ball_depth < 1280
+                and not self.defensive_emergency()
             )
+
+            # A bump is only valid while the teammate's attack is still live.
+            # Drop it immediately if the attack ends or defence becomes urgent.
+            if current_name == "transition_bump" and not active_attack:
+                self.clear()
+                current_name = None
 
             # When the attacker is actively playing the ball, use the
             # transition player to remove a defender screening the direct
