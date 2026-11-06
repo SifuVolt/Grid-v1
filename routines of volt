@@ -3125,13 +3125,22 @@ class jump_shot:
                 self.shot_vector.x,
                 0
             ).normalize()
-            self.offset_target = self.ball_location - shot_lateral_left * 160.0
+            # Scale the lateral setup distance to half the current
+            # car-to-intercept distance, rather than using a tiny fixed offset.
+            intercept_length = agent.me.location.dist(self.ball_location)
+            lateral_setup_distance = intercept_length * 0.5
+            self.offset_target = (
+                self.ball_location
+                - shot_lateral_left * lateral_setup_distance
+            )
             self.contact_point = (
                 self.ball_location - shot_lateral_left * 92.75
             )
             self.contact_approach_target = self.offset_target.copy()
             print(
                 f"[JUMP SHOT SIDE INTERCEPT] half=opponent "
+                f"intercept_length={intercept_length:.0f} "
+                f"lateral_setup={lateral_setup_distance:.0f} "
                 f"approach=right-of-ball dodge=left "
                 f"ball=({self.ball_location.x:.0f},{self.ball_location.y:.0f}) "
                 f"target=({self.offset_target.x:.0f},{self.offset_target.y:.0f})",
