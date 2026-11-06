@@ -2978,27 +2978,32 @@ class jump_shot:
         # Capping T above 0 to prevent division problems
         time_remaining = cap(T, 0.000001, 6)
 
-        if not self.jumping or self.ball_location is None:
-            prediction = getattr(agent, "ball_prediction_struct", None)
-            slices = getattr(prediction, "slices", None) if prediction is not None else None
+        # Refresh the predicted contact point every packet, including after
+        # take-off. The old code froze ball_location once jumping began, so a
+        # moving ball could leave the car chasing yesterday's contact point.
+        prediction = getattr(agent, "ball_prediction_struct", None)
+        slices = getattr(prediction, "slices", None) if prediction is not None else None
 
-            if not slices:
-                agent.pop()
-                agent.shooting = False
-                agent.shot_weight = -1
-                agent.shot_time = -1
-                if agent.me.airborne:
-                    agent.push(recovery())
-                return
+        if not slices:
+            agent.pop()
+            agent.shooting = False
+            agent.shot_weight = -1
+            agent.shot_time = -1
+            if agent.me.airborne:
+                agent.push(recovery())
+            return
 
-            slice_n = round(T * 120) - 1
-            slice_n = max(0, min(slice_n, len(slices) - 1))
+        slice_n = round(T * 120) - 1
+        slice_n = max(0, min(slice_n, len(slices) - 1))
 
-            agent.dbg_2d(f"Shot slice #: {slice_n}")
+        agent.dbg_2d(f"Shot slice #: {slice_n}")
 
-            ball = slices[slice_n].physics.location
-            self.ball_location = Vector(ball.x, ball.y, ball.z)
+        ball = slices[slice_n].physics.location
+        self.ball_location = Vector(ball.x, ball.y, ball.z)
 
+        # Once take-off starts, keep the original jump-time estimate; only
+        # refresh the moving ball target. Before take-off, recalculate it.
+        if not self.jumping:
             needed_jump_time = virxrlcu.get_jump_time(
                 ball.z - agent.me.location.z,
                 agent.me.velocity.z,
@@ -3009,7 +3014,7 @@ class jump_shot:
                 or not math.isfinite(needed_jump_time)
                 or needed_jump_time < 0
             ):
-                needed_jump_time = 0.0
+                needed_jump_time = float("inf")
             self.needed_jump_time = needed_jump_time
 
         # Always aim the contact toward the opponent's goal.
@@ -3029,10 +3034,19 @@ class jump_shot:
             - self.shot_vector * agent.best_shot_value
         )
         contact_target = getattr(self, "contact_approach_target", None)
-    
-        if contact_target is not None:
+        contact_normal = getattr(self, "contact_normal", None)
+
+        if contact_normal is not None:
+            # Rebuild the selected surface approach from the latest predicted
+            # ball position instead of chasing the stale finder-time location.
+            self.offset_target = (
+                self.ball_location
+                + contact_normal * max(120, agent.best_shot_value)
+            )
+        elif contact_target is not None:
             self.offset_target = contact_target.copy()
 
+        if contact_normal is not None or contact_target is not None:
             contact_point = getattr(self, "contact_point", None)
             contact_label = getattr(self, "contact_label", "unknown")
 
@@ -3226,7 +3240,6 @@ class jump_shot:
                 vf += agent.me.up * jump_speed
                 xf += agent.me.up * jump_speed * T
 
-            hf = vf.z
             vf += agent.me.up * jump_acc * tau
             xf += agent.me.up * jump_acc * tau * (T - 0.5 * tau)
 
@@ -3259,7 +3272,12 @@ class jump_shot:
                     )
                     self._orientation_logged = True
 
-            if direction == 1 and abs(agent.me.forward.dot(d_direction)) > 0.5 and self.counter < 3:
+            if (
+                direction == 1
+                and T > 1 / 120
+                and abs(agent.me.forward.dot(d_direction)) > 0.5
+                and self.counter < 3
+            ):
                 control_time = max(T, 1 / 120)
                 delta_v = delta_x.dot(agent.me.forward) / control_time
                 if agent.me.boost > 0 and delta_v >= agent.boost_accel * min_boost_time:
