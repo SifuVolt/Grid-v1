@@ -982,7 +982,6 @@ class Aerial:
         self.ceiling = False
         self.jump_time = -1
         self.counter = 0
-        self.final_boost_fired = False
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -1369,29 +1368,6 @@ class Aerial:
 
             if delta_v >= throttle_accel * min_boost_time:
                 agent.controller.throttle = cap(delta_v / (throttle_accel * min_boost_time), -1, 1)
-
-        # Add a final powered contact phase. Once the car is behind the ball
-        # and its nose is aligned with the planned goal direction, spend a
-        # short boost burst to carry that momentum through the touch.
-        if 0 < T <= 0.35 and agent.me.boost > 0:
-            shot_direction = self.shot_vector.flatten().normalize()
-            car_to_ball = (self.ball - agent.me.location).flatten().normalize()
-            goal_alignment = agent.me.forward.flatten().normalize().dot(
-                shot_direction
-            )
-            behind_alignment = car_to_ball.dot(shot_direction)
-
-            if goal_alignment >= 0.78 and behind_alignment >= 0.70:
-                agent.controller.boost = True
-                if not self.final_boost_fired:
-                    self.final_boost_fired = True
-                    print(
-                        f"[AERIAL FINAL BOOST] T={T:.2f} "
-                        f"boost={agent.me.boost:.0f} "
-                        f"goal_align={goal_alignment:.2f} "
-                        f"behind_align={behind_alignment:.2f}",
-                        flush=True
-                    )
 
         if T <= -0.4 or (not self.jumping and T > 1.5 and not virxrlcu.aerial_shot_is_viable(T, agent.boost_accel, tuple(agent.gravity), agent.me.get_raw(agent), tuple(self.target))):
             agent.pop()
