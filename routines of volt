@@ -1256,12 +1256,16 @@ class Aerial:
                     flush=True
                 )
 
-        self.target = self.ball - (
+        # Aim the aerial's nose toward a point halfway from the
+        # ball centre to its bottom. Keep the existing shot-direction
+        # offset so the car still approaches from behind the intended hit.
+        aerial_contact_point = self.ball - Vector(z=46.375)
+        self.target = aerial_contact_point - (
             self.shot_vector * agent.best_shot_value
         )
 
-
         agent.sphere(self.ball, 92.75)
+        agent.sphere(aerial_contact_point, 12)
 
         if self.ceiling:
             self.target -= Vector(z=92)
