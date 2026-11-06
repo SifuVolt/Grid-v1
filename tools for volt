@@ -453,6 +453,19 @@ def elevated_dodge_reachable(agent, ball_location, time_to_intercept):
     return distance <= reachable_distance
 
 def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_jump=True, can_ground=True):
+    # A jump_shot deliberately lifts the car a little before contact. That
+    # airborne state must not be mistaken for a fresh aerial opportunity.
+    if (
+        agent.me.airborne
+        and getattr(agent, "stack", None)
+        and agent.stack[0].__class__.__name__ == "jump_shot"
+    ):
+        print(
+            "[AERIAL FINDER] skipped: jump_shot is already airborne",
+            flush=True
+        )
+        return None
+
     if not can_aerial and not can_double_jump and not can_jump and not can_ground:
         agent.print("WARNING: All shots were disabled when find_shot was ran")
         return
@@ -660,6 +673,19 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
 
 def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
                   can_jump=True, can_ground=True):
+    # Match the targeted finder: do not replace a jump_shot merely because
+    # its initial jump has made the car airborne.
+    if (
+        agent.me.airborne
+        and getattr(agent, "stack", None)
+        and agent.stack[0].__class__.__name__ == "jump_shot"
+    ):
+        print(
+            "[AERIAL FINDER] skipped untargeted search: jump_shot is airborne",
+            flush=True
+        )
+        return None
+
     if not can_aerial and not can_double_jump and not can_jump and not can_ground:
         agent.print("WARNING: All shots were disabled when find_any_shot was ran")
         return
