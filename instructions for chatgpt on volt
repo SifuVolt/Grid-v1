@@ -526,17 +526,18 @@ class Bot(VirxERLU):
         if ball.location.z > 120:
             return False
 
-        # Direction from the ball towards our car.
-        ball_to_car = (car.location - ball.location).flatten().normalize()
+        # Reject if the ball is too far away (e.g. more than 2500 units).
+        if car.location.flat_dist(ball.location) > 2500:
+            return False
 
-        # Ball velocity must point generally towards our car.
+        ball_to_car = (car.location - ball.location).flatten().normalize()
         ball_velocity = ball.velocity.flatten()
 
         if ball_velocity.magnitude() < 250:
             return False
 
         return ball_velocity.normalize().dot(ball_to_car) > 0.65
-    
+        
     def defensive_emergency(self):
         side = utils.side(self.team)
         ball = self.ball.location
