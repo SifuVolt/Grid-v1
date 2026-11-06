@@ -613,7 +613,7 @@ class Bot(VirxERLU):
                 ball_depth > 500
                 and goal_alignment > 0.58
                 and ball_in_front
-                and toward_goal_speed > -100
+                and toward_goal_speed > 250
             ):
                 foe_speed = foe.velocity.flatten().magnitude()
                 foe_eta = foe_distance / max(900.0, foe_speed + 500.0)
