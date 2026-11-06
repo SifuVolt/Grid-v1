@@ -3363,70 +3363,23 @@ class jump_shot:
                 )
 
                 if close_enough and local_target.x > 0:
-                    # Party Cannon-style shot-direction dodge:
-                    # choose the flip that drives the car through the ball
-                    # along the intended shot vector, rather than simply
-                    # flipping toward the ball's current local position.
-                    forward = agent.me.forward.flatten().normalize()
-                    shot_direction = self.shot_vector.copy().flatten().normalize()
+                    # Aim the dodge at the predicted ball contact itself,
+                    # not at the approach point behind the ball. The selected
+                    # centre/left/right contact has already shaped that approach.
+                    # This also gives quick shots a directional flip without
+                    # adding the S-tilt they do not have time to perform.
+                    local_ball_for_dodge = agent.me.local_location(
+                        self.ball_location
+                    ).flatten()
 
-                    if forward.magnitude() > 0.001 and shot_direction.magnitude() > 0.001:
-                        perpendicular = Vector(
-                            forward.y,
-                            -forward.x,
-                            0
-                        )
-
-                        dodge_direction = Vector(
-                            -perpendicular.dot(shot_direction),
-                            -forward.dot(shot_direction),
-                            0
-                        )
-
-                        # Party Cannon compensates for forward/reverse speed:
-                        # reverse-side dodges need a smaller lateral component
-                        # at speed, while the pitch component is also scaled.
-                        forward_velocity = agent.me.forward.dot(agent.me.velocity)
-                        speed_fraction = min(
-                            abs(forward_velocity) / 2300,
-                            1
-                        )
-
-                        backwards = (
-                            dodge_direction.x < 0
-                            if abs(forward_velocity) < 100
-                            else (
-                                (dodge_direction.x >= 0)
-                                != (forward_velocity > 0)
-                            )
-                        )
-
-                        if backwards:
-                            dodge_direction.x /= (
-                                (16 / 15) * (1 + 1.5 * speed_fraction)
-                            )
-
-                        dodge_direction.y /= 1 + 0.9 * speed_fraction
-
-                        if dodge_direction.magnitude() > 0.001:
-                            dodge_direction = dodge_direction.normalize()
-                        else:
-                            dodge_direction = Vector(x=1)
+                    if local_ball_for_dodge.magnitude() > 1:
+                        dodge_direction = local_ball_for_dodge.normalize()
                     else:
                         dodge_direction = Vector(x=1)
 
-                    agent.controller.pitch = dodge_direction.y
-                    agent.controller.yaw = dodge_direction.x
+                    agent.controller.pitch = -dodge_direction.x
+                    agent.controller.yaw = dodge_direction.y
                     agent.controller.jump = True
-
-                    print(
-                        f"[JUMP SHOT DODGE] shot=({self.shot_vector.x:.2f},"
-                        f"{self.shot_vector.y:.2f}) "
-                        f"local=({dodge_direction.x:.2f},"
-                        f"{dodge_direction.y:.2f}) "
-                        f"forward_speed={agent.me.forward.dot(agent.me.velocity):.0f}",
-                        flush=True
-                    )
 
                     agent.last_flip_time = agent.time
                     self.dodging = True
