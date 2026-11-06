@@ -3363,12 +3363,19 @@ class jump_shot:
                 )
 
                 if close_enough and local_target.x > 0:
-                    if self.quick_shot:
-                        # There is no time for the backwards S-tilt first.
-                        # Commit directly to a straight forward flip.
-                        dodge_direction = Vector(x=1)
+                    # Aim the dodge at the predicted ball contact itself,
+                    # not at the approach point behind the ball. The selected
+                    # centre/left/right contact has already shaped that approach.
+                    # This also gives quick shots a directional flip without
+                    # adding the S-tilt they do not have time to perform.
+                    local_ball_for_dodge = agent.me.local_location(
+                        self.ball_location
+                    ).flatten()
+
+                    if local_ball_for_dodge.magnitude() > 1:
+                        dodge_direction = local_ball_for_dodge.normalize()
                     else:
-                        dodge_direction = local_target.normalize()
+                        dodge_direction = Vector(x=1)
 
                     agent.controller.pitch = -dodge_direction.x
                     agent.controller.yaw = dodge_direction.y
