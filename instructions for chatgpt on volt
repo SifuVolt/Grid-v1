@@ -1697,7 +1697,20 @@ class Bot(VirxERLU):
                     "short_shot"
                 }
 
-                if current_name in ordinary_shots or current_name is None:
+                active_name = (
+                    self.stack[-1].__class__.__name__
+                    if not self.is_clear()
+                    else None
+                )
+                protected = {
+                    "flip", "half_flip", "recovery", "wave_dash",
+                    "speed_flip", "speedflip_kickoff", "Aerial"
+                }
+
+                if (
+                    (current_name in ordinary_shots or current_name is None)
+                    and active_name not in protected
+                ):
                     self.clear()
                     self.push(routines.emergency_clear())
 
@@ -1708,10 +1721,10 @@ class Bot(VirxERLU):
                     )
                     return
 
-                # Do not interrupt a flip or recovery mid-action.
+                # Do not interrupt a flip, aerial, or recovery mid-action.
                 print(
                     f"[EMERGENCY SAVE] Goal danger detected; "
-                    f"current routine={current_name}",
+                    f"root={current_name} active={active_name}",
                     flush=True
                 )
 
