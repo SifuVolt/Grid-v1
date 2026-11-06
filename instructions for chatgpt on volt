@@ -568,7 +568,10 @@ class Bot(VirxERLU):
             if ball.z < 150 and abs(velocity.z) < 120:
                 # A rolling ball stays on the floor; free-fall gravity must
                 # not project it through the ground before the goal line.
-                goal_z = ball.z + velocity.z * goal_eta
+                goal_z = max(
+                    92.75,
+                    ball.z + velocity.z * goal_eta
+                )
             else:
                 goal_z += velocity.z * goal_eta + 0.5 * self.gravity.z * goal_eta * goal_eta
 
