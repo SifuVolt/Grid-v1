@@ -914,8 +914,7 @@ class Bot(VirxERLU):
             return None
         goal_direction = goal_direction.normalize()
 
-        best_foe = None
-        best_score = float("inf")
+        defenders = []
 
         for foe in self.foes:
             if getattr(foe, "demolished", False):
@@ -926,8 +925,8 @@ class Bot(VirxERLU):
             ).flatten()
             progress = teammate_to_foe.dot(goal_direction)
 
-            # The defender must be ahead of the teammate, on the route
-            # toward goal, and not so far away that this becomes a chase.
+            # Count only opponents actually screening the teammate's
+            # forward lane, rather than anyone who happens to be nearby.
             if not 150 <= progress <= 3500:
                 continue
 
@@ -940,16 +939,22 @@ class Bot(VirxERLU):
             if foe.location.flat_dist(ball) > 2600:
                 continue
 
-            my_distance = self.me.location.flat_dist(foe.location)
-            if my_distance > 4200:
+            # Keep the bump target within a sensible ground-chase distance.
+            if self.me.location.flat_dist(foe.location) > 4200:
                 continue
 
-            score = lateral_offset + progress * 0.08 + my_distance * 0.04
-            if score < best_score:
-                best_score = score
-                best_foe = foe
+            defenders.append(foe)
 
-        return best_foe
+        # Only spend the transition player's rotation when there are at
+        # least two defenders screening the attack. Of those, pressure the
+        # one closest to the ball first.
+        if len(defenders) < 2:
+            return None
+
+        return min(
+            defenders,
+            key=lambda foe: foe.location.flat_dist(ball)
+        )
 
     def get_cover_role_owner(self):
         """Return the one Grid-elected goalie in 2v2 or 3v3."""
