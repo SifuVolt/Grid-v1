@@ -62,9 +62,9 @@ def _relative_goal_aim_point(agent, targets=None):
     car_location = agent.me.location
 
     if not agent.me.airborne:
-        goal_center.z += 100
+        goal_center.z += 10
     else:
-        goal_center.z -= 100
+        goal_center.z -= 90
 
     return goal_center
 def _shot_approach_target(agent, ball_location, offset_target, shot_vector, time_left):
