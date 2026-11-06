@@ -1075,6 +1075,16 @@ class Aerial:
         prediction = agent.ball_prediction_struct
 
         if prediction is None or not prediction.slices:
+            print(
+                "[AERIAL ABORT] reason=no_ball_prediction",
+                flush=True
+            )
+            agent.pop()
+            agent.shooting = False
+            agent.shot_weight = -1
+            agent.shot_time = -1
+            if agent.me.airborne:
+                agent.push(recovery())
             return
 
         # Find the prediction slice closest to the actual intercept time.
