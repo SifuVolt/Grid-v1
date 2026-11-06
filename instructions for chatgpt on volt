@@ -2084,6 +2084,7 @@ class Bot(VirxERLU):
                         if (
                             current_shot_name in ordinary_shots
                             and new_shot_name in ordinary_shots
+                            and new_shot_name != "wall_approach"
                         ):
                             current_intercept = getattr(
                                 self.stack[0], "intercept_time", float("inf")
