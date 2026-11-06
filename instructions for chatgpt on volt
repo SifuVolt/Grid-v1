@@ -630,15 +630,6 @@ class Bot(VirxERLU):
             or opponent_committed
         )
 
-        if urgent:
-            print(
-                f"[1V1 CLEAR CHECK] urgent=True "
-                f"goal_eta={goal_eta:.2f} my_eta={my_eta:.2f} "
-                f"ball_depth={ball_depth:.0f} "
-                f"opponent_committed={opponent_committed}",
-                flush=True
-            )
-
         return urgent
 
     def one_v_one_shadow_needed(self):
