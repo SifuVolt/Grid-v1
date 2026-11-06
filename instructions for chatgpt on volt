@@ -1902,6 +1902,19 @@ class Bot(VirxERLU):
         if self.is_clear() or self.odd_tick == 0:
             shot = self.teamplay_shot
 
+            # The cached teamplay candidate may be a later ground shot.
+            # Recheck the live prediction first so a reachable wall touch
+            # can replace it instead of waiting for the ball to fall.
+            wall_allowed = (
+                not self.friends
+                or self.get_grid_active_challenger() == self.me.index
+                or self.defensive_emergency()
+            )
+            if wall_allowed:
+                wall_drive = self.find_wall_drive()
+                if wall_drive is not None:
+                    shot = wall_drive
+
             if shot is not None:
                 should_commit = self.should_commit_to_shot(
                     self.teamplay_score,
@@ -1931,7 +1944,10 @@ class Bot(VirxERLU):
                     # Yield to the teammate's better opportunity.
                     # Continue to the existing fallback behaviour.
                 else:
-                    if routines.half_flip_manager.request_for_shot(self, shot):
+                    if (
+                        shot.__class__.__name__ != "wall_approach"
+                        and routines.half_flip_manager.request_for_shot(self, shot)
+                    ):
                         return
 
                     
