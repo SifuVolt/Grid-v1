@@ -3729,6 +3729,8 @@ class power_clear:
         self.initial_ball_z = 0
         self.contact_time = -1
         self.debug_approach_printed = False
+        self.last_aerial_search_time = -999.0
+        self.last_phase2_debug_time = -999.0
 
     def run(self, agent: VirxERLU):
         ball = agent.ball
@@ -3831,16 +3833,23 @@ class power_clear:
         if self.phase == 2:
             elapsed = agent.time - self.contact_time
 
-            print(
-                f"[POWER CLEAR] PHASE 2 | "
-                f"z={ball_location.z:.1f} | "
-                f"vz={ball_velocity.z:.1f} | "
-                f"elapsed={elapsed:.2f}s",
-                flush=True
-            )
+            if agent.time - self.last_phase2_debug_time >= 0.25:
+                print(
+                    f"[POWER CLEAR] PHASE 2 | "
+                    f"z={ball_location.z:.1f} | "
+                    f"vz={ball_velocity.z:.1f} | "
+                    f"elapsed={elapsed:.2f}s",
+                    flush=True
+                )
+                self.last_phase2_debug_time = agent.time
 
-            # Start looking sooner after the pop.
-            if ball_location.z > 140 or ball_velocity.z > 100:
+            # Start looking sooner after the pop, but don't rerun the full
+            # prediction search on every physics packet.
+            if (
+                (ball_location.z > 140 or ball_velocity.z > 100)
+                and agent.time - self.last_aerial_search_time >= 0.12
+            ):
+                self.last_aerial_search_time = agent.time
                 from util import tools
 
                 print("[POWER CLEAR] TRYING TO FIND AERIAL", flush=True)
