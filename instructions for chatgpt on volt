@@ -57,6 +57,7 @@ class Bot(VirxERLU):
         self.teamplay_score = 0.0
         self.teamplay_contact_time = 10.0
         self.teamplay_status = "NO_SHOT"
+        self.transition_bump_cooldown_until = -999.0
         self.kickoff_routine_started = False
         self.last_emergency_clear_time = -999.0
         self.emergency_save_zone_active = False
@@ -884,6 +885,72 @@ class Bot(VirxERLU):
         attacker, goalie, transition = self.get_grid_team_roles()
         return attacker
 
+    def get_transition_bump_target(self, attacker_index):
+        """
+        Find an opponent screening the transition player's attacking teammate.
+
+        A defender only qualifies when they are physically in the corridor
+        from the teammate to the opponent goal, not merely near the ball.
+        """
+        teammate = next(
+            (
+                friend for friend in self.friends
+                if friend.index == attacker_index
+                and not getattr(friend, "demolished", False)
+            ),
+            None
+        )
+        if teammate is None:
+            return None
+
+        ball = self.ball.location
+        if teammate.location.flat_dist(ball) > 1700:
+            return None
+
+        goal_direction = (
+            self.foe_goal.location - teammate.location
+        ).flatten()
+        if goal_direction.magnitude() < 1:
+            return None
+        goal_direction = goal_direction.normalize()
+
+        best_foe = None
+        best_score = float("inf")
+
+        for foe in self.foes:
+            if getattr(foe, "demolished", False):
+                continue
+
+            teammate_to_foe = (
+                foe.location - teammate.location
+            ).flatten()
+            progress = teammate_to_foe.dot(goal_direction)
+
+            # The defender must be ahead of the teammate, on the route
+            # toward goal, and not so far away that this becomes a chase.
+            if not 150 <= progress <= 3500:
+                continue
+
+            lateral_offset = (
+                teammate_to_foe - goal_direction * progress
+            ).magnitude()
+            if lateral_offset > 650:
+                continue
+
+            if foe.location.flat_dist(ball) > 2600:
+                continue
+
+            my_distance = self.me.location.flat_dist(foe.location)
+            if my_distance > 4200:
+                continue
+
+            score = lateral_offset + progress * 0.08 + my_distance * 0.04
+            if score < best_score:
+                best_score = score
+                best_foe = foe
+
+        return best_foe
+
     def get_cover_role_owner(self):
         """Return the one Grid-elected goalie in 2v2 or 3v3."""
         if not self.friends:
@@ -1292,6 +1359,48 @@ class Bot(VirxERLU):
                 }
                 and ball_depth < 1280
             )
+
+            # When the attacker is actively playing the ball, use the
+            # transition player to remove a defender screening the direct
+            # route to goal. Never trade away an urgent defensive recovery.
+            if active_attack and not self.defensive_emergency():
+                bump_target = self.get_transition_bump_target(attacker)
+
+                if current_name == "transition_bump":
+                    active_target = getattr(
+                        self.stack[0], "target_index", None
+                    )
+                    if (
+                        bump_target is not None
+                        and bump_target.index == active_target
+                    ):
+                        return
+
+                    self.clear()
+                    current_name = None
+
+                if (
+                    bump_target is not None
+                    and current_name in {
+                        None, "grid_defense", "goto_boost",
+                        "cover_followup_wait"
+                    }
+                    and self.time >= self.transition_bump_cooldown_until
+                ):
+                    if current_name is not None:
+                        self.clear()
+
+                    self.transition_bump_cooldown_until = self.time + 2.25
+                    print(
+                        f"[TRANSITION BUMP] player={self.me.index} "
+                        f"attacker={attacker} target={bump_target.index} "
+                        f"distance={self.me.location.flat_dist(bump_target.location):.0f}",
+                        flush=True
+                    )
+                    self.push(
+                        routines.transition_bump(bump_target.index)
+                    )
+                    return
 
             if current_name == "cover_followup_wait":
                 wait = self.stack[0]
