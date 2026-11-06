@@ -289,6 +289,22 @@ class wall_approach:
         )
 
         on_wall = self.on_side_wall(agent)
+        car_wall_side = 1 if car.location.x >= 0 else -1
+
+        # Being attached to either side wall is not enough: it must be the
+        # same wall as the predicted ball. Otherwise the old routine treated
+        # the opposite wall as a valid approach and drove away from the play.
+        if on_wall and car_wall_side != wall_side:
+            print(
+                f"[WALL DRIVE] STOP: opposite wall "
+                f"car_side={car_wall_side} ball_side={wall_side} "
+                f"car=({car.location.x:.0f},{car.location.y:.0f},{car.location.z:.0f})",
+                flush=True
+            )
+            agent.pop()
+            agent.shooting = False
+            return
+
         if on_wall:
             drive_target = contact_target
         else:
@@ -321,6 +337,8 @@ class wall_approach:
                 f"vz={ball_velocity.z:.0f} "
                 f"target=({drive_target.x:.0f},{drive_target.y:.0f},"
                 f"{drive_target.z:.0f}) dist={distance:.0f} "
+                f"car=({car.location.x:.0f},{car.location.y:.0f},{car.location.z:.0f}) "
+                f"wall_side={wall_side} car_wall_side={car_wall_side} "
                 f"T={T:.2f} boost={car.boost:.0f}",
                 flush=True
             )
