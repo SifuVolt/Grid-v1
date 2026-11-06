@@ -91,22 +91,56 @@ def useful_non_aerial_shot(agent, ball_location, ball_velocity, shot, intercept_
 
         forward_speed = max(0.0, foe_velocity.dot(approach_direction))
         boost = max(0.0, float(getattr(closest_foe, "boost", 0)))
-        acceleration = 900.0 + (650.0 if boost > 0 else 0.0)
         max_speed = 2300.0
         remaining_distance = max(0.0, enemy_distance - forward_speed * turn_time)
-        time_to_cap = max(0.0, (max_speed - forward_speed) / acceleration)
-        accel_distance = forward_speed * time_to_cap + 0.5 * acceleration * time_to_cap ** 2
 
-        if remaining_distance <= accel_distance:
-            discriminant = max(0.0, forward_speed ** 2 + 2 * acceleration * remaining_distance)
-            drive_time = (math.sqrt(discriminant) - forward_speed) / acceleration
+        # Spend boost only for the time its reserve can actually sustain.
+        boost_acceleration = 1600.0
+        base_acceleration = 900.0
+        boost_time = boost / 33.3333333333
+        time_to_cap_boost = max(0.0, (max_speed - forward_speed) / boost_acceleration)
+        boosted_time = min(boost_time, time_to_cap_boost)
+        boosted_distance = (
+            forward_speed * boosted_time
+            + 0.5 * boost_acceleration * boosted_time ** 2
+        )
+        speed_after_boost = min(
+            max_speed,
+            forward_speed + boost_acceleration * boosted_time
+        )
+        remaining_distance = max(0.0, remaining_distance - boosted_distance)
+
+        time_to_cap_base = max(
+            0.0,
+            (max_speed - speed_after_boost) / base_acceleration
+        )
+        base_accel_distance = (
+            speed_after_boost * time_to_cap_base
+            + 0.5 * base_acceleration * time_to_cap_base ** 2
+        )
+        if remaining_distance <= base_accel_distance:
+            discriminant = max(
+                0.0,
+                speed_after_boost ** 2
+                + 2 * base_acceleration * remaining_distance
+            )
+            base_drive_time = (
+                math.sqrt(discriminant) - speed_after_boost
+            ) / base_acceleration
         else:
-            drive_time = time_to_cap + (remaining_distance - accel_distance) / max_speed
+            base_drive_time = (
+                time_to_cap_base
+                + (remaining_distance - base_accel_distance) / max_speed
+            )
+        drive_time = boosted_time + base_drive_time
 
-        # Elevated contacts may be reachable with a jump, but jumping costs
-        # time; don't treat it as a free instant speed increase.
-        jump_adjustment = 0.12 if 180 < ball_pos.z < 650 else 0.0
-        enemy_time = turn_time + drive_time + jump_adjustment
+        # A grounded opponent can use a jump for a modestly elevated touch.
+        # It helps reach height, but the jump startup prevents a free bonus.
+        jump_adjustment = -0.08 if (
+            not getattr(closest_foe, "airborne", False)
+            and 180 < ball_pos.z < 650
+        ) else 0.0
+        enemy_time = max(0.0, turn_time + drive_time + jump_adjustment)
 
     # Don't accept a shot where the opponent is likely to arrive first.
     if enemy_time + 0.35 < time_remaining:
