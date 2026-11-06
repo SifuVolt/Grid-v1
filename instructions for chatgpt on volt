@@ -684,13 +684,6 @@ class Bot(VirxERLU):
             # Let the opponent show their touch while Volt stays goal-side.
             # Leave shadow as soon as Volt is close enough to challenge.
             if foe_eta + 0.12 < my_eta:
-                print(
-                    f"[1V1 SHADOW CHECK] foe_dist={foe_distance:.0f} "
-                    f"my_dist={my_distance:.0f} "
-                    f"foe_eta={foe_eta:.2f} my_eta={my_eta:.2f} "
-                    f"boost={self.me.boost:.0f}",
-                    flush=True
-                )
                 return True
 
         return False
