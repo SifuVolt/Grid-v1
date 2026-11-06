@@ -3118,10 +3118,12 @@ class jump_shot:
                 self.shot_vector.x,
                 0
             ).normalize()
-            intercept_length = agent.me.location.flat_dist(
-                self.ball_location
-            )
-            lateral_distance = intercept_length * 0.5
+            if self.side_lateral_distance is None:
+                intercept_length = agent.me.location.flat_dist(
+                    self.ball_location
+                )
+                self.side_lateral_distance = intercept_length * 0.5
+            lateral_distance = self.side_lateral_distance
             self.offset_target = (
                 self.ball_location - left_of_shot * lateral_distance
             )
@@ -3499,6 +3501,7 @@ class side_shot(jump_shot):
     def __init__(self, intercept_time, targets=None):
         super().__init__(intercept_time, targets)
         self.side_mode = True
+        self.side_lateral_distance = None
 
 
 class ground_shot:
