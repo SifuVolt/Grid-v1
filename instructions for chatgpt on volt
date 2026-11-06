@@ -547,8 +547,9 @@ class Bot(VirxERLU):
         side = utils.side(self.team)
         ball_depth = ball.y * side
 
-        # Only treat the ball as a defensive threat once it has entered our half.
-        if ball_depth < 0:
+        # A fast ball near midfield can still reach our goal before Volt
+        # can rotate back, so include the near edge of the opponent half.
+        if ball_depth < -1500:
             return False
 
         toward_goal_speed = velocity.y * side
@@ -578,7 +579,7 @@ class Bot(VirxERLU):
             and 0.0 < goal_eta < 3.0
             and abs(goal_x) < 980
             and -50 < goal_z < 650
-            and ball_depth > 300
+            and ball_depth > -1500
         )
         doorstep_threat = (
             ball_depth > 4450
