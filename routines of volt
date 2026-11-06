@@ -3068,39 +3068,9 @@ class jump_shot:
             ball = slices[slice_n].physics.location
             self.ball_location = Vector(ball.x, ball.y, ball.z)
 
-            # Choose the dodge side from the predicted interception geometry,
-            # not from the ball's changing position when the dodge is pressed.
-            # Project the car's position to the interception time, then
-            # express the ball's offset from that future position in the
-            # car's current local axes. The choice is held through the jump.
-            predicted_car_location = (
-                agent.me.location
-                + agent.me.velocity * T
-                + 0.5 * agent.gravity * T * T
-            )
-            predicted_ball_offset = (
-                self.ball_location - predicted_car_location
-            )
-            predicted_ball_local = agent.me.local_location(
-                agent.me.location + predicted_ball_offset
-            ).flatten()
-            side_deadzone = 60.0
-            if predicted_ball_local.y > side_deadzone:
-                self.dodge_side = 1
-            elif predicted_ball_local.y < -side_deadzone:
-                self.dodge_side = -1
-            else:
-                self.dodge_side = 0
-
-            print(
-                f"[JUMP SHOT INTERCEPT SIDE] "
-                f"ball_local=({predicted_ball_local.x:.1f},"
-                f"{predicted_ball_local.y:.1f}) "
-                f"side={'right' if self.dodge_side > 0 else 'left' if self.dodge_side < 0 else 'forward'} "
-                f"predicted_car=({predicted_car_location.x:.0f},"
-                f"{predicted_car_location.y:.0f})",
-                flush=True
-            )
+            # Side-flip selection is set from the shot geometry below,
+            # after the goal direction has been calculated.
+            self.dodge_side = 0
 
             self.needed_jump_time = virxrlcu.get_jump_time(
                 ball.z - agent.me.location.z,
@@ -3118,6 +3088,30 @@ class jump_shot:
         self.shot_vector = (
             target_center - self.ball_location
         ).flatten().normalize()
+
+        # In the opponent's half, create a true side-flip interception:
+        # approach from the side opposite the goal, then dodge sideways
+        # toward the ball. In our half, retain the normal behind-ball shot.
+        if self.ball_location.y * side(agent.team) > 0:
+            shot_lateral_left = Vector(
+                -self.shot_vector.y,
+                self.shot_vector.x,
+                0
+            ).normalize()
+            side_offset = 160.0
+            self.offset_target = (
+                self.ball_location - shot_lateral_left * side_offset
+            )
+            self.dodge_side = -1
+            print(
+                f"[JUMP SHOT SIDE INTERCEPT] half=opponent "
+                f"approach=right-of-ball dodge=left "
+                f"ball=({self.ball_location.x:.0f},{self.ball_location.y:.0f}) "
+                f"target=({self.offset_target.x:.0f},{self.offset_target.y:.0f})",
+                flush=True
+            )
+        else:
+            self.dodge_side = 0
 
         # Approach from behind the ball relative to the opponent's goal.
         self.offset_target = (
@@ -3143,6 +3137,16 @@ class jump_shot:
                 f"point={self.contact_point} approach={self.offset_target}",
                 flush=True
             )
+
+        # The side-flip interception target takes priority over the generic
+        # contact-label approach in the opponent's half.
+        if self.dodge_side < 0:
+            shot_lateral_left = Vector(
+                -self.shot_vector.y,
+                self.shot_vector.x,
+                0
+            ).normalize()
+            self.offset_target = self.ball_location - shot_lateral_left * 160.0
         print(
             f"[JUMP SHOT AIM FIX] "
             f"ball=({self.ball_location.x:.0f},{self.ball_location.y:.0f}) "
@@ -3398,10 +3402,9 @@ class jump_shot:
                     < (92.75 + agent.me.hitbox.length) * 1.02
                 )
 
-                if close_enough and local_target.x > 0:
-                    # Use the side selected from the predicted
-                    # interception point. Do not recalculate from the ball's
-                    # current position at dodge time.
+                if close_enough and (local_target.x > 0 or self.dodge_side != 0):
+                    # Side-flip shots arrive beside the ball and dodge inward.
+                    # Normal shots keep their existing forward dodge.
                     if self.dodge_side > 0:
                         agent.controller.pitch = 0
                         agent.controller.yaw = 1
