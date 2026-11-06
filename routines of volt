@@ -2925,6 +2925,7 @@ class jump_shot:
         self.jump_time = -1
         self.needed_jump_time = -1
         self._orientation_logged = False
+        self._reverse_throttle_logged = False
         self.patience = shot_patience()
 
     def update(self, shot):
@@ -2945,8 +2946,6 @@ class jump_shot:
 
         ball = ball_slice.physics.location
         ball_location = Vector(ball.x, ball.y, ball.z)
-
-        direction = (ball_location - agent.me.location).normalize()
 
         if self.goal_aim_point is None:
             self.goal_aim_point = _relative_goal_aim_point(agent, self.targets)
@@ -3000,11 +2999,18 @@ class jump_shot:
             ball = slices[slice_n].physics.location
             self.ball_location = Vector(ball.x, ball.y, ball.z)
 
-            self.needed_jump_time = virxrlcu.get_jump_time(
+            needed_jump_time = virxrlcu.get_jump_time(
                 ball.z - agent.me.location.z,
                 agent.me.velocity.z,
                 agent.gravity.z
             )
+            if (
+                needed_jump_time is None
+                or not math.isfinite(needed_jump_time)
+                or needed_jump_time < 0
+            ):
+                needed_jump_time = 0.0
+            self.needed_jump_time = needed_jump_time
 
         # Always aim the contact toward the opponent's goal.
         # Never use car-to-ball direction as the shot direction:
@@ -3076,8 +3082,17 @@ class jump_shot:
 
         vf = agent.me.velocity + agent.gravity * T
 
-        distance_remaining = agent.me.local_location(self.offset_target).x if agent.me.airborne else distance_remaining
-        distance_remaining -= agent.me.hitbox.length / 3
+        if agent.me.airborne:
+            # In the air, use forward distance only. A target behind the car
+            # must never turn the jump-shot drive command into reverse throttle.
+            distance_remaining = agent.me.local_location(
+                self.offset_target
+            ).x
+
+        distance_remaining = max(
+            0.0,
+            distance_remaining - agent.me.hitbox.length / 3
+        )
         speed_required = distance_remaining / time_remaining
         agent.dbg_2d(f"Speed required: {round(speed_required, 2)}")
 
@@ -3125,7 +3140,7 @@ class jump_shot:
                 and current_forward_speed > 700
             )
 
-            drive_speed = speed_required * direction
+            drive_speed = max(0.0, speed_required * direction)
 
             if power_dodge_window and direction == 1:
                 # Still slow down if we're substantially too fast, but don't allow
@@ -3133,14 +3148,29 @@ class jump_shot:
                 minimum_final_speed = min(current_forward_speed, 1200)
                 drive_speed = max(drive_speed, minimum_final_speed)
 
-            velocity = defaultDrive(agent, drive_speed, local_final_target)[1]
+            velocity = defaultDrive(
+                agent, drive_speed, local_final_target
+            )[1]
 
-            if velocity == 0:
-                velocity = 1
+            if agent.controller.throttle < 0:
+                if not self._reverse_throttle_logged:
+                    print(
+                        f"[JUMP SHOT DRIVE] blocked reverse throttle "
+                        f"raw={agent.controller.throttle:.2f} "
+                        f"target_x={local_final_target.x:.0f} "
+                        f"T={T:.3f}",
+                        flush=True
+                    )
+                    self._reverse_throttle_logged = True
+                agent.controller.throttle = 0
+
+            velocity = max(1.0, velocity)
 
             local_offset_target = agent.me.local_location(self.offset_target.flatten())
             local_vf = agent.me.local(vf.flatten())
-            time = distance_remaining / (velocity + dodge_impulse(agent))
+            time = distance_remaining / max(
+                1.0, velocity + dodge_impulse(agent)
+            )
 
 
             if ((abs(velocity) < 100 and distance_remaining < agent.me.hitbox.length / 2) or (abs(local_offset_target.y) < 92 and direction * local_vf.x >= direction * (local_offset_target.x - agent.me.hitbox.length / 3) and direction * local_offset_target.x > 0)) and T <= self.needed_jump_time * 1.08:
@@ -3183,15 +3213,6 @@ class jump_shot:
                     agent.push(wave_dash(agent.me.local_location(self.offset_target)))
                 else:
                     agent.push(flip(agent.me.local_location(self.offset_target)))
-            elif (
-                agent.boost_amount != 'unlimited'
-                and direction == -1
-                and distance_remaining > 2560
-                and velocity < 200
-                and time >= self.needed_jump_time * 1.15 + 2
-                and agent.me.local_location(agent.ball.location).x < -250
-            ):
-                agent.push(flip(agent.me.local_location(self.offset_target), True))
         else:
             if self.jump_time == -1:
                 self.jump_time = agent.time
@@ -3239,13 +3260,18 @@ class jump_shot:
                     self._orientation_logged = True
 
             if direction == 1 and abs(agent.me.forward.dot(d_direction)) > 0.5 and self.counter < 3:
-                delta_v = delta_x.dot(agent.me.forward) / T
+                control_time = max(T, 1 / 120)
+                delta_v = delta_x.dot(agent.me.forward) / control_time
                 if agent.me.boost > 0 and delta_v >= agent.boost_accel * min_boost_time:
                     agent.controller.boost = True
                     delta_v -= agent.boost_accel * min_boost_time
 
-                if abs(delta_v) > throttle_accel * min_boost_time:
-                    agent.controller.throttle = cap(delta_v / (throttle_accel * min_boost_time), -1, 1)
+                if delta_v > throttle_accel * min_boost_time:
+                    agent.controller.throttle = cap(
+                        delta_v / (throttle_accel * min_boost_time),
+                        0,
+                        1
+                    )
 
             
             # Advance through the jump sequence without getting stuck
@@ -3328,21 +3354,35 @@ class jump_shot:
                 agent.push(ball_recovery())
                 return
 
-            # Hold jump long enough to reliably leave the ground.
-            # The old hf <= offset_target.z check compared vertical
-            # velocity against world height and could release jump too early.
+            # Hold jump for the initial impulse, then only while the car's
+            # actual height is still below the planned contact height. The
+            # previous code compared vertical velocity (hf) with world Z.
             minimum_jump_hold = 0.06
+            below_contact_height = (
+                agent.me.location.z < self.offset_target.z - 15
+            )
 
             if (
                 jump_elapsed <= jump_max_duration
                 and (
                     jump_elapsed <= minimum_jump_hold
-                    or hf <= self.offset_target.z
+                    or below_contact_height
                 )
             ):
                 agent.controller.jump = True
             elif self.counter < 3:
                 self.counter += 1
+
+        if agent.controller.throttle < 0:
+            if not self._reverse_throttle_logged:
+                print(
+                    f"[JUMP SHOT DRIVE] blocked reverse throttle "
+                    f"raw={agent.controller.throttle:.2f} "
+                    f"T={T:.3f} jumping={self.jumping}",
+                    flush=True
+                )
+                self._reverse_throttle_logged = True
+            agent.controller.throttle = 0
 
         l_vf = vf + agent.me.location
         agent.line(l_vf-Vector(z=100), l_vf+Vector(z=100), agent.renderer.red)
