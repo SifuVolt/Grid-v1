@@ -2991,11 +2991,13 @@ class jump_shot:
         self.needed_jump_time = -1
         self._orientation_logged = False
         self.quick_shot = False
+        self.dodge_side = 0
         self.patience = shot_patience()
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
         self.targets = shot.targets
+        self.dodge_side = 0
     def needs_half_flip(self, agent):
         if self.targets is None:
             return False
@@ -3065,6 +3067,40 @@ class jump_shot:
 
             ball = slices[slice_n].physics.location
             self.ball_location = Vector(ball.x, ball.y, ball.z)
+
+            # Choose the dodge side from the predicted interception geometry,
+            # not from the ball's changing position when the dodge is pressed.
+            # Project the car's position to the interception time, then
+            # express the ball's offset from that future position in the
+            # car's current local axes. The choice is held through the jump.
+            predicted_car_location = (
+                agent.me.location
+                + agent.me.velocity * T
+                + 0.5 * agent.gravity * T * T
+            )
+            predicted_ball_offset = (
+                self.ball_location - predicted_car_location
+            )
+            predicted_ball_local = agent.me.local_location(
+                agent.me.location + predicted_ball_offset
+            ).flatten()
+            side_deadzone = 60.0
+            if predicted_ball_local.y > side_deadzone:
+                self.dodge_side = 1
+            elif predicted_ball_local.y < -side_deadzone:
+                self.dodge_side = -1
+            else:
+                self.dodge_side = 0
+
+            print(
+                f"[JUMP SHOT INTERCEPT SIDE] "
+                f"ball_local=({predicted_ball_local.x:.1f},"
+                f"{predicted_ball_local.y:.1f}) "
+                f"side={'right' if self.dodge_side > 0 else 'left' if self.dodge_side < 0 else 'forward'} "
+                f"predicted_car=({predicted_car_location.x:.0f},"
+                f"{predicted_car_location.y:.0f})",
+                flush=True
+            )
 
             self.needed_jump_time = virxrlcu.get_jump_time(
                 ball.z - agent.me.location.z,
@@ -3363,39 +3399,27 @@ class jump_shot:
                 )
 
                 if close_enough and local_target.x > 0:
-                    # Keep the normal forward dodge for ordinary shots.
-                    # Only use a side dodge when the ball is clearly offset
-                    # to the car's left or right. The earlier jump orientation
-                    # phase (including its backwards S-tilt for elevated balls)
-                    # remains unchanged.
-                    local_ball_for_dodge = agent.me.local_location(
-                        self.ball_location
-                    ).flatten()
-
-                    side_threshold = max(
-                        40.0,
-                        abs(local_ball_for_dodge.x) * 0.35
-                    )
-                    side_flip = abs(local_ball_for_dodge.y) > side_threshold
-
-                    if side_flip:
+                    # Use the side selected from the predicted
+                    # interception point. Do not recalculate from the ball's
+                    # current position at dodge time.
+                    if self.dodge_side > 0:
                         agent.controller.pitch = 0
-                        agent.controller.yaw = (
-                            1 if local_ball_for_dodge.y > 0 else -1
-                        )
-                        dodge_mode = "right" if local_ball_for_dodge.y > 0 else "left"
+                        agent.controller.yaw = 1
+                        dodge_mode = "right"
+                    elif self.dodge_side < 0:
+                        agent.controller.pitch = 0
+                        agent.controller.yaw = -1
+                        dodge_mode = "left"
                     else:
-                        # Do not let a ball slightly behind the car turn a
-                        # normal shot into a backflip.
+                        # Normal forward flip; preserve the existing
+                        # backwards-tilt orientation phase before this point.
                         agent.controller.pitch = -1
                         agent.controller.yaw = 0
                         dodge_mode = "forward"
 
                     print(
                         f"[JUMP SHOT DODGE] mode={dodge_mode} "
-                        f"ball_local=({local_ball_for_dodge.x:.1f},"
-                        f"{local_ball_for_dodge.y:.1f}) "
-                        f"side_threshold={side_threshold:.1f}",
+                        f"intercept_side={self.dodge_side}",
                         flush=True
                     )
 
