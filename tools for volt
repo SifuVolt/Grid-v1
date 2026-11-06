@@ -12,10 +12,11 @@ def find_wall_drive(agent, cap_=2.5):
         and abs(car.up.x) > 0.65
         and car.up.x * car.location.x < 0
     )
+    car_wall_side = (1 if car.location.x >= 0 else -1) if on_side_wall else 0
 
     # airborne is also true for a car attached to a vertical wall.
-    # Reject free-flight cars, but allow a car whose local up vector proves
-    # that it is actually attached to the side wall.
+    # Reject free-flight cars. A car attached to the opposite side wall
+    # cannot transfer across the arena in this wall-touch routine.
     if car.airborne and not on_side_wall:
         return None
 
@@ -51,6 +52,13 @@ def find_wall_drive(agent, cap_=2.5):
             continue
 
         wall_side = 1 if loc.x >= 0 else -1
+
+        # Never mistake attachment to the opposite side wall for a valid
+        # launch point. The previous distance estimate could accept this
+        # because it used a generous speed cap and did not model wall transfer.
+        if on_side_wall and car_wall_side != wall_side:
+            continue
+
         target = Vector(wall_side * 3850, loc.y, max(100.0, loc.z))
         delta = target - car.location
         distance = delta.magnitude()
@@ -80,8 +88,11 @@ def find_wall_drive(agent, cap_=2.5):
         return None
 
     _, intercept_in, x, y, z = best
+    ball_wall_side = 1 if x >= 0 else -1
     print(
         f"[WALL DRIVE FIND] airborne={car.airborne} wall={on_side_wall} "
+        f"car_wall_side={car_wall_side} ball_wall_side={ball_wall_side} "
+        f"car=({car.location.x:.0f},{car.location.y:.0f},{car.location.z:.0f}) "
         f"intercept={intercept_in:.2f}s ball=({x:.0f},{y:.0f},{z:.0f})",
         flush=True
     )
