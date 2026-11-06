@@ -1639,7 +1639,14 @@ class Bot(VirxERLU):
                     "speedflip_kickoff"
                 }
 
-                if active_routine_name not in protected:
+                if (
+                    active_routine_name not in protected
+                    and self.time - getattr(
+                        self, "_last_defensive_aerial_search_time", -999.0
+                    ) >= 0.10
+                ):
+                    self._last_defensive_aerial_search_time = self.time
+
                     left_post = self.friend_goal.left_post
                     right_post = self.friend_goal.right_post
 
