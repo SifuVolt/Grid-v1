@@ -3089,29 +3089,8 @@ class jump_shot:
             target_center - self.ball_location
         ).flatten().normalize()
 
-        # In the opponent's half, create a true side-flip interception:
-        # approach from the side opposite the goal, then dodge sideways
-        # toward the ball. In our half, retain the normal behind-ball shot.
-        if self.ball_location.y * side(agent.team) > 0:
-            shot_lateral_left = Vector(
-                -self.shot_vector.y,
-                self.shot_vector.x,
-                0
-            ).normalize()
-            side_offset = 160.0
-            self.offset_target = (
-                self.ball_location - shot_lateral_left * side_offset
-            )
-            self.dodge_side = -1
-            print(
-                f"[JUMP SHOT SIDE INTERCEPT] half=opponent "
-                f"approach=right-of-ball dodge=left "
-                f"ball=({self.ball_location.x:.0f},{self.ball_location.y:.0f}) "
-                f"target=({self.offset_target.x:.0f},{self.offset_target.y:.0f})",
-                flush=True
-            )
-        else:
-            self.dodge_side = 0
+        # Side flips are enabled only in the opponent's half.
+        self.dodge_side = -1 if self.ball_location.y * side(agent.team) > 0 else 0
 
         # Approach from behind the ball relative to the opponent's goal.
         self.offset_target = (
@@ -3147,6 +3126,17 @@ class jump_shot:
                 0
             ).normalize()
             self.offset_target = self.ball_location - shot_lateral_left * 160.0
+            self.contact_point = (
+                self.ball_location - shot_lateral_left * 92.75
+            )
+            self.contact_approach_target = self.offset_target.copy()
+            print(
+                f"[JUMP SHOT SIDE INTERCEPT] half=opponent "
+                f"approach=right-of-ball dodge=left "
+                f"ball=({self.ball_location.x:.0f},{self.ball_location.y:.0f}) "
+                f"target=({self.offset_target.x:.0f},{self.offset_target.y:.0f})",
+                flush=True
+            )
         print(
             f"[JUMP SHOT AIM FIX] "
             f"ball=({self.ball_location.x:.0f},{self.ball_location.y:.0f}) "
