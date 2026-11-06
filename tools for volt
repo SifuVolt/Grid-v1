@@ -715,9 +715,19 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             intercept_slice.physics.velocity.y,
             intercept_slice.physics.velocity.z
         )
-        left_post_x = min(best_targets[0][0], best_targets[1][0])
-        right_post_x = max(best_targets[0][0], best_targets[1][0])
         goal_y = (best_targets[0][1] + best_targets[1][1]) * 0.5
+        goal_center = Vector(
+            (best_targets[0][0] + best_targets[1][0]) * 0.5,
+            goal_y,
+            (best_targets[0][2] + best_targets[1][2]) * 0.5
+        )
+        shot_direction = (
+            goal_center - best_ball_location
+        ).flatten().normalize()
+        left_of_goal = Vector(
+            -shot_direction.y, shot_direction.x, 0
+        ).normalize()
+        half_goal_width = abs(best_targets[0][0] - best_targets[1][0]) * 0.5
         time_to_goal_line = (
             (goal_y - best_ball_location.y) / ball_velocity.y
             if abs(ball_velocity.y) > 150 else -1
@@ -733,10 +743,13 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
         )
         approach_side = None
         if rolling_toward_goal and projected_goal_x is not None:
-            if projected_goal_x > right_post_x - 92.75:
-                approach_side = "right"
-            elif projected_goal_x < left_post_x + 92.75:
+            projected_lateral = (
+                Vector(projected_goal_x, goal_y, 0) - goal_center
+            ).dot(left_of_goal)
+            if projected_lateral > half_goal_width - 92.75:
                 approach_side = "left"
+            elif projected_lateral < -half_goal_width + 92.75:
+                approach_side = "right"
 
         side_shot_selected = False
         if approach_side is not None:
@@ -1014,9 +1027,27 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
             intercept_slice.physics.velocity.z
         )
         goal_posts = agent.foe_goal_shot
-        left_post_x = min(goal_posts[0][0], goal_posts[1][0])
-        right_post_x = max(goal_posts[0][0], goal_posts[1][0])
-        goal_y = (goal_posts[0][1] + goal_posts[1][1]) * 0.5
+        post_a = (
+            goal_posts[0] if isinstance(goal_posts[0], Vector)
+            else Vector(*goal_posts[0])
+        )
+        post_b = (
+            goal_posts[1] if isinstance(goal_posts[1], Vector)
+            else Vector(*goal_posts[1])
+        )
+        goal_y = (post_a.y + post_b.y) * 0.5
+        goal_center = Vector(
+            (post_a.x + post_b.x) * 0.5,
+            goal_y,
+            (post_a.z + post_b.z) * 0.5
+        )
+        shot_direction = (
+            goal_center - best_ball_location
+        ).flatten().normalize()
+        left_of_goal = Vector(
+            -shot_direction.y, shot_direction.x, 0
+        ).normalize()
+        half_goal_width = abs(post_a.x - post_b.x) * 0.5
         time_to_goal_line = (
             (goal_y - best_ball_location.y) / ball_velocity.y
             if abs(ball_velocity.y) > 150 else -1
@@ -1032,10 +1063,13 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
         )
         approach_side = None
         if rolling_toward_goal and projected_goal_x is not None:
-            if projected_goal_x > right_post_x - 92.75:
-                approach_side = "right"
-            elif projected_goal_x < left_post_x + 92.75:
+            projected_lateral = (
+                Vector(projected_goal_x, goal_y, 0) - goal_center
+            ).dot(left_of_goal)
+            if projected_lateral > half_goal_width - 92.75:
                 approach_side = "left"
+            elif projected_lateral < -half_goal_width + 92.75:
+                approach_side = "right"
 
         if approach_side is not None:
             shot_direction = Vector(
