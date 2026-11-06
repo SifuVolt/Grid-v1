@@ -1032,7 +1032,10 @@ class Aerial:
         usable_boost_time = min(powered_time, car_boost / boost_per_second)
         acceleration_time = usable_boost_time
 
-        car_final_velocity = current_velocity + car_forward * (
+        # By the end of the estimated turn, the nose is assumed to be
+        # approximately aligned with the ball; boost then accelerates along
+        # that corrected heading rather than the stale starting heading.
+        car_final_velocity = current_velocity + desired_direction * (
             boost_acceleration * acceleration_time
         )
         if gravity is not None:
@@ -3424,14 +3427,14 @@ class ground_shot:
         self.targets = targets
         self.goal_aim_point = None
         self.patience = shot_patience()
-
-    def update(self, shot):
-        self.intercept_time = shot.intercept_time
-        self.targets = shot.targets
         self.contact_point = None
         self.contact_approach_target = None
         self.contact_normal = None
         self.contact_label = None
+
+    def update(self, shot):
+        self.intercept_time = shot.intercept_time
+        self.targets = shot.targets
     def needs_half_flip(self, agent):
         if self.targets is None:
             return False
