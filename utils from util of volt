@@ -72,6 +72,37 @@ def defaultThrottle(agent, target_speed, target_angles=None, local_target=None):
         angle_to_target = abs(target_angles[1])
         if target_speed < 0:
             angle_to_target = math.pi - angle_to_target
+
+        # Party Cannon-style turn-speed control. Estimate the curvature
+        # needed to reach the local target and cap the requested speed to
+        # the fastest speed at which Volt can still make that turn.
+        if (
+            local_target is not None
+            and target_speed > 0
+            and local_target.x > 0
+        ):
+            target_distance_sq = (
+                local_target.x ** 2 + local_target.y ** 2
+            )
+            if target_distance_sq > 350 ** 2:
+                required_curvature = (
+                    2 * abs(local_target.y) / target_distance_sq
+                )
+                if required_curvature > 0.00015:
+                    turn_speed_limit = 0
+                    for candidate_speed in range(0, 2301, 25):
+                        if curvature(candidate_speed) >= required_curvature:
+                            turn_speed_limit = candidate_speed
+                        else:
+                            break
+
+                    # Keep a small rolling minimum so tight turns do not
+                    # make the car stop completely before reaching the ball.
+                    target_speed = min(
+                        target_speed,
+                        max(450, turn_speed_limit)
+                    )
+
         if agent.controller.handbrake:
             if angle_to_target > 2.8:
                 if abs(target_speed) > 950: target_speed = 950 * sign(target_speed)
@@ -87,10 +118,37 @@ def defaultThrottle(agent, target_speed, target_angles=None, local_target=None):
         if not agent.controller.handbrake:
             # Only boost when we're reasonably aligned and have a meaningful
             # amount of acceleration to gain.
+            # Noob Black-style boost decision: first estimate how much
+            # speed throttle alone can build before reaching the target.
+            # Spend boost only when that boostless run cannot reach the
+            # requested speed in the available ground distance.
+            available_distance = (
+                math.sqrt(local_target.x ** 2 + local_target.y ** 2)
+                if local_target is not None else 0
+            )
+            boostless_speed = max(0.0, car_speed)
+            boostless_distance = 0.0
+
+            if target_speed > 0 and available_distance > 0:
+                for _ in range(360):  # up to three seconds at 120 Hz
+                    if boostless_speed >= target_speed - 50:
+                        break
+                    acceleration = throttle_acceleration(boostless_speed)
+                    if acceleration <= 0:
+                        break
+                    boostless_speed = min(
+                        target_speed,
+                        boostless_speed + acceleration / 120
+                    )
+                    boostless_distance += boostless_speed / 120
+                    if boostless_distance >= available_distance:
+                        break
+
             boost_needed = (
                 target_speed > 0
                 and angle_to_target < 0.45
                 and t > agent.boost_accel / 20
+                and boostless_speed < target_speed - 50
             )
 
             agent.controller.boost = boost_needed
