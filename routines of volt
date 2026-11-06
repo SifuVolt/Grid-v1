@@ -1709,10 +1709,19 @@ class shadow:
 
         return self_to_target > 320
     def get_ball_loc(self, agent, render=False):
-        slices = agent.ball_prediction_struct.slices
+        prediction = getattr(agent, "ball_prediction_struct", None)
+        slices = getattr(prediction, "slices", None) if prediction is not None else None
         if not slices:
-            return Vector(agent.ball.location.x, agent.ball.location.y * side(agent.team))
-        index = max(0, min(len(slices) - 1, round(agent.future_ball_location_slice * 1.1)))
+            return Vector(
+                agent.ball.location.x,
+                agent.ball.location.y * side(agent.team)
+            )
+
+        future_slice = getattr(agent, "future_ball_location_slice", 0)
+        index = max(
+            0,
+            min(len(slices) - 1, round(future_slice * 1.1))
+        )
         ball_slice = slices[index].physics.location
         ball_loc = Vector(ball_slice.x, ball_slice.y)
         if render: agent.sphere(ball_loc + Vector(z=93), 92.75, color=agent.renderer.black)
