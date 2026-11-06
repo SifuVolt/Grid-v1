@@ -3363,22 +3363,42 @@ class jump_shot:
                 )
 
                 if close_enough and local_target.x > 0:
-                    # Aim the dodge at the predicted ball contact itself,
-                    # not at the approach point behind the ball. The selected
-                    # centre/left/right contact has already shaped that approach.
-                    # This also gives quick shots a directional flip without
-                    # adding the S-tilt they do not have time to perform.
+                    # Keep the normal forward dodge for ordinary shots.
+                    # Only use a side dodge when the ball is clearly offset
+                    # to the car's left or right. The earlier jump orientation
+                    # phase (including its backwards S-tilt for elevated balls)
+                    # remains unchanged.
                     local_ball_for_dodge = agent.me.local_location(
                         self.ball_location
                     ).flatten()
 
-                    if local_ball_for_dodge.magnitude() > 1:
-                        dodge_direction = local_ball_for_dodge.normalize()
-                    else:
-                        dodge_direction = Vector(x=1)
+                    side_threshold = max(
+                        40.0,
+                        abs(local_ball_for_dodge.x) * 0.35
+                    )
+                    side_flip = abs(local_ball_for_dodge.y) > side_threshold
 
-                    agent.controller.pitch = -dodge_direction.x
-                    agent.controller.yaw = dodge_direction.y
+                    if side_flip:
+                        agent.controller.pitch = 0
+                        agent.controller.yaw = (
+                            1 if local_ball_for_dodge.y > 0 else -1
+                        )
+                        dodge_mode = "right" if local_ball_for_dodge.y > 0 else "left"
+                    else:
+                        # Do not let a ball slightly behind the car turn a
+                        # normal shot into a backflip.
+                        agent.controller.pitch = -1
+                        agent.controller.yaw = 0
+                        dodge_mode = "forward"
+
+                    print(
+                        f"[JUMP SHOT DODGE] mode={dodge_mode} "
+                        f"ball_local=({local_ball_for_dodge.x:.1f},"
+                        f"{local_ball_for_dodge.y:.1f}) "
+                        f"side_threshold={side_threshold:.1f}",
+                        flush=True
+                    )
+
                     agent.controller.jump = True
 
                     agent.last_flip_time = agent.time
