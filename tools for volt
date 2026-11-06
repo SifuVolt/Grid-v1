@@ -35,10 +35,8 @@ def find_any_aerial(agent, cap_=6):
     return find_any_shot(agent, cap_, can_double_jump=False, can_jump=False, can_ground=False)
 
 def useful_non_aerial_shot(agent, ball_location, ball_velocity, shot, intercept_time):
-    # Aerials are handled separately.
-    if shot['shot_type'] == 3:
-        return True
-
+    # Aerials still need the opponent-arrival check; accepting every aerial
+    # unconditionally lets Volt commit while an opponent is already at the ball.
     ball_pos = Vector(*ball_location)
     ball_vel = Vector(
         ball_velocity.x,
@@ -50,9 +48,6 @@ def useful_non_aerial_shot(agent, ball_location, ball_velocity, shot, intercept_
 
     if time_remaining <= 0:
         return False
-
-    # How far is the ball expected to travel before contact?
-    ball_travel = ball_vel.flatten().magnitude() * time_remaining
 
     # Find the closest opponent.
     if len(agent.foes) == 0:
