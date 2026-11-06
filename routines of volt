@@ -204,24 +204,23 @@ class wave_dash:
 
 class wall_approach:
     WALL_X = 3850
-    MIN_BALL_HEIGHT = 250
-    WALL_BALL_X = 2850
+    MIN_BALL_HEIGHT = 230
+    MIN_WALL_X = 3350
+    MAX_BALL_HEIGHT = 1750
 
     def __init__(self, intercept_time, targets=None):
         self.intercept_time = intercept_time
         self.targets = targets
         self.ball_location = None
-        self.ready_for_aerial = False
         self.start_time = -1
         self.last_debug_time = -1
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
-        self.targets = shot.targets
+        self.targets = getattr(shot, "targets", self.targets)
 
     def on_side_wall(self, agent):
         car = agent.me
-
         return (
             abs(car.location.x) > 3500
             and abs(car.up.x) > 0.65
@@ -231,117 +230,102 @@ class wall_approach:
     def run(self, agent: VirxERLU, manual=False):
         if self.start_time < 0:
             self.start_time = agent.time
-            print("[WALL APPROACH] START", flush=True)
+            print("[WALL DRIVE] START", flush=True)
 
-        if not agent.shooting:
-            agent.shooting = True
-
+        agent.shooting = True
         T = self.intercept_time - agent.time
-
         prediction = agent.ball_prediction_struct
         if prediction is None or not prediction.slices:
-            print("[WALL APPROACH] No ball prediction", flush=True)
+            print("[WALL DRIVE] STOP: no prediction", flush=True)
             agent.pop()
             agent.shooting = False
             return
 
-        # Clamp the index to the available prediction slices.
-        # Keep the project's existing 120 Hz indexing convention for now.
         slice_n = max(
             0,
-            min(
-                len(prediction.slices) - 1,
-                round(max(0, T) * 120)
-            )
+            min(len(prediction.slices) - 1, round(max(0.0, T) * 120))
         )
-
-        ball_slice = prediction.slices[slice_n]
-        physics = ball_slice.physics
-
-        self.ball_location = Vector(
-            physics.location.x,
-            physics.location.y,
-            physics.location.z
+        physics = prediction.slices[slice_n].physics
+        ball = Vector(
+            physics.location.x, physics.location.y, physics.location.z
         )
-
-        ball = self.ball_location
+        ball_velocity = Vector(
+            physics.velocity.x, physics.velocity.y, physics.velocity.z
+        )
+        self.ball_location = ball
         car = agent.me
 
-        distance = car.location.dist(ball)
-        on_wall = self.on_side_wall(agent)
+        if T <= -0.25:
+            print("[WALL DRIVE] STOP: contact window passed", flush=True)
+            agent.pop()
+            agent.shooting = False
+            return
 
-        agent.sphere(ball, 92.75)
-
-        # Don't waste time climbing if the ball is no longer a
-        # useful wall target.
-        if T <= 0.12:
+        if (
+            abs(ball.x) < self.MIN_WALL_X
+            or ball.z < self.MIN_BALL_HEIGHT
+            or ball.z > self.MAX_BALL_HEIGHT
+        ):
             print(
-                f"[WALL APPROACH] Intercept expired T={T:.2f}",
+                f"[WALL DRIVE] STOP: left wall window "
+                f"x={ball.x:.0f} z={ball.z:.0f}",
                 flush=True
             )
             agent.pop()
             agent.shooting = False
             return
 
-        # Project the target onto the side-wall plane. The ball's
-        # predicted Y/Z coordinates guide movement along the wall.
         wall_side = 1 if ball.x >= 0 else -1
+        goal_direction = (
+            agent.foe_goal.location - ball
+        ).flatten().normalize()
+        if goal_direction.magnitude() < 0.01:
+            goal_direction = Vector(0, -utils.side(agent.team), 0)
 
-        wall_target = Vector(
+        contact_target = Vector(
             wall_side * self.WALL_X,
-            ball.y,
-            max(100, ball.z)
+            ball.y - goal_direction.y * 185,
+            max(110, ball.z - goal_direction.z * 185)
         )
 
-        if not on_wall:
-            # First drive toward the side wall, aiming toward the
-            # ball's predicted Y position rather than its current spot.
-            approach_target = Vector(
-                wall_side * self.WALL_X,
-                ball.y,
-                car.location.z
-            )
+        on_wall = self.on_side_wall(agent)
+        if on_wall:
+            drive_target = contact_target
         else:
-            # Once on the wall, steer toward the predicted contact.
-            approach_target = wall_target
+            drive_target = Vector(
+                wall_side * self.WALL_X,
+                contact_target.y,
+                max(100, car.location.z)
+            )
 
-        local_target = car.local_location(approach_target)
-
-        # Estimate a reasonable approach speed.
-        time_left = max(0.15, min(T, 4.0))
-        speed_required = min(2200, distance / time_left)
-
-        defaultDrive(agent, speed_required, local_target)
-
+        distance = car.location.dist(drive_target)
+        time_left = max(0.12, min(T, 3.0))
+        speed_required = min(2200, max(900, distance / time_left))
+        defaultDrive(agent, speed_required, car.local_location(drive_target))
         agent.controller.boost = (
-            car.boost > 0
-            and speed_required > 1300
-            and distance > 1000
+            car.boost > 0 and distance > 900 and speed_required > 1450
         )
 
-        # The main.py logic will use this signal to try an aerial.
-        # Don't jump blindly: first reach the wall and get close enough
-        # that an aerial intercept might be possible.
-        self.ready_for_aerial = (
-            on_wall
-            and ball.z > self.MIN_BALL_HEIGHT
-            and abs(ball.x) > self.WALL_BALL_X
-            and distance < 1500
-            and 0.15 < T < 1.5
-        )
+        if on_wall and car.location.dist(ball) < 190:
+            print(
+                f"[WALL DRIVE] CONTACT RANGE "
+                f"ball=({ball.x:.0f},{ball.y:.0f},{ball.z:.0f}) "
+                f"T={T:.2f}",
+                flush=True
+            )
 
         if agent.time - self.last_debug_time > 0.25:
             print(
-                f"[WALL APPROACH] "
-                f"wall={on_wall} "
+                f"[WALL DRIVE] wall={on_wall} "
                 f"ball=({ball.x:.0f},{ball.y:.0f},{ball.z:.0f}) "
-                f"distance={distance:.0f} "
-                f"T={T:.2f} "
-                f"aerial_ready={self.ready_for_aerial}",
+                f"vz={ball_velocity.z:.0f} "
+                f"target=({drive_target.x:.0f},{drive_target.y:.0f},"
+                f"{drive_target.z:.0f}) dist={distance:.0f} "
+                f"T={T:.2f} boost={car.boost:.0f}",
                 flush=True
             )
             self.last_debug_time = agent.time
-    
+
 class wall_dash:
     JUMP_TIME = 0.07
     RELEASE_TIME = 0.05
