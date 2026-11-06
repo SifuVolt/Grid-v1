@@ -3142,10 +3142,10 @@ class jump_shot:
                 self.shot_vector.x,
                 0
             ).normalize()
+            intercept_length = agent.me.location.flat_dist(
+                self.ball_location
+            )
             if self.side_lateral_distance is None:
-                intercept_length = agent.me.location.flat_dist(
-                    self.ball_location
-                )
                 self.side_lateral_distance = intercept_length * 0.5
             lateral_distance = self.side_lateral_distance
             side_sign = 1 if self.approach_side == "right" else -1
