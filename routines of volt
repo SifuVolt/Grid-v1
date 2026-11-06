@@ -2991,13 +2991,11 @@ class jump_shot:
         self.needed_jump_time = -1
         self._orientation_logged = False
         self.quick_shot = False
-        self.dodge_side = 0
         self.patience = shot_patience()
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
         self.targets = shot.targets
-        self.dodge_side = 0
     def needs_half_flip(self, agent):
         if self.targets is None:
             return False
@@ -3068,10 +3066,6 @@ class jump_shot:
             ball = slices[slice_n].physics.location
             self.ball_location = Vector(ball.x, ball.y, ball.z)
 
-            # Side-flip selection is set from the shot geometry below,
-            # after the goal direction has been calculated.
-            self.dodge_side = 0
-
             self.needed_jump_time = virxrlcu.get_jump_time(
                 ball.z - agent.me.location.z,
                 agent.me.velocity.z,
@@ -3088,9 +3082,6 @@ class jump_shot:
         self.shot_vector = (
             target_center - self.ball_location
         ).flatten().normalize()
-
-        # Side flips are enabled only in the opponent's half.
-        self.dodge_side = -1 if self.ball_location.y * side(agent.team) > 0 else 0
 
         # Approach from behind the ball relative to the opponent's goal.
         self.offset_target = (
@@ -3114,36 +3105,6 @@ class jump_shot:
             print(
                 f"[JUMP CONTACT REFRESH] {contact_label} "
                 f"point={self.contact_point} approach={self.offset_target}",
-                flush=True
-            )
-
-        # The side-flip interception target takes priority over the generic
-        # contact-label approach in the opponent's half.
-        if self.dodge_side < 0:
-            shot_lateral_left = Vector(
-                -self.shot_vector.y,
-                self.shot_vector.x,
-                0
-            ).normalize()
-            # Scale the lateral setup distance to half the current
-            # car-to-intercept distance, rather than using a tiny fixed offset.
-            intercept_length = agent.me.location.dist(self.ball_location)
-            lateral_setup_distance = intercept_length * 0.5
-            self.offset_target = (
-                self.ball_location
-                - shot_lateral_left * lateral_setup_distance
-            )
-            self.contact_point = (
-                self.ball_location - shot_lateral_left * 92.75
-            )
-            self.contact_approach_target = self.offset_target.copy()
-            print(
-                f"[JUMP SHOT SIDE INTERCEPT] half=opponent "
-                f"intercept_length={intercept_length:.0f} "
-                f"lateral_setup={lateral_setup_distance:.0f} "
-                f"approach=right-of-ball dodge=left "
-                f"ball=({self.ball_location.x:.0f},{self.ball_location.y:.0f}) "
-                f"target=({self.offset_target.x:.0f},{self.offset_target.y:.0f})",
                 flush=True
             )
         print(
@@ -3401,30 +3362,23 @@ class jump_shot:
                     < (92.75 + agent.me.hitbox.length) * 1.02
                 )
 
-                if close_enough and (local_target.x > 0 or self.dodge_side != 0):
-                    # Side-flip shots arrive beside the ball and dodge inward.
-                    # Normal shots keep their existing forward dodge.
-                    if self.dodge_side > 0:
-                        agent.controller.pitch = 0
-                        agent.controller.yaw = 1
-                        dodge_mode = "right"
-                    elif self.dodge_side < 0:
-                        agent.controller.pitch = 0
-                        agent.controller.yaw = -1
-                        dodge_mode = "left"
+                if close_enough and local_target.x > 0:
+                    # Aim the dodge at the predicted ball contact itself,
+                    # not at the approach point behind the ball. The selected
+                    # centre/left/right contact has already shaped that approach.
+                    # This also gives quick shots a directional flip without
+                    # adding the S-tilt they do not have time to perform.
+                    local_ball_for_dodge = agent.me.local_location(
+                        self.ball_location
+                    ).flatten()
+
+                    if local_ball_for_dodge.magnitude() > 1:
+                        dodge_direction = local_ball_for_dodge.normalize()
                     else:
-                        # Normal forward flip; preserve the existing
-                        # backwards-tilt orientation phase before this point.
-                        agent.controller.pitch = -1
-                        agent.controller.yaw = 0
-                        dodge_mode = "forward"
+                        dodge_direction = Vector(x=1)
 
-                    print(
-                        f"[JUMP SHOT DODGE] mode={dodge_mode} "
-                        f"intercept_side={self.dodge_side}",
-                        flush=True
-                    )
-
+                    agent.controller.pitch = -dodge_direction.x
+                    agent.controller.yaw = dodge_direction.y
                     agent.controller.jump = True
 
                     agent.last_flip_time = agent.time
