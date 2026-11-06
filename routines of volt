@@ -1256,6 +1256,19 @@ class Aerial:
                     flush=True
                 )
 
+        # Party Cannon's wall-aerial correction: flatten the shot direction
+        # when the planned 155-unit contact approach is too close to a wall.
+        self.shot_vector, wall_normal, wall_clearance = WallShot.adjust_aerial(
+            self.ball, self.shot_vector
+        )
+        if wall_normal is not None:
+            print(
+                f"[WALL AERIAL] clearance={wall_clearance:.1f} "
+                f"normal=({wall_normal.x:.0f},{wall_normal.y:.0f},"
+                f"{wall_normal.z:.0f})",
+                flush=True
+            )
+
         # Aim the aerial's nose toward a point halfway from the
         # ball centre to its bottom. Keep the existing shot-direction
         # offset so the car still approaches from behind the intended hit.
@@ -3023,6 +3036,85 @@ class shot_patience:
         return intercept_time
 
 
+class WallShot:
+    """
+    Party Cannon-style wall contact geometry shared by jump shots and aerials.
+    The arena wall planes are used only to identify nearby vertical surfaces;
+    normal floor and ceiling contacts keep their existing handling.
+    """
+
+    @staticmethod
+    def nearest_wall(point):
+        candidates = [
+            (abs(4096 - point.x), "x", 4096.0, Vector(-1, 0, 0)),
+            (abs(-4096 - point.x), "x", -4096.0, Vector(1, 0, 0)),
+            (abs(5120 - point.y), "y", 5120.0, Vector(0, -1, 0)),
+            (abs(-5120 - point.y), "y", -5120.0, Vector(0, 1, 0)),
+        ]
+        return min(candidates, key=lambda item: item[0])
+
+    @staticmethod
+    def surface_point(point, axis, plane):
+        if axis == "x":
+            return Vector(plane, point.y, point.z)
+        return Vector(point.x, plane, point.z)
+
+    @classmethod
+    def adjust_jump(cls, ball_location, shot_direction):
+        """
+        Party Cannon JumpShot rule: if the 165-unit approach point would be
+        less than 40 units from a wall, flatten the shot against that wall.
+        """
+        distance, axis, plane, normal = cls.nearest_wall(ball_location)
+        target = ball_location - shot_direction * 165
+        target_surface = cls.surface_point(target, axis, plane)
+        target_height = (target - target_surface).dot(normal)
+
+        if target_height >= 40:
+            return shot_direction, None, target_height
+
+        ball_surface = cls.surface_point(ball_location, axis, plane)
+        ball_height = (ball_location - ball_surface).dot(normal)
+        tangent = shot_direction - normal * shot_direction.dot(normal)
+
+        if tangent.magnitude() < 0.001:
+            return shot_direction, None, target_height
+
+        angle = math.asin(cap((ball_height - 40) / 165, -1, 1))
+        adjusted = (
+            tangent.normalize() * math.cos(angle)
+            + normal * math.sin(angle)
+        ).normalize()
+
+        return adjusted, normal, target_height
+
+    @classmethod
+    def adjust_aerial(cls, ball_location, shot_direction):
+        """
+        Party Cannon AerialShot rule: if its 155-unit approach point is less
+        than 50 units from a wall, make the shot direction flatter to it.
+        """
+        distance, axis, plane, normal = cls.nearest_wall(ball_location)
+        target = ball_location - shot_direction * 155
+        target_surface = cls.surface_point(target, axis, plane)
+        target_height = (target - target_surface).dot(normal)
+
+        if target_height >= 50:
+            return shot_direction, None, target_height
+
+        tangent = shot_direction - normal * shot_direction.dot(normal)
+        if tangent.magnitude() < 0.001:
+            return shot_direction, None, target_height
+
+        angle = math.asin(cap((target_height - 50) / 155, -1, 1))
+        adjusted = (
+            tangent.normalize() * math.cos(angle)
+            + normal * math.sin(angle)
+        ).normalize()
+
+        return adjusted, normal, target_height
+
+
 class jump_shot:
     # Hits a target point at a target time towards a target direction
     def __init__(self, intercept_time, targets=None):
@@ -3043,6 +3135,8 @@ class jump_shot:
         self.side_mode = False
         self.last_side_debug_time = -1
         self.patience = shot_patience()
+        self.wall_shot_active = False
+        self.wall_shot_normal = None
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -3134,6 +3228,24 @@ class jump_shot:
             target_center - self.ball_location
         ).flatten().normalize()
 
+        # Apply Party Cannon's wall-shot contact-angle correction before
+        # building the approach target, so all existing contact choices use
+        # the corrected shot direction.
+        self.wall_shot_active = False
+        self.wall_shot_normal = None
+        self.shot_vector, wall_normal, wall_clearance = WallShot.adjust_jump(
+            self.ball_location, self.shot_vector
+        )
+        if wall_normal is not None:
+            self.wall_shot_active = True
+            self.wall_shot_normal = wall_normal
+            print(
+                f"[WALL JUMP SHOT] clearance={wall_clearance:.1f} "
+                f"normal=({wall_normal.x:.0f},{wall_normal.y:.0f},"
+                f"{wall_normal.z:.0f})",
+                flush=True
+            )
+
         # Approach from behind the ball relative to the opponent's goal.
         self.offset_target = (
             self.ball_location
@@ -3195,6 +3307,29 @@ class jump_shot:
                     f"setup=({self.offset_target.x:.0f},{self.offset_target.y:.0f})",
                     flush=True
                 )
+
+        if self.wall_shot_active and not self.side_mode:
+            # Party Cannon adds a small tangential offset and compensates
+            # the wall target for gravity during the required jump time.
+            normal = self.wall_shot_normal
+            tangent = self.shot_vector - normal * self.shot_vector.dot(normal)
+            if tangent.magnitude() > 0.001:
+                self.offset_target -= tangent.normalize() * 25
+
+            if abs(normal.z) < 0.95:
+                self.offset_target = Vector(
+                    self.offset_target.x,
+                    self.offset_target.y,
+                    self.ball_location.z + cap(
+                        self.offset_target.z - self.ball_location.z,
+                        -120,
+                        120
+                    )
+                )
+                self.offset_target -= agent.gravity * (
+                    0.5 * self.needed_jump_time ** 2
+                )
+            self.contact_approach_target = self.offset_target.copy()
 
         print(
             f"[JUMP SHOT AIM FIX] "
