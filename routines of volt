@@ -2390,8 +2390,10 @@ class grid_defense:
             + angular.z * angular.z
         )
 
-    def _choose_pad(self, agent, goal_location, car_location):
-        if agent.me.boost >= 100 or self.fast:
+    def _choose_pad(self, agent, goal_location, car_location, fast=None):
+        if fast is None:
+            fast = self.fast
+        if agent.me.boost >= 100 or fast:
             return None
 
         candidates = []
@@ -2477,11 +2479,10 @@ class grid_defense:
         goal_location = agent.foe_goal.location
         goal_sign = sign(goal_location.y) or 1
 
-        # The goalie must keep the goal-mouth lane; boost collection is
-        # handled by the other roles rather than by the last line of defence.
-        best_pad = (
-            None if goalie
-            else self._choose_pad(agent, goal_location, car_location)
+        # Match Noob Black: even the goalie may take a safe boost pad
+        # behind its current position when it is already close to the net.
+        best_pad = self._choose_pad(
+            agent, goal_location, car_location, fast=fast
         )
 
         if best_pad is not None:
@@ -2722,7 +2723,15 @@ class grid_defense:
             self.prev_front = car.forward
             return
 
-        self._run_defense(agent, self.goalie, self.fast)
+        # Noob Black only permits a goalie boost detour when it is already
+        # within 1000 units of the goal line. Farther out, return directly.
+        goalie_fast = (
+            self.goalie
+            and abs(car.location.y + goal_location.y) > 1000
+        )
+        self._run_defense(
+            agent, self.goalie, self.fast or goalie_fast
+        )
 
 
 class fast_intercept_finder:
