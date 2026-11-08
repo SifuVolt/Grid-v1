@@ -3885,38 +3885,15 @@ class jump_shot:
                     and not self.quick_shot
                 )
 
-                lateral_error = 0.0
-                yaw_correction = 0.0
-
                 if hold_s:
-                    # S raises the nose; A/D (yaw) makes a small correction
-                    # toward the predicted contact point at the same time.
-                    # Use the lateral miss of the predicted intercept rather
-                    # than the ball's current screen position.
                     agent.controller.pitch = 1
-                    local_intercept_error = agent.me.local(delta_x)
-                    lateral_error = local_intercept_error.y
-                    forward_error = max(abs(local_intercept_error.x), 250)
-                    yaw_correction = cap(
-                        math.atan2(lateral_error, forward_error) * 0.65,
-                        -0.30,
-                        0.30
-                    )
-                    agent.controller.yaw = cap(
-                        agent.controller.yaw + yaw_correction,
-                        -1,
-                        1
-                    )
 
                 if not self._orientation_logged:
                     print(
                         f"[JUMP SHOT ORIENT] T={T:.3f} "
                         f"ball_z={self.ball_location.z:.0f} "
                         f"car_z={agent.me.location.z:.0f} "
-                        f"hold_S={hold_s} "
-                        f"lateral_error={lateral_error:.1f} "
-                        f"AD_yaw={yaw_correction:.3f} "
-                        f"counter={self.counter}",
+                        f"hold_S={hold_s} counter={self.counter}",
                         flush=True
                     )
                     self._orientation_logged = True
