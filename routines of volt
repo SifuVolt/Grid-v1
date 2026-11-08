@@ -2490,7 +2490,7 @@ class grid_defense:
             # A communicated pass receiver moves up through the middle.
             target = Vector(
                 x=0,
-                y=cap(ball_location.y - goal_sign * 850, -4550, 4550),
+                y=cap(ball_location.y + goal_sign * 850, -4550, 4550),
                 z=0
             )
         else:
@@ -2691,8 +2691,13 @@ class grid_defense:
         # is positive toward our own goal, so the signs are opposite.
         ball_depth = ball.y * side_value
         car_depth = car.location.y * side_value
+        receiver_getter = getattr(agent, "get_transition2_receiver", None)
+        transition = self.transition
+        if callable(receiver_getter) and receiver_getter() == car.index:
+            transition = 3
+
         should_prepare = (
-            self.transition == 1
+            transition == 1
             and ball_depth < 0
             and car_depth >= -900
             and (
@@ -2723,7 +2728,7 @@ class grid_defense:
             self.prev_front = car.forward
             return
 
-        self._run_defense(agent, self.transition, self.fast)
+        self._run_defense(agent, transition, self.fast)
 
 
 class fast_intercept_finder:
