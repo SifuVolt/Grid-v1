@@ -221,17 +221,20 @@ class Bot(VirxERLU):
 
         # If a teammate can reach the threatened ball just as quickly,
         # the goalie stays home. If not, the goalie is the last viable saver.
-        must_save = (
-            goalie_eta <= time_to_goal + 0.25
-            and best_teammate_eta > goalie_eta + 0.15
-        )
+        teammate_can_save = best_teammate_eta <= time_to_goal + 0.10
+        goalie_can_save = goalie_eta <= time_to_goal + 0.35
+        must_save = goalie_can_save and not teammate_can_save
 
-        print(
-            f"[GOALIE SAVE READ] player={self.me.index} "
-            f"goalie_eta={goalie_eta:.2f} teammate_eta={best_teammate_eta:.2f} "
-            f"goal_time={time_to_goal:.2f} must_save={must_save}",
-            flush=True
-        )
+        if self.time - getattr(self, "_last_goalie_save_debug", -999.0) >= 0.5:
+            self._last_goalie_save_debug = self.time
+            print(
+                f"[GOALIE SAVE READ] player={self.me.index} "
+                f"goalie_eta={goalie_eta:.2f} teammate_eta={best_teammate_eta:.2f} "
+                f"goal_time={time_to_goal:.2f} "
+                f"teammate_can_save={teammate_can_save} "
+                f"must_save={must_save}",
+                flush=True
+            )
         return must_save
 
     def should_defensive_aerial(self):
@@ -1784,14 +1787,20 @@ class Bot(VirxERLU):
         side = utils.side(self.team)
         ball_depth = self.ball.location.y * side
 
+        goalie_holding_net = False
+        if self.friends:
+            _, goalie_index, _ = self.get_grid_team_roles()
+            goalie_holding_net = self.me.index == goalie_index
+
         cover_player_deep_defending = (
             bool(self.friends)
             and self.should_hold_cover_role()
             and ball_depth > 2048
         )
 
-        # Cancel an existing boost detour if we need to hold cover.
-        if cover_player_deep_defending and not self.is_clear():
+        # Neither the designated goalie nor a deep cover player should
+        # abandon the defensive lane for a boost detour.
+        if (goalie_holding_net or cover_player_deep_defending) and not self.is_clear():
             current_name = self.stack[0].__class__.__name__
 
             if current_name == "goto_boost":
@@ -1804,6 +1813,7 @@ class Bot(VirxERLU):
         if (
             self.is_clear()
             and self.me.boost < 70
+            and not goalie_holding_net
             and not self.defensive_emergency()
             and not (
                 len(self.friends) >= 2
@@ -1829,7 +1839,7 @@ class Bot(VirxERLU):
         # Normal boost collection when we aren't prioritising the ball.
 
         if len(self.friends) == 1:
-            if self.me.boost < 23 and not self.should_prioritize_ball() and not cover_player_deep_defending:
+            if self.me.boost < 23 and not goalie_holding_net and not self.should_prioritize_ball() and not cover_player_deep_defending:
                 # If the stack is clear
                 if self.is_clear():
                     # Get a list of all of the large, active boosts
@@ -1846,7 +1856,7 @@ class Bot(VirxERLU):
                 if not self.is_clear():
                     return
         elif len(self.friends) > 1:
-            if self.me.boost < 30 and not self.should_prioritize_ball() and not cover_player_deep_defending:
+            if self.me.boost < 30 and not goalie_holding_net and not self.should_prioritize_ball() and not cover_player_deep_defending:
                 # If the stack is clear
                 if self.is_clear():
                     # Get a list of all of the large, active boosts
@@ -1863,7 +1873,7 @@ class Bot(VirxERLU):
                 if not self.is_clear():
                     return
         else:
-            if self.me.boost < 18 and not self.should_prioritize_ball():
+            if self.me.boost < 18 and not goalie_holding_net and not self.should_prioritize_ball():
                 # If the stack is clear
                 if self.is_clear():
                     # Get a list of all of the large, active boosts
