@@ -1006,8 +1006,8 @@ class Bot(VirxERLU):
 
     def goalie_released_for_ball(self):
         """
-        In 3v3, release the goalie when both other teammates have left
-        our defensive quarter. The goalie then becomes the active challenger.
+        In 3v3, release the goalie once the ball has advanced beyond the
+        halfway point of our own half. Crossing midfield alone is not enough.
         """
         if len(self.friends) < 2:
             return False
@@ -1016,18 +1016,10 @@ class Bot(VirxERLU):
         if goalie_index is None:
             return False
 
-        side = utils.side(self.team)
-        cars = [self.me] + list(self.friends)
-        teammates = [
-            car for car in cars
-            if car.index != goalie_index
-            and not getattr(car, "demolished", False)
-        ]
-        # The defensive quarter is the deepest 2560 units of our half.
-        return (
-            len(teammates) == 2
-            and all(car.location.y * side < 2560 for car in teammates)
-        )
+        # Own-goal depth is 0 and midfield is 5120. Release only after
+        # the ball has travelled past the midpoint of that half (2560).
+        ball_depth = self.ball.location.y * utils.side(self.team)
+        return ball_depth > 2560
 
     def get_grid_active_challenger(self):
         """Grid's closest viable player is the only normal challenger."""
@@ -1368,6 +1360,26 @@ class Bot(VirxERLU):
             not self.is_clear()
             and self.stack[0].__class__.__name__ == "wall_approach"
         ):
+            # Once the wall drive has attached to the matching side wall,
+            # look for an aerial intercept. The aerial routine owns the
+            # double-jump launch from the wall; otherwise keep wall driving.
+            car = self.me
+            on_side_wall = (
+                abs(car.location.x) > 3500
+                and abs(car.up.x) > 0.65
+                and car.up.x * car.location.x < 0
+            )
+            if on_side_wall and self.odd_tick == 0:
+                aerial = tools.find_any_aerial(self, cap_=6)
+                if aerial is not None:
+                    print(
+                        f"[WALL DRIVE] handing off to aerial "
+                        f"T={aerial.intercept_time - self.time:.2f}",
+                        flush=True
+                    )
+                    self.clear()
+                    self.push(aerial)
+                    return
             return
 
         # Share and compare shot opportunities with teammates.
