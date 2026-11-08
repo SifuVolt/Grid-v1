@@ -379,7 +379,7 @@ class Bot(VirxERLU):
             if teammate_has_ball:
                 return False
 
-            if active_challenger == cover_index:
+            if active_challenger == transition2_index:
                 return distance < 2400 and angle < 1.8
 
             # First man: retain Grid's aggressive forward pressure.
@@ -1626,7 +1626,7 @@ class Bot(VirxERLU):
         # Normal boost collection when we aren't prioritising the ball.
 
         if len(self.friends) == 1:
-            if self.me.boost < 23 and not transition2_holding_position and not self.should_prioritize_ball() and not transition2_holding_position:
+            if self.me.boost < 23 and not transition2_holding_position and not self.should_prioritize_ball():
                 # If the stack is clear
                 if self.is_clear():
                     # Get a list of all of the large, active boosts
