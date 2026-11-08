@@ -772,7 +772,7 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                     )
                 )
                 required_sequence_time = (
-                    required_jump_time * 1.08 + 0.12
+                    required_jump_time * 1.08 + 0.23
                 )
                 if time_remaining < required_sequence_time:
                     continue
