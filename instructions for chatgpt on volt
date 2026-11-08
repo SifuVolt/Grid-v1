@@ -1369,17 +1369,39 @@ class Bot(VirxERLU):
                 and abs(car.up.x) > 0.65
                 and car.up.x * car.location.x < 0
             )
-            if on_side_wall and self.odd_tick == 0:
+            if (
+                on_side_wall
+                and not car.doublejumped
+                and self.odd_tick == 0
+            ):
                 aerial = tools.find_any_aerial(self, cap_=6)
                 if aerial is not None:
-                    print(
-                        f"[WALL DRIVE] handing off to aerial "
-                        f"T={aerial.intercept_time - self.time:.2f}",
-                        flush=True
+                    prediction = self.ball_prediction_struct
+                    slices = (
+                        prediction.slices
+                        if prediction is not None else ()
                     )
-                    self.clear()
-                    self.push(aerial)
-                    return
+                    if slices:
+                        aerial_slice = min(
+                            slices,
+                            key=lambda item: abs(
+                                item.game_seconds - aerial.intercept_time
+                            )
+                        )
+                        ball_x = aerial_slice.physics.location.x
+                        same_wall = ball_x * car.location.x > 0
+                    else:
+                        same_wall = False
+
+                    if same_wall:
+                        print(
+                            f"[WALL DRIVE] handing off to same-wall aerial "
+                            f"T={aerial.intercept_time - self.time:.2f}",
+                            flush=True
+                        )
+                        self.clear()
+                        self.push(aerial)
+                        return
             return
 
         # Share and compare shot opportunities with teammates.
