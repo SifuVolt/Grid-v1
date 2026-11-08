@@ -863,44 +863,10 @@ class Bot(VirxERLU):
             )
         )
 
-        # If the elected cover player has committed to an emergency clear
-        # (or another real shot), elect the next deepest teammate as cover.
-        # The released player is still the active challenger; this only
-        # transfers the goal-side responsibility.
-        cover_released = False
-        if cover.index == self.me.index:
-            cover_released = bool(self.cover_role_released) or any(
-                routine.__class__.__name__ == "emergency_clear"
-                for routine in self.stack
-            )
-        else:
-            cover_message = self.get_teammate_comm(
-                cover.index, max_age=0.65
-            ) or {}
-            cover_released = bool(
-                cover_message.get("cover_released", False)
-            )
-
-        if cover_released:
-            replacement_candidates = [
-                car for car in remaining
-                if car.index != cover.index
-            ]
-            cover = (
-                max(
-                    replacement_candidates,
-                    key=lambda car: (
-                        car.location.y * side,
-                        -car.index
-                    )
-                )
-                if replacement_candidates else None
-            )
-
         support = next(
             (
                 car for car in remaining
-                if cover is None or car.index != cover.index
+                if car.index != cover.index
             ),
             None
         )
@@ -1057,15 +1023,6 @@ class Bot(VirxERLU):
         if not self.friends:
             return False
 
-        # An emergency clear is an active defensive commitment. Release the
-        # designated cover slot so a teammate can take over the goal-side role.
-        emergency_clear_active = any(
-            routine.__class__.__name__ == "emergency_clear"
-            for routine in self.stack
-        )
-        if emergency_clear_active:
-            return False
-
         side = utils.side(self.team)
         ball = self.ball.location
         ball_depth = ball.y * side
@@ -1153,14 +1110,8 @@ class Bot(VirxERLU):
 
         """Refresh shot information and announce when we leave cover to commit."""
 
-        # An emergency clear releases the cover role just like an urgent
-        # goal-line threat, even when the clear was selected by the wider
-        # defensive fallback rather than defensive_emergency().
-        emergency_clear_active = any(
-            routine.__class__.__name__ == "emergency_clear"
-            for routine in self.stack
-        )
-        if self.defensive_emergency() or emergency_clear_active:
+        # Check for an urgent defensive situation first.
+        if self.defensive_emergency():
             self.teamplay_shot = None
             self.teamplay_score = 100.0
             self.teamplay_contact_time = 0.0
