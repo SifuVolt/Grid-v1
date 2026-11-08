@@ -754,6 +754,29 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
         # This operation is very expensive, so we use C to improve run time
         shot = virxrlcu.parse_slice_for_shot_with_target(can_ground, can_jump, can_double_jump, can_aerial and (min_aerial_height < ball_location[2] < max_aerial_height), time_remaining, *game_info, gravity, ball_info, me, targets)
         if shot['found'] == 1:
+            # At very low boost, a single-jump shot must leave enough time
+            # for the jump and the follow-up dodge impulse. Reject slices
+            # whose timing only works if the car reaches the ball without
+            # actually executing that dodge.
+            if (
+                int(shot.get("shot_type", 0)) == 1
+                and agent.boost_amount != "unlimited"
+                and agent.me.boost < 8
+            ):
+                required_jump_time = max(
+                    0.0,
+                    virxrlcu.get_jump_time(
+                        ball_location[2] - agent.me.location.z,
+                        agent.me.velocity.z,
+                        agent.gravity.z
+                    )
+                )
+                required_sequence_time = (
+                    required_jump_time * 1.08 + 0.12
+                )
+                if time_remaining < required_sequence_time:
+                    continue
+
             if not useful_non_aerial_shot(
                 agent,
                 ball_location,
