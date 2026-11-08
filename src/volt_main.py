@@ -863,10 +863,44 @@ class Bot(VirxERLU):
             )
         )
 
+        # If the elected cover player has committed to an emergency clear
+        # (or another real shot), elect the next deepest teammate as cover.
+        # The released player is still the active challenger; this only
+        # transfers the goal-side responsibility.
+        cover_released = False
+        if cover.index == self.me.index:
+            cover_released = bool(self.cover_role_released) or any(
+                routine.__class__.__name__ == "emergency_clear"
+                for routine in self.stack
+            )
+        else:
+            cover_message = self.get_teammate_comm(
+                cover.index, max_age=0.65
+            ) or {}
+            cover_released = bool(
+                cover_message.get("cover_released", False)
+            )
+
+        if cover_released:
+            replacement_candidates = [
+                car for car in remaining
+                if car.index != cover.index
+            ]
+            cover = (
+                max(
+                    replacement_candidates,
+                    key=lambda car: (
+                        car.location.y * side,
+                        -car.index
+                    )
+                )
+                if replacement_candidates else None
+            )
+
         support = next(
             (
                 car for car in remaining
-                if car.index != cover.index
+                if cover is None or car.index != cover.index
             ),
             None
         )
