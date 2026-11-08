@@ -1003,7 +1003,10 @@ class Aerial:
         max_speed = 2300.0
 
         to_ball = ball_location - car_location
-        to_target = (shot_target - ball_location).flatten()
+        # Keep the complete 3D goal vector. Flattening here discarded the
+        # vertical component and made aerials aim as if the goal were level
+        # with the ball, even when the correct shot needed to rise or dip.
+        to_target = shot_target - ball_location
 
         if to_target.magnitude() < 1:
             return Vector(0, 1, 0)
@@ -1096,7 +1099,7 @@ class Aerial:
         # existing ball momentum.
         momentum_direction = (
             shot_target - predicted_ball_position
-        ).flatten()
+        )
 
         if momentum_direction.magnitude() < 1:
             return goal_direction
@@ -1169,9 +1172,27 @@ class Aerial:
                 and not agent.me.jumped
             )
 
-        # Choose a goal corner based on Volt's position relative to the goal.
-        if self.goal_aim_point is None:
-            self.goal_aim_point = _relative_goal_aim_point(agent, self.targets)
+        # Re-evaluate the goal target as the ball crosses midfield and
+        # the car changes between grounded and airborne states. The target
+        # is intentionally not frozen at aerial startup.
+        updated_goal_aim = _relative_goal_aim_point(agent, self.targets)
+        if (
+            self.goal_aim_point is None
+            or self.goal_aim_point.dist(updated_goal_aim) > 25
+        ):
+            if self.goal_aim_point is not None:
+                print(
+                    f"[AERIAL GOAL TARGET] updated "
+                    f"old=({self.goal_aim_point.x:.0f},"
+                    f"{self.goal_aim_point.y:.0f},"
+                    f"{self.goal_aim_point.z:.0f}) "
+                    f"new=({updated_goal_aim.x:.0f},"
+                    f"{updated_goal_aim.y:.0f},"
+                    f"{updated_goal_aim.z:.0f})",
+                    flush=True
+                )
+            self.goal_aim_point = updated_goal_aim
+
         shot_target = self.goal_aim_point.copy()
 
         # Party Cannon predicted post-contact shot direction.
