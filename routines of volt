@@ -3962,7 +3962,7 @@ class jump_shot:
                     )
                     local_contact_for_dodge = agent.me.local_location(
                         contact_target
-                    ).flatten()
+                    )
                     front_face_y = cap(
                         local_contact_for_dodge.y,
                         hitbox_offset.y - hitbox.width * 0.5,
@@ -3980,7 +3980,7 @@ class jump_shot:
                     )
                     nose_to_contact = (
                         local_contact_for_dodge - local_nose_contact
-                    )
+                    ).flatten()
 
                     if nose_to_contact.magnitude() > 1:
                         dodge_direction = nose_to_contact.normalize()
