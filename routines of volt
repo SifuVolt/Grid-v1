@@ -4019,7 +4019,7 @@ class jump_shot:
                     or (
                         agent.me.location.dist(self.offset_target)
                         > (92.75 + hitbox.length) * 1.02 + 150
-                        and T < (0.24 if low_boost_dodge else 0.12)
+                        and T < (0.35 if low_boost_dodge else 0.12)
                     )
                 ):
                     print(
