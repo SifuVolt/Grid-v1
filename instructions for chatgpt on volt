@@ -811,7 +811,7 @@ class Bot(VirxERLU):
         - the more advanced remaining car is Transition 1,
         - the deepest remaining car is Transition 2.
 
-        Transition 2 is not a transition2. It holds a deeper support lane, then
+        Transition 2 is not a fixed goal-line defender. It holds a deeper support lane, then
         follows forward once Transition 1 has actually advanced. Every bot
         calculates the same assignments from the shared packet.
         """
@@ -1021,8 +1021,8 @@ class Bot(VirxERLU):
             # A teammate handling a defensive emergency should be allowed
             # to take responsibility when the ball is in our half.
             if status == "DEFEND" and ball_is_our_side:
-                # A transition2 reporting DEFEND is holding the net, not taking
-                # the challenge. Only yield to the elected challenger.
+                # A teammate reporting DEFEND is not automatically the
+                # challenger; only yield to the elected attacker.
                 attacker, transition1, transition2 = self.get_grid_team_roles()
                 if friend.index == attacker:
                     return False
@@ -1246,6 +1246,12 @@ class Bot(VirxERLU):
             self.stack[0].__class__.__name__
             if not self.is_clear()
             else None
+        )
+
+        attacker, transition1, transition2 = (
+            self.get_grid_team_roles()
+            if self.friends
+            else (None, None, None)
         )
 
         # Transition 1 supports the attacker's first touch, then searches
@@ -1519,8 +1525,8 @@ class Bot(VirxERLU):
             distance_to_ball = self.me.location.flat_dist(ball)
 
             # Team modes use Grid's elected challenger for emergency clears.
-            # The transition2 holds the net; the third 3v3 player uses the normal
-            # non-transition2 transition rather than joining the clear.
+            # Only the elected attacker takes the emergency clear; both
+            # transition roles retain their staggered support positions.
             if self.friends:
                 attacker, transition1, transition2 = self.get_grid_team_roles()
                 if self.me.index != attacker:
@@ -1568,9 +1574,8 @@ class Bot(VirxERLU):
 
         # TODO this bot will go for boost no matter what - this is AWFUL, especially in a 1v1!
         
-        # A cover player must hold position when the ball is deep
-        # in our half. The ball must return toward midfield before
-        # this player is allowed to collect boost again.
+        # Transition 2 holds its deeper lane while the ball is deep
+        # in our half, then can rotate forward with Transition 1.
         side = utils.side(self.team)
         ball_depth = self.ball.location.y * side
 
@@ -1600,7 +1605,7 @@ class Bot(VirxERLU):
             and not (
                 len(self.friends) >= 2
                 and self.should_hold_transition2_role()
-                and not cover_player_deep_defending
+                and ball_depth > 640
             )
             and (
                 self.should_prioritize_ball()
@@ -1621,7 +1626,7 @@ class Bot(VirxERLU):
         # Normal boost collection when we aren't prioritising the ball.
 
         if len(self.friends) == 1:
-            if self.me.boost < 23 and not transition2_holding_position and not self.should_prioritize_ball() and not cover_player_deep_defending:
+            if self.me.boost < 23 and not transition2_holding_position and not self.should_prioritize_ball() and not transition2_holding_position:
                 # If the stack is clear
                 if self.is_clear():
                     # Get a list of all of the large, active boosts
@@ -1638,7 +1643,7 @@ class Bot(VirxERLU):
                 if not self.is_clear():
                     return
         elif len(self.friends) > 1:
-            if self.me.boost < 30 and not transition2_holding_position and not self.should_prioritize_ball() and not cover_player_deep_defending:
+            if self.me.boost < 30 and not transition2_holding_position and not self.should_prioritize_ball() and not transition2_holding_position:
                 # If the stack is clear
                 if self.is_clear():
                     # Get a list of all of the large, active boosts
@@ -1980,9 +1985,8 @@ class Bot(VirxERLU):
                     self.push(challenge)
                     return
 
-            # Match Grid's rotating roles: exactly one transition2. The other
-            # player in 2v2 challenges; in 3v3 both non-transition2s use the
-            # Challenger plus staggered Transition 1 / Transition 2 support.
+            # Match the rotating roles: one attacker, then Transition 1
+            # and (in 3v3) a deeper Transition 2.
             transition_role = 1
             if self.friends:
                 attacker, transition1, transition2 = self.get_grid_team_roles()
