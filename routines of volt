@@ -1564,10 +1564,20 @@ class Aerial:
                     and T > 0.55
                 )
 
-                self.jump_type_fast = (
-                    (self.fast_aerial or wall_double_jump)
-                    and T > 0.55
-                )
+                # Volt aerials always use a double-jump launch. There is
+                # no single-jump aerial variant; abort if the second jump
+                # cannot be executed before the predicted contact.
+                if T <= jump_max_duration + (2 / 120):
+                    print(
+                        f"[AERIAL ABORT] insufficient time for double jump T={T:.2f}",
+                        flush=True
+                    )
+                    agent.pop()
+                    agent.shooting = False
+                    agent.push(ball_recovery())
+                    return
+
+                self.jump_type_fast = True
                 self.jumping = True
 
                 if wall_double_jump:
@@ -1624,7 +1634,6 @@ class Aerial:
                     agent.controller.jump = True
                 elif (
                     not self.second_jump_commanded
-                    and T > 0.18
                     and agent.time >= (
                         self.jump_time + jump_max_duration + (2 / 120)
                     )
