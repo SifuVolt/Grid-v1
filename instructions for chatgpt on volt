@@ -1294,7 +1294,6 @@ class Bot(VirxERLU):
             "jump_shot",
             "double_jump",
             "Aerial",
-            "wall_approach",
             "short_shot"
         }
 
@@ -1397,15 +1396,6 @@ class Bot(VirxERLU):
                 )
                 self.push(routines.goto_boost(closest_boost))
 
-
-        # A selected wall-drive is a committed surface-driving action.
-        # Keep it alive until its own routine ends; teamplay/shot selection
-        # must not replace it on the next packet.
-        if (
-            not self.is_clear()
-            and self.stack[0].__class__.__name__ == "wall_approach"
-        ):
-            return
 
         # Share and compare shot opportunities with teammates.
         self.update_teamplay()
@@ -1808,56 +1798,14 @@ class Bot(VirxERLU):
 
         # if the stack is clear, then run the following - otherwise, if the stack isn't empty, then look for a shot every 4th tick while the other routine is running
         
-        # Evaluate wall-reset setups alongside normal shot selection.
-        # Shot routines are usually active, so requiring a clear stack made
-        # this opportunity almost unreachable. Aerial can also be replaced
-        # while the car is still grounded (it has not launched yet); once
-        # airborne, keep the aerial protected and do not interrupt it.
-        current_routine_name = (
-            self.stack[0].__class__.__name__
-            if not self.is_clear()
-            else None
-        )
-        ordinary_ground_shots = {
-            "ground_shot",
-            "jump_shot",
-            "double_jump",
-            "Aerial"
-        }
-
+        # Use the normal teamplay shot candidate; wall approaches are disabled.
         if self.is_clear() or self.odd_tick == 0:
             shot = self.teamplay_shot
 
-            # The cached teamplay candidate may be a later ground shot.
-            # Recheck the live prediction first so a reachable wall touch
-            # can replace it instead of waiting for the ball to fall.
-            wall_allowed = (
-                not self.friends
-                or self.get_grid_active_challenger() == self.me.index
-                or self.defensive_emergency()
-            )
-            if wall_allowed:
-                wall_drive = tools.find_wall_drive(self)
-                if wall_drive is not None:
-                    shot = wall_drive
-            elif self.time - getattr(self, "_last_wall_drive_gate_debug", -999.0) >= 0.5:
-                self._last_wall_drive_gate_debug = self.time
-                print(
-                    f"[WALL DRIVE SKIP] team-role gate | "
-                    f"player={self.me.index} "
-                    f"active_challenger={self.get_grid_active_challenger()} "
-                    f"friends={len(self.friends)}",
-                    flush=True
-                )
-
             if shot is not None:
-                is_wall_drive = shot.__class__.__name__ == "wall_approach"
-                should_commit = (
-                    is_wall_drive
-                    or self.should_commit_to_shot(
-                        self.teamplay_score,
-                        self.teamplay_contact_time
-                    )
+                should_commit = self.should_commit_to_shot(
+                    self.teamplay_score,
+                    self.teamplay_contact_time
                 )
 
                 if not should_commit:
@@ -1874,7 +1822,6 @@ class Bot(VirxERLU):
                         "jump_shot",
                         "ground_shot",
                         "Aerial",
-                        "wall_approach"
                     }
 
                     if current_name in ordinary_shots:
@@ -1883,10 +1830,7 @@ class Bot(VirxERLU):
                     # Yield to the teammate's better opportunity.
                     # Continue to the existing fallback behaviour.
                 else:
-                    if (
-                        shot.__class__.__name__ != "wall_approach"
-                        and routines.half_flip_manager.request_for_shot(self, shot)
-                    ):
+                    if routines.half_flip_manager.request_for_shot(self, shot):
                         return
 
                     
@@ -1943,32 +1887,11 @@ class Bot(VirxERLU):
                 or self.defensive_emergency()
             )
 
-            # Prefer a reachable wall drive over waiting for a later ground shot.
-            wall_drive = (
-                tools.find_wall_drive(self)
-                if can_take_first_challenge
-                else None
-            )
-            if (
-                not can_take_first_challenge
-                and self.time - getattr(self, "_last_wall_drive_gate_debug", -999.0) >= 0.5
-            ):
-                self._last_wall_drive_gate_debug = self.time
-                print(
-                    f"[WALL DRIVE SKIP] first-challenge gate | "
-                    f"player={self.me.index} "
-                    f"active_challenger={self.get_grid_active_challenger()} "
-                    f"friends={len(self.friends)}",
-                    flush=True
-                )
-
             fast_intercept_searched = (
                 fast_intercept_zone and can_take_first_challenge
             )
 
-            if wall_drive is not None:
-                shot = wall_drive
-            elif fast_intercept_searched:
+            if fast_intercept_searched:
                 shot = routines.fast_intercept_finder().find(self)
 
             elif ball_depth < 640 and can_take_first_challenge:
@@ -2029,15 +1952,13 @@ class Bot(VirxERLU):
                             "jump_shot",
                             "double_jump",
                             "Aerial",
-                            "wall_approach"
-                        }
+                            }
 
                         # Don't cancel an ordinary shot just because a
                         # different ordinary shot is suggested.
                         if (
                             current_shot_name in ordinary_shots
                             and new_shot_name in ordinary_shots
-                            and new_shot_name != "wall_approach"
                         ):
                             current_intercept = getattr(
                                 self.stack[0], "intercept_time", float("inf")
