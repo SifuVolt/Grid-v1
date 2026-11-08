@@ -879,28 +879,133 @@ class Bot(VirxERLU):
             and save_deadline < 0
         )
 
-        # Detect a predicted back-wall/goal-line bounce if the ball is not
-        # projected to score. This gives the closest player to the rebound
-        # lane priority over a teammate with a less relevant approach.
+        foe_goal = self.foe_goal.location
+
+        # Port Noob Black's next_bounce / air_pos prediction. It considers
+        # floor, side-wall, back-wall and ceiling contact before assigning
+        # a player to a rebound lane.
+        def next_bounce(position, velocity, height):
+            def bounce_root(target, root_sign):
+                a = -325.0
+                b = velocity.z
+                c = position.z
+                discriminant = (
+                    (target - c) / a
+                    + b * b / (4 * a * a)
+                )
+                if discriminant < 0:
+                    return None
+                return (
+                    -b / (2 * a)
+                    + math.sqrt(discriminant) * root_sign
+                )
+
+            if abs(velocity.x) > 0.001:
+                sx = 1 if velocity.x > 0 else -1
+                wall_x_time = (
+                    (4096 - height - position.x * sx)
+                    * sx / velocity.x
+                )
+            else:
+                wall_x_time = float("inf")
+
+            if abs(velocity.y) > 0.001:
+                sy = 1 if velocity.y > 0 else -1
+                wall_y_time = (
+                    (5120 - height - position.y * sy)
+                    * sy / velocity.y
+                )
+            else:
+                wall_y_time = float("inf")
+
+            floor_time = bounce_root(height, 1)
+            ceiling_time = bounce_root(2044 - height, -1)
+            if floor_time is None:
+                floor_time = 0.0
+            if ceiling_time is None:
+                ceiling_time = float("inf")
+
+            return min(
+                floor_time,
+                wall_x_time,
+                wall_y_time,
+                ceiling_time
+            )
+
+        def air_pos(position, velocity, time_value):
+            return (
+                position
+                + velocity * time_value
+                + Vector(0, 0, -325) * time_value ** 2
+            )
+
+        normal_bounce_time = next_bounce(
+            ball, ball_velocity, 92.75
+        )
+        reverse_bounce_time = next_bounce(
+            ball, -ball_velocity, 92.75
+        )
+        normal_bounce = air_pos(
+            ball, ball_velocity, normal_bounce_time
+        )
+        reverse_bounce = air_pos(
+            ball, -ball_velocity, reverse_bounce_time
+        )
+
         backwall_point = None
         if not sidewall_clear and save_deadline < 0:
-            for ball_slice in slices:
-                time_to_bounce = ball_slice.game_seconds - self.time
-                if time_to_bounce <= 0:
-                    continue
-                if time_to_bounce > 5.0:
-                    break
-                loc = ball_slice.physics.location
-                if abs(loc.y - own_goal.y) <= 100 and loc.z > 0:
-                    backwall_point = Vector(loc.x, loc.y, loc.z)
-                    break
+            normal_hits_backwall = (
+                abs(normal_bounce.y - own_goal.y) <= 100
+                and normal_bounce.z > 0
+            )
+            reverse_hits_backwall = (
+                abs(reverse_bounce.y - own_goal.y) <= 100
+                and reverse_bounce.z > 0
+            )
+            if normal_hits_backwall or reverse_hits_backwall:
+                backwall_point = (
+                    normal_bounce
+                    if abs(normal_bounce.y - foe_goal.y)
+                    < abs(reverse_bounce.y - foe_goal.y)
+                    else reverse_bounce
+                )
 
-        foe_goal = self.foe_goal.location
-        ball_dependency = (
-            abs(backwall_point.y - foe_goal.y)
-            if backwall_point is not None
-            else abs(ball.y - foe_goal.y)
-        )
+        ball_dependency = abs(ball.y - foe_goal.y)
+        if backwall_point is not None:
+            ball_dependency = abs(backwall_point.y - foe_goal.y)
+        else:
+            # Noob Black also adjusts dependency for a low double-jump-height
+            # bounce that is moving away from our goal and has no wall hit.
+            double_jump_height_time = (
+                -(564.9931640625 + 292)
+                / (-325.0556640625 * 2)
+            )
+            double_jump_height = (
+                -325.0556640625 * double_jump_height_time ** 2
+                + (564.9931640625 + 292) * double_jump_height_time
+                - 11.6591796875
+                - 292 * 25 / 120
+            )
+            bounce_time = next_bounce(
+                ball, ball_velocity, double_jump_height
+            )
+            vertical_bounce_time = next_bounce(
+                ball,
+                Vector(0, 0, ball_velocity.z),
+                double_jump_height
+            )
+            if abs(bounce_time - vertical_bounce_time) < 1e-6:
+                low_bounce = air_pos(
+                    ball, ball_velocity, bounce_time
+                )
+                if (
+                    low_bounce.y * foe_goal.y
+                    > ball.y * foe_goal.y
+                    and low_bounce.z < 600
+                ):
+                    ball_dependency = abs(
+                        low_bounce.y - foe_goal.y
+                    )
 
         best_challenger = None
         best_challenger_score = float("inf")
