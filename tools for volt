@@ -1350,10 +1350,13 @@ def find_pass_shot(agent, cap_=4):
     )
 
     # Keep this conservative: only grounded shot types, no aerial pass attempts.
-    return find_shot(
+    routine = find_shot(
         agent, target, cap_=cap_, can_aerial=False,
         can_double_jump=False, can_jump=True, can_ground=True
     )
+    if routine is not None:
+        routine.is_pass_shot = True
+    return routine
 
 
 def _urgent_save_state(agent):
