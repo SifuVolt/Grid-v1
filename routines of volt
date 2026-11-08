@@ -202,6 +202,162 @@ class wave_dash:
                 agent.controller.roll = -1 if self.direction == 1 else 1
                 agent.controller.pitch = 0
 
+class wall_approach:
+    WALL_X = 3850
+    MIN_BALL_HEIGHT = 230
+    MIN_WALL_X = 3350
+    MAX_BALL_HEIGHT = 1750
+
+    def __init__(self, intercept_time, targets=None):
+        self.intercept_time = intercept_time
+        self.targets = targets
+        self.ball_location = None
+        self.start_time = -1
+        self.last_debug_time = -1
+
+    def update(self, shot):
+        self.intercept_time = shot.intercept_time
+        self.targets = getattr(shot, "targets", self.targets)
+
+    def on_side_wall(self, agent):
+        car = agent.me
+        return (
+            abs(car.location.x) > 3500
+            and abs(car.up.x) > 0.65
+            and car.up.x * car.location.x < 0
+        )
+
+    def run(self, agent: VirxERLU, manual=False):
+        if self.start_time < 0:
+            self.start_time = agent.time
+            print("[WALL DRIVE] START", flush=True)
+
+        agent.shooting = True
+        T = self.intercept_time - agent.time
+        prediction = agent.ball_prediction_struct
+        if prediction is None or not prediction.slices:
+            print("[WALL DRIVE] STOP: no prediction", flush=True)
+            agent.pop()
+            agent.shooting = False
+            return
+
+        slice_n = max(
+            0,
+            min(len(prediction.slices) - 1, round(max(0.0, T) * 120))
+        )
+        physics = prediction.slices[slice_n].physics
+        ball = Vector(
+            physics.location.x, physics.location.y, physics.location.z
+        )
+        ball_velocity = Vector(
+            physics.velocity.x, physics.velocity.y, physics.velocity.z
+        )
+        self.ball_location = ball
+        car = agent.me
+
+        if T <= -0.25:
+            print("[WALL DRIVE] STOP: contact window passed", flush=True)
+            agent.pop()
+            agent.shooting = False
+            return
+
+        if (
+            abs(ball.x) < self.MIN_WALL_X
+            or ball.z < self.MIN_BALL_HEIGHT
+            or ball.z > self.MAX_BALL_HEIGHT
+        ):
+            print(
+                f"[WALL DRIVE] STOP: left wall window "
+                f"x={ball.x:.0f} z={ball.z:.0f}",
+                flush=True
+            )
+            agent.pop()
+            agent.shooting = False
+            return
+
+        wall_side = 1 if ball.x >= 0 else -1
+        goal_direction = (
+            agent.foe_goal.location - ball
+        ).flatten().normalize()
+        if goal_direction.magnitude() < 0.01:
+            goal_direction = Vector(0, -utils.side(agent.team), 0)
+
+        contact_target = Vector(
+            wall_side * self.WALL_X,
+            ball.y - goal_direction.y * 185,
+            max(110, ball.z - goal_direction.z * 185)
+        )
+
+        on_wall = self.on_side_wall(agent)
+        car_wall_side = 1 if car.location.x >= 0 else -1
+
+        # Being attached to either side wall is not enough: it must be the
+        # same wall as the predicted ball. Otherwise the old routine treated
+        # the opposite wall as a valid approach and drove away from the play.
+        if on_wall and car_wall_side != wall_side:
+            print(
+                f"[WALL DRIVE] STOP: opposite wall "
+                f"car_side={car_wall_side} ball_side={wall_side} "
+                f"car=({car.location.x:.0f},{car.location.y:.0f},{car.location.z:.0f})",
+                flush=True
+            )
+            agent.pop()
+            agent.shooting = False
+            return
+
+        if on_wall:
+            # Once attached, follow the predicted contact point along the wall.
+            drive_target = contact_target
+            drive_phase = "WALL CLIMB"
+        else:
+            # A grounded car must first drive into the wall at its current
+            # height and lane. Do not aim diagonally at the eventual contact
+            # point while still on the floor; transition onto the wall first.
+            drive_target = Vector(
+                wall_side * self.WALL_X,
+                car.location.y,
+                max(100, car.location.z)
+            )
+            drive_phase = "GROUND TO WALL"
+
+        distance = car.location.dist(drive_target)
+        time_left = max(0.12, min(T, 3.0))
+        speed_required = min(2200, max(900, distance / time_left))
+        if self.last_debug_time < 0 or agent.time - self.last_debug_time >= 0.35:
+            self.last_debug_time = agent.time
+            print(
+                f"[WALL DRIVE] {drive_phase} side={wall_side} "
+                f"target=({drive_target.x:.0f},{drive_target.y:.0f},{drive_target.z:.0f}) "
+                f"distance={distance:.0f} T={T:.2f} speed={speed_required:.0f}",
+                flush=True
+            )
+        defaultDrive(agent, speed_required, car.local_location(drive_target))
+        agent.controller.boost = (
+            car.boost > 0 and distance > 900 and speed_required > 1450
+        )
+
+        if on_wall and car.location.dist(ball) < 190:
+            print(
+                f"[WALL DRIVE] CONTACT RANGE "
+                f"ball=({ball.x:.0f},{ball.y:.0f},{ball.z:.0f}) "
+                f"T={T:.2f}",
+                flush=True
+            )
+
+        if agent.time - self.last_debug_time > 0.25:
+            print(
+                f"[WALL DRIVE] wall={on_wall} "
+                f"ball=({ball.x:.0f},{ball.y:.0f},{ball.z:.0f}) "
+                f"vz={ball_velocity.z:.0f} "
+                f"target=({drive_target.x:.0f},{drive_target.y:.0f},"
+                f"{drive_target.z:.0f}) dist={distance:.0f} "
+                f"car=({car.location.x:.0f},{car.location.y:.0f},{car.location.z:.0f}) "
+                f"wall_side={wall_side} car_wall_side={car_wall_side} "
+                f"T={T:.2f} boost={car.boost:.0f}",
+                flush=True
+            )
+            self.last_debug_time = agent.time
+
 class wall_dash:
     JUMP_TIME = 0.07
     RELEASE_TIME = 0.05
@@ -2180,18 +2336,14 @@ class grid_defense:
     """
     Grid's ground defensive movement, adapted to the VirxERLU routine API.
 
-    transition=1 is the forward support lane, transition=2 is the central
-    deeper point, and transition=3 is the temporary forward pass-receiver lane.
+    goalie=True holds the central goal-side lane. goalie=False preserves
+    Grid's rotating non-goalie transition into its prepare-for-attack lane.
     """
 
-    def __init__(self, transition=1, fast=False):
-        self.transition = int(transition)
-        self.fast = bool(fast)
+    def __init__(self, goalie=False, fast=False):
+        self.goalie = goalie
+        self.fast = fast
         self.prev_front = None
-        # Reuse the goal-line crossing predictor for Transition 2 saves.
-        # The defense class is defined later in this module but is available
-        # by the time any routine instance is created.
-        self.goal_line_targeter = defense() if self.transition == 2 else None
 
     @staticmethod
     def _angle(a, b):
@@ -2230,7 +2382,7 @@ class grid_defense:
         )
 
     def _choose_pad(self, agent, goal_location, car_location):
-        if agent.me.boost >= 100 or self.fast or self.transition != 1:
+        if agent.me.boost >= 100 or self.fast:
             return None
 
         candidates = []
@@ -2307,9 +2459,7 @@ class grid_defense:
         agent.controller.steer = self._steer(agent, target)
         agent.controller.boost = False
 
-    def _run_defense(self, agent, transition, fast):
-        is_transition2 = transition == 2
-        is_transition1 = transition == 1
+    def _run_defense(self, agent, goalie, fast):
         car = agent.me
         car_location = car.location
         car_velocity = car.velocity
@@ -2318,25 +2468,19 @@ class grid_defense:
         goal_location = agent.foe_goal.location
         goal_sign = sign(goal_location.y) or 1
 
-        # The is_transition2 must keep the goal-mouth lane; boost collection is
+        # The goalie must keep the goal-mouth lane; boost collection is
         # handled by the other roles rather than by the last line of defence.
         best_pad = (
-            None if is_transition2
+            None if goalie
             else self._choose_pad(agent, goal_location, car_location)
         )
 
         if best_pad is not None:
             target = best_pad.location
-        elif is_transition2:
-            # Intercept the predicted ball crossing of our goal line. The
-            # predictor clamps the crossing inside the posts and places the
-            # car just field-side of the line.
-            target = self.goal_line_targeter.get_target(agent)
-        elif transition == 3:
-            # A communicated pass receiver moves up through the middle.
+        elif goalie:
             target = Vector(
                 x=0,
-                y=cap(ball_location.y + goal_sign * 850, -4550, 4550),
+                y=-goal_location.y - goal_sign * 150,
                 z=0
             )
         else:
@@ -2354,7 +2498,7 @@ class grid_defense:
 
             if (
                 car_velocity.magnitude() <= 100
-                and -5320 + 200 * (not is_transition2) > car_depth
+                and -5320 + 200 * (not goalie) > car_depth
                 and self._angle(front, target - car_location) > math.pi / 4
             ):
                 agent.controller.handbrake = True
@@ -2368,9 +2512,9 @@ class grid_defense:
 
             elif (
                 car_velocity.magnitude() <= 100
-                and -5320 + 200 * (not is_transition2)
+                and -5320 + 200 * (not goalie)
                     <= car_depth
-                    <= -5120 + 100 * (not is_transition2)
+                    <= -5120 + 100 * (not goalie)
                 and self._angle(front, ball_location - car_location) >= 0.2
             ):
                 agent.controller.handbrake = True
@@ -2378,11 +2522,27 @@ class grid_defense:
                     math.pi / 2 - self._angle(front, car_velocity)
                 )
 
-                if is_transition2:
-                    # Keep steering toward the predicted goal-line crossing,
-                    # not the ball's current position, so the save is timed
-                    # against where it will enter the goal mouth.
-                    steer_target = target
+                if goalie:
+                    ball_lane = (
+                        ball_location.flatten()
+                        - Vector(x=cap(ball_location.x, -900, 900))
+                        + goal_location
+                    )
+                    if self._angle(ball_lane, goal_location) <= math.pi / 3:
+                        steer_target = ball_location
+                    else:
+                        steer_target = (
+                            -goal_location
+                            + Vector(
+                                x=ball_location.x,
+                                y=(
+                                    sign(ball_location.y + goal_location.y)
+                                    / math.tan(math.pi / 3)
+                                    * (abs(ball_location.x) - 900)
+                                ),
+                                z=0
+                            )
+                        )
                 else:
                     steer_target = Vector(
                         x=0, y=car_location.y, z=0
@@ -2407,9 +2567,9 @@ class grid_defense:
                 agent.controller.throttle = sign(throttle_value) or 1
                 agent.controller.steer = self._steer(agent, target)
 
-                # Grid's non-is_transition2 understeer check: reverse rather than
+                # Grid's non-goalie understeer check: reverse rather than
                 # carry momentum across the intended defensive lane.
-                if is_transition1 and car_velocity.flatten().magnitude() > 100:
+                if not goalie and car_velocity.flatten().magnitude() > 100:
                     own_lane = Vector(
                         x=sign(car_location.x) * 900,
                         y=-goal_sign * 5050,
@@ -2521,13 +2681,8 @@ class grid_defense:
         # is positive toward our own goal, so the signs are opposite.
         ball_depth = ball.y * side_value
         car_depth = car.location.y * side_value
-        receiver_getter = getattr(agent, "get_transition2_receiver", None)
-        transition = self.transition
-        if callable(receiver_getter) and receiver_getter() == car.index:
-            transition = 3
-
         should_prepare = (
-            transition == 1
+            not self.goalie
             and ball_depth < 0
             and car_depth >= -900
             and (
@@ -2558,7 +2713,7 @@ class grid_defense:
             self.prev_front = car.forward
             return
 
-        self._run_defense(agent, transition, self.fast)
+        self._run_defense(agent, self.goalie, self.fast)
 
 
 class fast_intercept_finder:
@@ -2667,24 +2822,24 @@ class fast_intercept_finder:
         return None
 
 
-class transition1_followup_wait:
+class cover_followup_wait:
     """
-    Keep Transition 1 in its support lane while the
+    Keep the non-goalie cover player in its transition lane while the
     elected attacker takes the first attacking touch.
     """
 
     def __init__(self, release_time, contact_key=None):
         self.release_time = release_time
         self.contact_key = contact_key
-        self.defense = grid_defense(transition=1)
+        self.defense = grid_defense(goalie=False)
 
     def run(self, agent: VirxERLU):
         self.defense.run(agent)
 
 
-class transition2_followup_wait:
+class goalie_followup_wait:
     """
-    Keep Transition 2 at its central support point while the challenger
+    Keep the elected goalie in its defensive lane while the challenger
     makes the first save attempt. The bot logic releases this routine at
     the expected contact time and then plans a fresh follow-up intercept.
     """
@@ -2692,7 +2847,7 @@ class transition2_followup_wait:
     def __init__(self, release_time, contact_key=None):
         self.release_time = release_time
         self.contact_key = contact_key
-        self.defense = grid_defense(transition=2)
+        self.defense = grid_defense(goalie=True)
 
     def run(self, agent: VirxERLU):
         self.defense.run(agent)
@@ -3320,6 +3475,7 @@ class jump_shot:
         self.patience = shot_patience()
         self.wall_shot_active = False
         self.wall_shot_normal = None
+        self.contact_point = None
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -3793,17 +3949,56 @@ class jump_shot:
                     # centre/left/right contact has already shaped that approach.
                     # This also gives quick shots a directional flip without
                     # adding the S-tilt they do not have time to perform.
-                    local_ball_for_dodge = agent.me.local_location(
-                        self.ball_location
+                    # Aim from the front face of the actual car hitbox,
+                    # at the selected ball-surface contact point. This accounts
+                    # for hitbox length, width, height and local offset.
+                    hitbox = agent.me.hitbox
+                    hitbox_offset = hitbox.offset
+                    nose_offset = hitbox.length * 0.5 + hitbox_offset.x
+                    contact_target = (
+                        self.contact_point
+                        if self.contact_point is not None
+                        else self.ball_location
+                    )
+                    local_contact_for_dodge = agent.me.local_location(
+                        contact_target
                     ).flatten()
+                    front_face_y = cap(
+                        local_contact_for_dodge.y,
+                        hitbox_offset.y - hitbox.width * 0.5,
+                        hitbox_offset.y + hitbox.width * 0.5
+                    )
+                    front_face_z = cap(
+                        local_contact_for_dodge.z,
+                        hitbox_offset.z - hitbox.height * 0.5,
+                        hitbox_offset.z + hitbox.height * 0.5
+                    )
+                    local_nose_contact = Vector(
+                        nose_offset,
+                        front_face_y,
+                        front_face_z
+                    )
+                    nose_to_contact = (
+                        local_contact_for_dodge - local_nose_contact
+                    )
 
-                    if local_ball_for_dodge.magnitude() > 1:
-                        dodge_direction = local_ball_for_dodge.normalize()
+                    if nose_to_contact.magnitude() > 1:
+                        dodge_direction = nose_to_contact.normalize()
                     else:
                         dodge_direction = Vector(x=1)
 
+                    print(
+                        f"[JUMP HITBOX AIM] nose_offset={nose_offset:.1f} "
+                        f"hitbox=({hitbox.length:.0f},"
+                        f"{hitbox.width:.0f},{hitbox.height:.0f}) "
+                        f"nose_gap={nose_to_contact.magnitude():.1f} "
+                        f"contact={contact_target}",
+                        flush=True
+                    )
+
                     agent.controller.pitch = -dodge_direction.x
                     agent.controller.yaw = dodge_direction.y
+                    agent.controller.roll = 0
                     agent.controller.jump = True
 
                     agent.last_flip_time = agent.time
