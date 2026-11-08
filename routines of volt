@@ -2344,6 +2344,8 @@ class grid_defense:
         self.goalie = goalie
         self.fast = fast
         self.prev_front = None
+        # Match Transition 2's predicted goal-line crossing target.
+        self.goal_line_targeter = defense() if goalie else None
 
     @staticmethod
     def _angle(a, b):
@@ -2478,11 +2480,7 @@ class grid_defense:
         if best_pad is not None:
             target = best_pad.location
         elif goalie:
-            target = Vector(
-                x=0,
-                y=-goal_location.y - goal_sign * 150,
-                z=0
-            )
+            target = self.goal_line_targeter.get_target(agent)
         else:
             target = Vector(
                 x=sign(car_location.x) * 900,
@@ -2523,26 +2521,9 @@ class grid_defense:
                 )
 
                 if goalie:
-                    ball_lane = (
-                        ball_location.flatten()
-                        - Vector(x=cap(ball_location.x, -900, 900))
-                        + goal_location
-                    )
-                    if self._angle(ball_lane, goal_location) <= math.pi / 3:
-                        steer_target = ball_location
-                    else:
-                        steer_target = (
-                            -goal_location
-                            + Vector(
-                                x=ball_location.x,
-                                y=(
-                                    sign(ball_location.y + goal_location.y)
-                                    / math.tan(math.pi / 3)
-                                    * (abs(ball_location.x) - 900)
-                                ),
-                                z=0
-                            )
-                        )
+                    # Keep lateral steering aligned with the predicted
+                    # goal-line crossing instead of steering at the ball.
+                    steer_target = target
                 else:
                     steer_target = Vector(
                         x=0, y=car_location.y, z=0
@@ -3776,11 +3757,23 @@ class jump_shot:
             time = distance_remaining / (velocity + dodge_impulse(agent))
 
 
+            low_boost_dodge = (
+                agent.boost_amount != "unlimited"
+                and agent.me.boost < 8
+            )
+            # With almost no boost, reserve extra time for the required
+            # jump-release-dodge sequence instead of relying on jump height
+            # alone to cover the remaining distance.
+            jump_start_window = (
+                self.needed_jump_time * 1.08
+                + (0.12 if low_boost_dodge else 0.0)
+            )
+
             if (
                 (
                     self.side_mode
                     and distance_remaining < 180
-                    and T <= self.needed_jump_time * 1.08
+                    and T <= jump_start_window
                 )
                 or (
                     (
@@ -3794,7 +3787,7 @@ class jump_shot:
                         )
                         and direction * local_offset_target.x > 0
                     )
-                ) and T <= self.needed_jump_time * 1.08
+                ) and T <= jump_start_window
             ):
                 self.quick_shot = T <= 0.45
                 self.jumping = True
@@ -3936,52 +3929,64 @@ class jump_shot:
                     self.offset_target
                 ).flatten()
 
-                # Only dodge if the target is still in front and close enough
-                # for the dodge to have a realistic chance of making contact.
-                close_enough = (
-                    agent.me.location.dist(self.offset_target)
-                    < (92.75 + agent.me.hitbox.length) * 1.02
+                low_boost_dodge = (
+                    agent.boost_amount != "unlimited"
+                    and agent.me.boost < 8
                 )
 
-                if close_enough and (local_target.x > 0 or self.side_mode):
-                    # Aim the dodge at the predicted ball contact itself,
-                    # not at the approach point behind the ball. The selected
-                    # centre/left/right contact has already shaped that approach.
-                    # This also gives quick shots a directional flip without
-                    # adding the S-tilt they do not have time to perform.
-                    # Aim from the front face of the actual car hitbox,
-                    # at the selected ball-surface contact point. This accounts
-                    # for hitbox length, width, height and local offset.
-                    hitbox = agent.me.hitbox
-                    hitbox_offset = hitbox.offset
-                    nose_offset = hitbox.length * 0.5 + hitbox_offset.x
-                    contact_target = (
-                        self.contact_point
-                        if self.contact_point is not None
-                        else self.ball_location
-                    )
-                    local_contact_for_dodge = agent.me.local_location(
-                        contact_target
-                    )
-                    front_face_y = cap(
-                        local_contact_for_dodge.y,
-                        hitbox_offset.y - hitbox.width * 0.5,
-                        hitbox_offset.y + hitbox.width * 0.5
-                    )
-                    front_face_z = cap(
-                        local_contact_for_dodge.z,
-                        hitbox_offset.z - hitbox.height * 0.5,
-                        hitbox_offset.z + hitbox.height * 0.5
-                    )
-                    local_nose_contact = Vector(
-                        nose_offset,
-                        front_face_y,
-                        front_face_z
-                    )
-                    nose_to_contact = (
-                        local_contact_for_dodge - local_nose_contact
-                    ).flatten()
+                # Measure from the actual front face of the hitbox to the
+                # selected ball-surface contact point. This prevents a
+                # low-boost shot from being rejected just because the car
+                # centre has passed the approach marker.
+                hitbox = agent.me.hitbox
+                hitbox_offset = hitbox.offset
+                nose_offset = hitbox.length * 0.5 + hitbox_offset.x
+                contact_target = (
+                    self.contact_point
+                    if self.contact_point is not None
+                    else self.ball_location
+                )
+                local_contact_for_dodge = agent.me.local_location(
+                    contact_target
+                )
+                front_face_y = cap(
+                    local_contact_for_dodge.y,
+                    hitbox_offset.y - hitbox.width * 0.5,
+                    hitbox_offset.y + hitbox.width * 0.5
+                )
+                front_face_z = cap(
+                    local_contact_for_dodge.z,
+                    hitbox_offset.z - hitbox.height * 0.5,
+                    hitbox_offset.z + hitbox.height * 0.5
+                )
+                local_nose_contact = Vector(
+                    nose_offset,
+                    front_face_y,
+                    front_face_z
+                )
+                nose_to_contact = (
+                    local_contact_for_dodge - local_nose_contact
+                ).flatten()
 
+                # The low-boost case gets a bounded extra nose-contact
+                # window, but it must still be in front of the car.
+                close_enough = (
+                    agent.me.location.dist(self.offset_target)
+                    < (92.75 + hitbox.length) * 1.02
+                    or (
+                        low_boost_dodge
+                        and nose_to_contact.magnitude() <= 420
+                    )
+                )
+
+                if close_enough and (
+                    local_target.x > 0
+                    or self.side_mode
+                    or (low_boost_dodge and nose_to_contact.x > 0)
+                ):
+                    # A jump shot needs its directional dodge to supply the
+                    # final velocity. Aim from the hitbox nose at the selected
+                    # ball-surface point, not from the physics centre.
                     if nose_to_contact.magnitude() > 1:
                         dodge_direction = nose_to_contact.normalize()
                     else:
@@ -3992,6 +3997,7 @@ class jump_shot:
                         f"hitbox=({hitbox.length:.0f},"
                         f"{hitbox.width:.0f},{hitbox.height:.0f}) "
                         f"nose_gap={nose_to_contact.magnitude():.1f} "
+                        f"low_boost={low_boost_dodge} "
                         f"contact={contact_target}",
                         flush=True
                     )
@@ -4005,19 +4011,28 @@ class jump_shot:
                     self.dodging = True
                     self.counter = 4
 
-                elif local_target.x <= 0 or (
-                    agent.me.location.dist(self.offset_target)
-                    > (92.75 + agent.me.hitbox.length) * 1.02 + 150
-                    and T < 0.12
+                elif (
+                    (
+                        local_target.x <= 0
+                        and not (low_boost_dodge and nose_to_contact.x > 0)
+                    )
+                    or (
+                        agent.me.location.dist(self.offset_target)
+                        > (92.75 + hitbox.length) * 1.02 + 150
+                        and T < (0.24 if low_boost_dodge else 0.12)
+                    )
                 ):
                     print(
                         f"[JUMP SHOT NO DODGE] id={id(self)} "
                         f"local_target_x={local_target.x:.1f} "
+                        f"nose_gap={nose_to_contact.magnitude():.1f} "
+                        f"low_boost={low_boost_dodge} "
                         f"distance={agent.me.location.dist(self.offset_target):.1f} "
                         f"T={T:.3f} counter={self.counter}",
                         flush=True
                     )
-                    # Do not keep waiting for a dodge opportunity that has passed.
+                    # Never let a low-boost shot silently continue without
+                    # the dodge impulse it was relying on.
                     self.counter = 5
 
             elif self.counter == 4:
