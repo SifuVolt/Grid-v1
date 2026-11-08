@@ -3475,6 +3475,7 @@ class jump_shot:
         self.patience = shot_patience()
         self.wall_shot_active = False
         self.wall_shot_normal = None
+        self.side_adjustment_logged = False
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -3868,35 +3869,67 @@ class jump_shot:
             delta_x = self.offset_target - xf
             d_direction = delta_x.normalize()
 
-            # ORIENT THE NOSE DURING THE EXISTING JUMP WINDOW.
-            # First steer toward the ball's horizontal position, then use S
-            # (positive pitch) to raise the nose when the ball is airborne
-            # and above the car. This adds no waiting phase and leaves the
-            # existing counter-3 dodge trigger intact.
+            # Orient toward the predicted contact while airborne.
+            # Side shots deliberately use a two-stage adjustment: briefly
+            # pitch back with S, then apply A/D toward the ball before the
+            # existing dodge trigger. The approach side was selected from
+            # the ball's position relative to the opponent goal.
             if self.counter < 3 and not self.dodging:
                 local_ball = agent.me.local_location(self.ball_location)
                 defaultPD(agent, local_ball.flatten())
 
-                ball_is_airborne = self.ball_location.z > 130
-                ball_is_above_car = self.ball_location.z > agent.me.location.z + 65
-                hold_s = (
-                    ball_is_airborne
-                    and ball_is_above_car
-                    and not self.quick_shot
-                )
+                if self.side_mode and not self.quick_shot:
+                    if jump_elapsed < 0.09:
+                        # S: lift the nose before adding lateral correction.
+                        agent.controller.pitch = 1
+                        agent.controller.yaw = 0
+                        side_adjustment = "S"
+                    elif jump_elapsed < 0.18:
+                        # Ball right of goal -> right-side setup -> A.
+                        # Ball left of goal -> left-side setup -> D.
+                        agent.controller.pitch = 0
+                        agent.controller.yaw = (
+                            -1 if self.approach_side == "right" else 1
+                        )
+                        side_adjustment = (
+                            "A" if self.approach_side == "right" else "D"
+                        )
+                    else:
+                        side_adjustment = "none"
 
-                if hold_s:
-                    agent.controller.pitch = 1
-
-                if not self._orientation_logged:
-                    print(
-                        f"[JUMP SHOT ORIENT] T={T:.3f} "
-                        f"ball_z={self.ball_location.z:.0f} "
-                        f"car_z={agent.me.location.z:.0f} "
-                        f"hold_S={hold_s} counter={self.counter}",
-                        flush=True
+                    if not self.side_adjustment_logged:
+                        print(
+                            f"[SIDE SHOT AIR ADJUST] "
+                            f"approach={self.approach_side} "
+                            f"sequence=S(0.09s)->"
+                            f"{'A' if self.approach_side == 'right' else 'D'}(0.09s) "
+                            f"ball_x={self.ball_location.x:.0f}",
+                            flush=True
+                        )
+                        self.side_adjustment_logged = True
+                else:
+                    ball_is_airborne = self.ball_location.z > 130
+                    ball_is_above_car = (
+                        self.ball_location.z > agent.me.location.z + 65
                     )
-                    self._orientation_logged = True
+                    hold_s = (
+                        ball_is_airborne
+                        and ball_is_above_car
+                        and not self.quick_shot
+                    )
+
+                    if hold_s:
+                        agent.controller.pitch = 1
+
+                    if not self._orientation_logged:
+                        print(
+                            f"[JUMP SHOT ORIENT] T={T:.3f} "
+                            f"ball_z={self.ball_location.z:.0f} "
+                            f"car_z={agent.me.location.z:.0f} "
+                            f"hold_S={hold_s} counter={self.counter}",
+                            flush=True
+                        )
+                        self._orientation_logged = True
 
             if direction == 1 and abs(agent.me.forward.dot(d_direction)) > 0.5 and self.counter < 3:
                 delta_v = delta_x.dot(agent.me.forward) / T
