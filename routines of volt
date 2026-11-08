@@ -990,6 +990,14 @@ class Aerial:
         self.fast_aerial = shot.fast_aerial
         self.targets = shot.targets
     
+    @staticmethod
+    def _cross(a, b):
+        return Vector(
+            a.y * b.z - a.z * b.y,
+            a.z * b.x - a.x * b.z,
+            a.x * b.y - a.y * b.x
+        )
+
     def party_cannon_shot_direction(
         self, ball_location, ball_velocity,
         car_location, shot_target, time_remaining,
@@ -1031,14 +1039,7 @@ class Aerial:
         heading_dot = cap(car_forward.dot(desired_direction), -1, 1)
         heading_error = math.acos(heading_dot)
 
-        def cross(a, b):
-            return Vector(
-                a.y * b.z - a.z * b.y,
-                a.z * b.x - a.x * b.z,
-                a.x * b.y - a.y * b.x
-            )
-
-        turn_axis = cross(car_forward, desired_direction)
+        turn_axis = self._cross(car_forward, desired_direction)
         if turn_axis.magnitude() < 0.001 and heading_error > 0.01:
             turn_axis = (
                 car_right.normalize()
@@ -1083,14 +1084,34 @@ class Aerial:
             angle_after_reverse = max(
                 0.0, heading_error - angle_at_reverse
             )
-            turn_time = (
-                time_to_reverse
-                + math.sqrt(
-                    2 * angle_after_reverse / angular_acceleration
-                )
+            time_to_max_from_reverse = (
+                max_turn_rate / angular_acceleration
             )
-            time_to_max_rate = time_to_reverse
-            angle_at_max_rate = angle_at_reverse
+            angle_to_max_from_reverse = (
+                0.5 * angular_acceleration
+                * time_to_max_from_reverse ** 2
+            )
+            if angle_after_reverse <= angle_to_max_from_reverse:
+                turn_time = (
+                    time_to_reverse
+                    + math.sqrt(
+                        2 * angle_after_reverse / angular_acceleration
+                    )
+                )
+            else:
+                turn_time = (
+                    time_to_reverse
+                    + time_to_max_from_reverse
+                    + (
+                        angle_after_reverse - angle_to_max_from_reverse
+                    ) / max_turn_rate
+                )
+            time_to_max_rate = (
+                time_to_reverse + time_to_max_from_reverse
+            )
+            angle_at_max_rate = (
+                angle_at_reverse + angle_to_max_from_reverse
+            )
         elif initial_turn_rate < max_turn_rate:
             time_to_max_rate = (
                 max_turn_rate - initial_turn_rate
@@ -1138,16 +1159,21 @@ class Aerial:
             if midpoint >= turn_time:
                 rotation_angle = heading_error
             elif initial_turn_rate < 0:
-                if midpoint <= time_to_max_rate:
+                if midpoint <= time_to_reverse:
                     rotation_angle = (
                         initial_turn_rate * midpoint
                         + 0.5 * angular_acceleration * midpoint ** 2
                     )
+                elif midpoint <= time_to_max_rate:
+                    after_reverse = midpoint - time_to_reverse
+                    rotation_angle = (
+                        angle_at_reverse
+                        + 0.5 * angular_acceleration * after_reverse ** 2
+                    )
                 else:
-                    after_reverse = midpoint - time_to_max_rate
                     rotation_angle = (
                         angle_at_max_rate
-                        + 0.5 * angular_acceleration * after_reverse ** 2
+                        + max_turn_rate * (midpoint - time_to_max_rate)
                     )
             elif midpoint <= time_to_max_rate:
                 rotation_angle = (
@@ -1165,7 +1191,7 @@ class Aerial:
             )
             cosine = math.cos(rotation_angle)
             sine = math.sin(rotation_angle)
-            axis_cross_forward = cross(turn_axis, car_forward)
+            axis_cross_forward = self._cross(turn_axis, car_forward)
             forward_midpoint = (
                 car_forward * cosine
                 + axis_cross_forward * sine
