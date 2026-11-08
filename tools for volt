@@ -4,7 +4,7 @@ from util.grid_double_jump import find_double_jump as grid_find_double_jump
 
 
 
-def find_wall_drive(agent, cap_=2.5):
+def find_wall_drive(agent, cap_=4.0):
     """Find a reachable side-wall touch without treating wall driving as aerial."""
     car = agent.me
     debug_now = agent.time
@@ -46,7 +46,6 @@ def find_wall_drive(agent, cap_=2.5):
 
     reject_wall_window = 0
     reject_height = 0
-    reject_rising = 0
     reject_opposite_wall = 0
     reject_unreachable = 0
 
@@ -54,7 +53,7 @@ def find_wall_drive(agent, cap_=2.5):
     # may still be on the floor while its predicted path is already climbing
     # one of the two long side walls.
     speed = math.hypot(car.velocity.x, car.velocity.y)
-    effective_speed = max(1050.0, min(1950.0, speed + 650.0))
+    effective_speed = max(1200.0, min(2200.0, speed + 800.0))
     best = None
     max_index = min(len(slices), int(cap_ * 120))
 
@@ -64,17 +63,15 @@ def find_wall_drive(agent, cap_=2.5):
         loc = physics.location
         vel = physics.velocity
 
-        # Only the two long side walls (x = +/- arena edge). The
-        # predicted ball must be above this car and actively travelling up
-        # the wall; a ball merely sitting beside the wall is not enough.
-        if abs(loc.x) < 3350 or not 230 <= loc.z <= 1750:
+        # A wall drive is a way to reach and clear a ball off the side wall.
+        # The ball does NOT have to be rising: it may be rolling upward,
+        # slowing, or already falling down the wall. The car may start on
+        # the ground and drive up to it.
+        if abs(loc.x) < 3250 or not 180 <= loc.z <= 2200:
             reject_wall_window += 1
             continue
-        if loc.z < car.location.z + 100:
+        if loc.z < car.location.z + 60:
             reject_height += 1
-            continue
-        if vel.z < 35:
-            reject_rising += 1
             continue
 
         intercept_in = ball_slice.game_seconds - agent.time
@@ -121,7 +118,8 @@ def find_wall_drive(agent, cap_=2.5):
             reject_unreachable += 1
             continue
 
-        score = intercept_in + eta * 0.20
+        # Prefer the earliest reachable wall contact; use ETA only as a small tie-breaker.
+        score = intercept_in + eta * 0.04
         if best is None or score < best[0]:
             best = (score, intercept_in, loc.x, loc.y, loc.z, vel.z)
 
@@ -130,7 +128,7 @@ def find_wall_drive(agent, cap_=2.5):
             print(
                 f"[WALL DRIVE FIND] no candidate | "
                 f"wall_window={reject_wall_window} "
-                f"not_above={reject_height} not_rising={reject_rising} "
+                f"not_above={reject_height} "
                 f"opposite_wall={reject_opposite_wall} "
                 f"unreachable={reject_unreachable} "
                 f"slices={len(slices)}",
