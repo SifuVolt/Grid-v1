@@ -3766,7 +3766,7 @@ class jump_shot:
             # alone to cover the remaining distance.
             jump_start_window = (
                 self.needed_jump_time * 1.08
-                + (0.12 if low_boost_dodge else 0.0)
+                + (0.23 if low_boost_dodge else 0.0)
             )
 
             if (
