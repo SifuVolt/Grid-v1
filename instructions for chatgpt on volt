@@ -46,6 +46,7 @@ class Bot(VirxERLU):
         self.kickoff_role = None
         self.kickoff_boost_pending = False
         self.kickoff_ball_start = None
+        self.kickoff_contest_until = -999.0
         self.committed_shot = None
         # Teamplay communication state.
         self.cover_role_owner = None
@@ -324,6 +325,10 @@ class Bot(VirxERLU):
             ),
         )
 
+    def in_post_kickoff_contest_window(self):
+        """Allow confident challenges for ten seconds after kickoff resolves."""
+        return self.time <= getattr(self, "kickoff_contest_until", -999.0)
+
     def _kickoff_resolved(self):
         if self.kickoff_ball_start is None:
             return False
@@ -456,7 +461,7 @@ class Bot(VirxERLU):
                 return False
 
             # Opponent has a major advantage.
-            if self.foes:
+            if self.foes and not self.in_post_kickoff_contest_window():
                 enemy_distance = min(
                     foe.location.dist(ball)
                     for foe in self.foes
@@ -510,7 +515,7 @@ class Bot(VirxERLU):
                 if distance < 1900:
                     return angle < 1.75
 
-                if self.foes:
+                if self.foes and not self.in_post_kickoff_contest_window():
                     enemy_distance = min(
                         foe.location.dist(ball)
                         for foe in self.foes
@@ -523,7 +528,7 @@ class Bot(VirxERLU):
             if distance < 1500:
                 return angle < 1.5
 
-            if self.foes:
+            if self.foes and not self.in_post_kickoff_contest_window():
                 enemy_distance = min(
                     foe.location.dist(ball)
                     for foe in self.foes
@@ -883,6 +888,8 @@ class Bot(VirxERLU):
     
     def opponent_can_reach_ball_first(self):
         """Avoid a losing challenge when an opponent can reach our-side ball first."""
+        if self.in_post_kickoff_contest_window():
+            return False
         ball = self.ball.location
         me = self.me.location
         side = utils.side(self.team)
@@ -994,9 +1001,36 @@ class Bot(VirxERLU):
             transition.index if transition is not None else None
         )
 
+    def goalie_released_for_ball(self):
+        """
+        In 3v3, release the goalie when both other teammates have left
+        our defensive quarter. The goalie then becomes the active challenger.
+        """
+        if len(self.friends) < 2:
+            return False
+
+        _, goalie_index, _ = self.get_grid_team_roles()
+        if goalie_index is None:
+            return False
+
+        side = utils.side(self.team)
+        cars = [self.me] + list(self.friends)
+        teammates = [
+            car for car in cars
+            if car.index != goalie_index
+            and not getattr(car, "demolished", False)
+        ]
+        # The defensive quarter is the deepest 2560 units of our half.
+        return (
+            len(teammates) == 2
+            and all(car.location.y * side < 2560 for car in teammates)
+        )
+
     def get_grid_active_challenger(self):
         """Grid's closest viable player is the only normal challenger."""
         attacker, goalie, transition = self.get_grid_team_roles()
+        if self.goalie_released_for_ball():
+            return goalie
         return attacker
 
     def get_transition_bump_target(self, attacker_index):
@@ -1091,7 +1125,10 @@ class Bot(VirxERLU):
 
         # The goalie keeps the net even during an emergency. The elected
         # challenger, not the goalie, is responsible for the emergency clear.
-        return self.get_cover_role_owner() == self.me.index
+        return (
+            self.get_cover_role_owner() == self.me.index
+            and not self.goalie_released_for_ball()
+        )
 
     def should_commit_to_shot(self, my_score, my_contact_time):
         """Yield only when a teammate has a meaningfully better opportunity."""
@@ -1253,6 +1290,20 @@ class Bot(VirxERLU):
         
        
        
+        # Start the ten-second post-kickoff contest window as soon as the
+        # ball leaves its kickoff position, regardless of our kickoff role.
+        if (
+            self.kickoff_ball_start is not None
+            and self.kickoff_contest_until < -900.0
+            and self._kickoff_resolved()
+        ):
+            self.kickoff_contest_until = self.time + 10.0
+            print(
+                f"[KICKOFF] unrestricted contest window until "
+                f"{self.kickoff_contest_until:.2f}",
+                flush=True
+            )
+
         # Kickoff logic: assign the role once and don't restart
         # the kickoff routine if its stack temporarily becomes empty.
         if not self.kickoff_done:
@@ -1269,6 +1320,7 @@ class Bot(VirxERLU):
                     if self.is_clear():
                         self.kickoff_routine_started = True
                         self.kickoff_ball_start = Vector(self.ball.location.x, self.ball.location.y, self.ball.location.z)
+                        self.kickoff_contest_until = -999.0
                         print(f"[KICKOFF] player={self.me.index} role=KICKER", flush=True)
                         self.push(routines.speedflip_kickoff())
                     return
@@ -1276,12 +1328,14 @@ class Bot(VirxERLU):
                     if self.is_clear():
                         self.kickoff_routine_started = True
                         self.kickoff_ball_start = Vector(self.ball.location.x, self.ball.location.y, self.ball.location.z)
+                        self.kickoff_contest_until = -999.0
                         print(f"[KICKOFF] player={self.me.index} role=CHEAT", flush=True)
                         self.push(routines.kickoff_cheat())
                     return
                 self.kickoff_routine_started = True
                 self.kickoff_boost_pending = True
                 self.kickoff_ball_start = Vector(self.ball.location.x, self.ball.location.y, self.ball.location.z)
+                self.kickoff_contest_until = -999.0
                 print(f"[KICKOFF] player={self.me.index} role=BACK_BOOST", flush=True)
                 target = self._kickoff_boost_target()
                 if target is not None and self.is_clear():
@@ -1337,7 +1391,10 @@ class Bot(VirxERLU):
         # slices if the ball is still dangerous.
         if self.friends:
             attacker, goalie, transition = self.get_grid_team_roles()
-            is_goalie = self.me.index == goalie
+            is_goalie = (
+                self.me.index == goalie
+                and not self.goalie_released_for_ball()
+            )
             side = utils.side(self.team)
             ball_depth = self.ball.location.y * side
 
@@ -1747,7 +1804,7 @@ class Bot(VirxERLU):
                 if self.me.index != attacker:
                     self.push(
                         routines.grid_defense(
-                            goalie=(self.me.index == goalie)
+                            goalie=self.should_hold_cover_role()
                         )
                     )
                     return
@@ -1799,7 +1856,7 @@ class Bot(VirxERLU):
         goalie_holding_net = False
         if self.friends:
             _, goalie_index, _ = self.get_grid_team_roles()
-            goalie_holding_net = self.me.index == goalie_index
+            goalie_holding_net = self.should_hold_cover_role()
 
         cover_player_deep_defending = (
             bool(self.friends)
@@ -2213,7 +2270,7 @@ class Bot(VirxERLU):
             goalie_role = False
             if self.friends:
                 attacker, goalie, transition = self.get_grid_team_roles()
-                goalie_role = self.me.index == goalie
+                goalie_role = self.should_hold_cover_role()
 
             self.push(routines.grid_defense(goalie=goalie_role))
             return
