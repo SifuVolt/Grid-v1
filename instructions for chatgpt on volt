@@ -163,7 +163,7 @@ class Bot(VirxERLU):
 
         # Find the first predicted ball position entering the goal-mouth
         # approach corridor. A ball merely moving through our half is not
-        # enough reason for the goalie to abandon the line.
+        # enough reason for the transition2 to abandon the line.
         for ball_slice in slices:
             time_to_goal = ball_slice.game_seconds - self.time
             if time_to_goal < 0.05:
@@ -233,8 +233,8 @@ class Bot(VirxERLU):
         transition2_can_save = transition2_eta <= time_to_goal + transition2_margin
         must_save = transition2_can_save and not teammate_can_save
 
-        if self.time - getattr(self, "_last_goalie_save_debug", -999.0) >= 0.5:
-            self._last_goalie_save_debug = self.time
+        if self.time - getattr(self, "_last_transition2_save_debug", -999.0) >= 0.5:
+            self._last_transition2_save_debug = self.time
             print(
                 f"[TRANSITION 2 SAVE READ] player={self.me.index} "
                 f"transition2_eta={transition2_eta:.2f} teammate_eta={best_teammate_eta:.2f} "
@@ -252,7 +252,7 @@ class Bot(VirxERLU):
         ball = self.ball.location
         car = self.me
 
-        # A designated goalie only leaves the line for a predicted
+        # A designated transition2 only leaves the line for a predicted
         # goal-mouth threat that teammates cannot reach in time.
         if self.friends:
             _, _, transition2_index = self.get_grid_team_roles()
@@ -1124,7 +1124,7 @@ class Bot(VirxERLU):
             # A teammate handling a defensive emergency should be allowed
             # to take responsibility when the ball is in our half.
             if status == "DEFEND" and ball_is_our_side:
-                # A goalie reporting DEFEND is holding the net, not taking
+                # A transition2 reporting DEFEND is holding the net, not taking
                 # the challenge. Only yield to the elected challenger.
                 attacker, transition1, transition2 = self.get_grid_team_roles()
                 if friend.index == attacker:
@@ -1182,7 +1182,7 @@ class Bot(VirxERLU):
 
         """Refresh shot information and announce when we leave cover to commit."""
 
-        # An active emergency clear also releases the goalie role, even
+        # An active emergency clear also releases the transition2 role, even
         # if the ball has moved just outside the original emergency threshold.
         emergency_clear_active = any(
             routine.__class__.__name__ == "emergency_clear"
@@ -1198,7 +1198,7 @@ class Bot(VirxERLU):
             self.teamplay_status = "DEFEND"
 
             # The elected challenger is the one making the first defensive
-            # contact. Publish an estimated contact time so the goalie can
+            # contact. Publish an estimated contact time so the transition2 can
             # schedule a second interception just after that attempt.
             if self.friends:
                 attacker, transition1, transition2 = self.get_grid_team_roles()
@@ -1362,6 +1362,61 @@ class Bot(VirxERLU):
         # to a central support point; the role election promotes the remaining
         # defender into Transition 2 while that pass is active.
 
+        # Transition 1 can clear a defender screening the attacker's lane.
+        # Transition 2 is reserved for the explicit pass-receiver comm instead.
+        if self.friends:
+            attacker, transition1, transition2 = self.get_grid_team_roles()
+            if transition1 is not None and self.me.index == transition1:
+                attacker_message = self.get_teammate_comm(
+                    attacker, max_age=0.65
+                ) if attacker is not None else None
+                active_attack = (
+                    attacker_message is not None
+                    and attacker_message.get("cover_released", False)
+                    and attacker_message.get("status") in {
+                        "SHOT_FOUND", "ANY_SHOT_FOUND"
+                    }
+                    and ball_depth < 1280
+                    and not self.defensive_emergency()
+                )
+
+                if current_name == "transition_bump" and not active_attack:
+                    self.clear()
+                    current_name = None
+
+                if active_attack:
+                    bump_target = self.get_transition_bump_target(attacker)
+                    if current_name == "transition_bump":
+                        active_target = getattr(
+                            self.stack[0], "target_index", None
+                        )
+                        if (
+                            bump_target is not None
+                            and bump_target.index == active_target
+                        ):
+                            return
+                        self.clear()
+                        current_name = None
+
+                    if (
+                        bump_target is not None
+                        and current_name in {
+                            None, "grid_defense", "goto_boost"
+                        }
+                        and self.time >= self.transition_bump_cooldown_until
+                    ):
+                        if current_name is not None:
+                            self.clear()
+                        self.transition_bump_cooldown_until = self.time + 2.25
+                        print(
+                            f"[TRANSITION 1 BUMP] player={self.me.index} "
+                            f"attacker={attacker} target={bump_target.index} "
+                            f"distance={self.me.location.flat_dist(bump_target.location):.0f}",
+                            flush=True
+                        )
+                        self.push(routines.transition_bump(bump_target.index))
+                        return
+
         # Keep a started half-flip intact until its own routine finishes.
         if current_name == "half_flip":
             return
@@ -1480,8 +1535,8 @@ class Bot(VirxERLU):
             distance_to_ball = self.me.location.flat_dist(ball)
 
             # Team modes use Grid's elected challenger for emergency clears.
-            # The goalie holds the net; the third 3v3 player uses the normal
-            # non-goalie transition rather than joining the clear.
+            # The transition2 holds the net; the third 3v3 player uses the normal
+            # non-transition2 transition rather than joining the clear.
             if self.friends:
                 attacker, transition1, transition2 = self.get_grid_team_roles()
                 if self.me.index != attacker:
@@ -1544,7 +1599,7 @@ class Bot(VirxERLU):
             and ball_depth > 2048
         )
 
-        # Neither the designated goalie nor a deep cover player should
+        # Neither the designated transition2 nor a deep cover player should
         # abandon the defensive lane for a boost detour.
         if (transition2_holding_middle or transition2_holding_middle_deep) and not self.is_clear():
             current_name = self.stack[0].__class__.__name__
