@@ -2336,13 +2336,13 @@ class grid_defense:
     """
     Grid's ground defensive movement, adapted to the VirxERLU routine API.
 
-    goalie=True holds the central goal-side lane. goalie=False preserves
-    Grid's rotating non-goalie transition into its prepare-for-attack lane.
+    transition=1 is the forward support lane, transition=2 is the central
+    deeper point, and transition=3 is the temporary forward pass-receiver lane.
     """
 
-    def __init__(self, goalie=False, fast=False):
-        self.goalie = goalie
-        self.fast = fast
+    def __init__(self, transition=1, fast=False):
+        self.transition = int(transition)
+        self.fast = bool(fast)
         self.prev_front = None
 
     @staticmethod
@@ -2382,7 +2382,7 @@ class grid_defense:
         )
 
     def _choose_pad(self, agent, goal_location, car_location):
-        if agent.me.boost >= 100 or self.fast:
+        if agent.me.boost >= 100 or self.fast or self.transition != 1:
             return None
 
         candidates = []
@@ -2459,7 +2459,9 @@ class grid_defense:
         agent.controller.steer = self._steer(agent, target)
         agent.controller.boost = False
 
-    def _run_defense(self, agent, goalie, fast):
+    def _run_defense(self, agent, transition, fast):
+        is_transition2 = transition == 2
+        is_transition1 = transition == 1
         car = agent.me
         car_location = car.location
         car_velocity = car.velocity
@@ -2468,19 +2470,27 @@ class grid_defense:
         goal_location = agent.foe_goal.location
         goal_sign = sign(goal_location.y) or 1
 
-        # The goalie must keep the goal-mouth lane; boost collection is
+        # The is_transition2 must keep the goal-mouth lane; boost collection is
         # handled by the other roles rather than by the last line of defence.
         best_pad = (
-            None if goalie
+            None if is_transition2
             else self._choose_pad(agent, goal_location, car_location)
         )
 
         if best_pad is not None:
             target = best_pad.location
-        elif goalie:
+        elif is_transition2:
+            # Hold a central point in front of our box, not on the goal line.
             target = Vector(
                 x=0,
-                y=-goal_location.y - goal_sign * 150,
+                y=-goal_sign * 3900,
+                z=0
+            )
+        elif transition == 3:
+            # A communicated pass receiver moves up through the middle.
+            target = Vector(
+                x=0,
+                y=cap(ball_location.y - goal_sign * 850, -4550, 4550),
                 z=0
             )
         else:
@@ -2498,7 +2508,7 @@ class grid_defense:
 
             if (
                 car_velocity.magnitude() <= 100
-                and -5320 + 200 * (not goalie) > car_depth
+                and -5320 + 200 * (not is_transition2) > car_depth
                 and self._angle(front, target - car_location) > math.pi / 4
             ):
                 agent.controller.handbrake = True
@@ -2512,9 +2522,9 @@ class grid_defense:
 
             elif (
                 car_velocity.magnitude() <= 100
-                and -5320 + 200 * (not goalie)
+                and -5320 + 200 * (not is_transition2)
                     <= car_depth
-                    <= -5120 + 100 * (not goalie)
+                    <= -5120 + 100 * (not is_transition2)
                 and self._angle(front, ball_location - car_location) >= 0.2
             ):
                 agent.controller.handbrake = True
@@ -2522,7 +2532,7 @@ class grid_defense:
                     math.pi / 2 - self._angle(front, car_velocity)
                 )
 
-                if goalie:
+                if is_transition2:
                     ball_lane = (
                         ball_location.flatten()
                         - Vector(x=cap(ball_location.x, -900, 900))
@@ -2567,9 +2577,9 @@ class grid_defense:
                 agent.controller.throttle = sign(throttle_value) or 1
                 agent.controller.steer = self._steer(agent, target)
 
-                # Grid's non-goalie understeer check: reverse rather than
+                # Grid's non-is_transition2 understeer check: reverse rather than
                 # carry momentum across the intended defensive lane.
-                if not goalie and car_velocity.flatten().magnitude() > 100:
+                if is_transition1 and car_velocity.flatten().magnitude() > 100:
                     own_lane = Vector(
                         x=sign(car_location.x) * 900,
                         y=-goal_sign * 5050,
@@ -2682,7 +2692,7 @@ class grid_defense:
         ball_depth = ball.y * side_value
         car_depth = car.location.y * side_value
         should_prepare = (
-            not self.goalie
+            self.transition == 1
             and ball_depth < 0
             and car_depth >= -900
             and (
@@ -2713,7 +2723,7 @@ class grid_defense:
             self.prev_front = car.forward
             return
 
-        self._run_defense(agent, self.goalie, self.fast)
+        self._run_defense(agent, self.transition, self.fast)
 
 
 class fast_intercept_finder:
