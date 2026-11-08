@@ -498,7 +498,10 @@ class Bot(VirxERLU):
             if teammate_has_ball:
                 return False
 
-            if active_challenger == cover_index:
+            if (
+                active_challenger == cover_index
+                and not self.goalie_released_for_ball()
+            ):
                 return distance < 2400 and angle < 1.8
 
             # First man: retain Grid's aggressive forward pressure.
