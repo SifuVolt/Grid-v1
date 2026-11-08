@@ -187,14 +187,16 @@ class Bot(VirxERLU):
             ):
                 threat = (
                     time_to_goal,
-                    Vector(loc.x, loc.y, loc.z)
+                    Vector(loc.x, loc.y, loc.z),
+                    vel.y * side
                 )
                 break
 
         if threat is None:
             return False
 
-        time_to_goal, intercept = threat
+        time_to_goal, intercept, goalward_speed = threat
+        high_speed_threat = goalward_speed >= 700
 
         def eta_to_intercept(car):
             delta = intercept - car.location
@@ -219,10 +221,15 @@ class Bot(VirxERLU):
         ]
         best_teammate_eta = min(teammate_etas) if teammate_etas else float("inf")
 
-        # If a teammate can reach the threatened ball just as quickly,
-        # the goalie stays home. If not, the goalie is the last viable saver.
-        teammate_can_save = best_teammate_eta <= time_to_goal + 0.10
-        goalie_can_save = goalie_eta <= time_to_goal + 0.35
+        # Teammates must arrive before the ball reaches the goal, not
+        # merely around the same time. Fast shots need an additional safety
+        # margin because a late challenge is not a reliable save.
+        teammate_margin = 0.20 if high_speed_threat else 0.05
+        goalie_margin = 0.25 if high_speed_threat else 0.35
+        teammate_can_save = (
+            best_teammate_eta <= time_to_goal - teammate_margin
+        )
+        goalie_can_save = goalie_eta <= time_to_goal + goalie_margin
         must_save = goalie_can_save and not teammate_can_save
 
         if self.time - getattr(self, "_last_goalie_save_debug", -999.0) >= 0.5:
@@ -231,6 +238,8 @@ class Bot(VirxERLU):
                 f"[GOALIE SAVE READ] player={self.me.index} "
                 f"goalie_eta={goalie_eta:.2f} teammate_eta={best_teammate_eta:.2f} "
                 f"goal_time={time_to_goal:.2f} "
+                f"goalward_speed={goalward_speed:.0f} "
+                f"fast_threat={high_speed_threat} "
                 f"teammate_can_save={teammate_can_save} "
                 f"must_save={must_save}",
                 flush=True
