@@ -859,7 +859,7 @@ class Bot(VirxERLU):
                 continue
             if time_to_goal > 5.0:
                 break
-            if ball_slice.physics.location.y * side >= 5235:
+            if abs(ball_slice.physics.location.y) >= 5235:
                 save_deadline = time_to_goal
                 break
 
@@ -885,10 +885,11 @@ class Bot(VirxERLU):
                     backwall_point = Vector(loc.x, loc.y, loc.z)
                     break
 
+        foe_goal = self.foe_goal.location
         ball_dependency = (
-            abs(backwall_point.y - own_goal.y)
+            abs(backwall_point.y - foe_goal.y)
             if backwall_point is not None
-            else abs(ball.y - own_goal.y)
+            else abs(ball.y - foe_goal.y)
         )
 
         best_challenger = None
@@ -923,7 +924,7 @@ class Bot(VirxERLU):
                 location.z <= 200
                 and getattr(car, "doublejumped", False)
                 and velocity.z < 10
-                and velocity.y * side < 0
+                and velocity.y * side > 0
             )
             on_goal_post = (
                 location.flatten().dist(own_goal_post) <= 100
@@ -931,7 +932,7 @@ class Bot(VirxERLU):
             facing_own_goal_from_line = (
                 location.y * side >= 5050
                 and abs(location.x) <= 900
-                and forward.y * side < 0
+                and forward.y * side > 0
             )
             closest_score = (
                 location.dist(ball)
@@ -949,9 +950,9 @@ class Bot(VirxERLU):
                 )
             elif backwall_point is not None:
                 dependency = (
-                    abs(location.y - own_goal.y)
+                    abs(location.y - foe_goal.y)
                     + abs(location.x - backwall_point.x) / 5
-                    > abs(backwall_point.y - own_goal.y)
+                    > abs(backwall_point.y - foe_goal.y)
                 )
             else:
                 lane_distance = (
@@ -973,7 +974,7 @@ class Bot(VirxERLU):
                     )
                 )
                 dependency = (
-                    abs(location.y - own_goal.y)
+                    abs(location.y - foe_goal.y)
                     + abs(location.x - ball.x) / 5
                     * (save_deadline >= 0)
                     > ball_dependency
@@ -1083,14 +1084,15 @@ class Bot(VirxERLU):
         )
 
     def get_cover_role_owner(self):
-        """Return the one Grid-elected goalie in 2v2 or 3v3."""
+        """Return the Noob Black-style goalie when distinct from the challenger."""
         if not self.friends:
             self.cover_role_owner = None
             return None
 
-        attacker, goalie, transition = self.get_grid_team_roles()
-        self.cover_role_owner = goalie
-        return goalie
+        attacker, goalie, _ = self.get_grid_team_roles()
+        owner = goalie if goalie != attacker else None
+        self.cover_role_owner = owner
+        return owner
 
     def should_hold_cover_role(self):
         if not self.friends:
