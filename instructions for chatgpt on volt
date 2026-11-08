@@ -983,8 +983,44 @@ class Bot(VirxERLU):
             key=lambda car: (goalie_score(car), car.index)
         )
 
+        # An emergency-clear player cannot remain the designated goalie.
+        # Teammates read the same release flag from teamplay communications,
+        # then deterministically elect the next-deepest available teammate.
+        goalie_released = False
+        if goalie.index == self.me.index:
+            goalie_released = (
+                bool(self.cover_role_released)
+                or any(
+                    routine.__class__.__name__ == "emergency_clear"
+                    for routine in self.stack
+                )
+            )
+        else:
+            goalie_message = self.get_teammate_comm(
+                goalie.index, max_age=0.65
+            ) or {}
+            goalie_released = bool(
+                goalie_message.get("cover_released", False)
+            )
+
+        if goalie_released:
+            replacement_candidates = [
+                car for car in remaining
+                if car.index != goalie.index
+            ]
+            goalie = (
+                min(
+                    replacement_candidates,
+                    key=lambda car: (goalie_score(car), car.index)
+                )
+                if replacement_candidates else None
+            )
+
         transition = next(
-            (car for car in remaining if car.index != goalie.index),
+            (
+                car for car in remaining
+                if goalie is None or car.index != goalie.index
+            ),
             None
         )
 
@@ -1085,12 +1121,14 @@ class Bot(VirxERLU):
         if not self.friends:
             return False
 
-        side = utils.side(self.team)
-        ball = self.ball.location
-        ball_depth = ball.y * side
+        # A player actively executing emergency_clear gives up the goalie
+        # assignment so another teammate can take over the goal-side role.
+        if any(
+            routine.__class__.__name__ == "emergency_clear"
+            for routine in self.stack
+        ):
+            return False
 
-        # The goalie keeps the net even during an emergency. The elected
-        # challenger, not the goalie, is responsible for the emergency clear.
         return self.get_cover_role_owner() == self.me.index
 
     def should_commit_to_shot(self, my_score, my_contact_time):
@@ -1176,8 +1214,15 @@ class Bot(VirxERLU):
 
         """Refresh shot information and announce when we leave cover to commit."""
 
-        # Check for an urgent defensive situation first.
-        if self.defensive_emergency():
+        # An active emergency clear also releases the goalie role, even
+        # if the ball has moved just outside the original emergency threshold.
+        emergency_clear_active = any(
+            routine.__class__.__name__ == "emergency_clear"
+            for routine in self.stack
+        )
+
+        # Check for an urgent defensive situation or an ongoing emergency clear.
+        if self.defensive_emergency() or emergency_clear_active:
             self.teamplay_shot = None
             self.teamplay_score = 100.0
             self.teamplay_contact_time = 0.0
@@ -1196,8 +1241,15 @@ class Bot(VirxERLU):
                         min(2.0, distance / max(900.0, speed + 1000.0))
                     )
 
-            # Announce that we're taking defensive action.
-            self.cover_role_released = True
+            # Only the player actually taking the emergency clear releases
+            # cover. Other teammates retain their existing defensive roles.
+            self.cover_role_released = (
+                emergency_clear_active
+                or (
+                    self.friends
+                    and self.me.index == self.get_grid_team_roles()[0]
+                )
+            )
             self.send_teamplay_comm(
                 "DEFEND", 100.0, self.teamplay_contact_time
             )
