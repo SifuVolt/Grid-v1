@@ -993,7 +993,8 @@ class Aerial:
     def party_cannon_shot_direction(
         self, ball_location, ball_velocity,
         car_location, shot_target, time_remaining,
-        car_forward=None, car_boost=0, gravity=None, car_velocity=None
+        car_forward=None, car_boost=0, gravity=None, car_velocity=None,
+        car_angular_velocity=None, car_right=None, car_up=None
     ):
         """
         Predict the required outgoing ball direction while accounting
@@ -1016,12 +1017,12 @@ class Aerial:
         if time_remaining <= 0.001:
             return goal_direction
 
-        # Estimate contact velocity without assuming the car can cover
-        # the entire car-to-ball displacement instantly. Air turning takes
-        # time, and forward acceleration is limited by remaining boost.
+        # Estimate air turning from the car's current angular velocity and
+        # the game's pitch/yaw angular acceleration, then integrate boost
+        # along the nose direction as it rotates toward the ball.
         current_velocity = car_velocity if car_velocity is not None else Vector()
 
-        if car_forward is None or car_forward.flatten().magnitude() < 0.01:
+        if car_forward is None or car_forward.magnitude() < 0.01:
             car_forward = to_ball.normalize()
         else:
             car_forward = car_forward.normalize()
@@ -1029,22 +1030,165 @@ class Aerial:
         desired_direction = to_ball.normalize()
         heading_dot = cap(car_forward.dot(desired_direction), -1, 1)
         heading_error = math.acos(heading_dot)
-        estimated_turn_rate = 2.5  # conservative air-turn rate, rad/s
-        turn_time = min(time_remaining, heading_error / estimated_turn_rate)
-        powered_time = max(0.0, time_remaining - turn_time)
 
-        boost_acceleration = 991.0 if car_boost > 0 else 0.0
-        usable_boost_time = min(powered_time, car_boost / boost_per_second)
-        acceleration_time = usable_boost_time
+        def cross(a, b):
+            return Vector(
+                a.y * b.z - a.z * b.y,
+                a.z * b.x - a.x * b.z,
+                a.x * b.y - a.y * b.x
+            )
 
-        # By the end of the estimated turn, the nose is assumed to be
-        # approximately aligned with the ball; boost then accelerates along
-        # that corrected heading rather than the stale starting heading.
-        car_final_velocity = current_velocity + desired_direction * (
-            boost_acceleration * acceleration_time
+        turn_axis = cross(car_forward, desired_direction)
+        if turn_axis.magnitude() < 0.001 and heading_error > 0.01:
+            turn_axis = (
+                car_right.normalize()
+                if car_right is not None and car_right.magnitude() > 0.01
+                else Vector(0, 0, 1)
+            )
+        elif turn_axis.magnitude() > 0.001:
+            turn_axis = turn_axis.normalize()
+
+        angular_velocity = (
+            car_angular_velocity
+            if car_angular_velocity is not None
+            else Vector()
         )
+        initial_turn_rate = angular_velocity.dot(turn_axis)
+
+        # Pitch and yaw have different air-control acceleration. Resolve the
+        # required rotation axis against the car's current local axes.
+        yaw_weight = (
+            abs(turn_axis.dot(car_up))
+            if car_up is not None else 0.5
+        )
+        pitch_weight = (
+            abs(turn_axis.dot(car_right))
+            if car_right is not None else 0.5
+        )
+        angular_acceleration = math.sqrt(
+            (9.11 * yaw_weight) ** 2
+            + (12.46 * pitch_weight) ** 2
+        )
+        angular_acceleration = max(8.0, angular_acceleration)
+        max_turn_rate = 5.5
+
+        # Estimate time to rotate through the required angle, including
+        # any existing angular velocity that initially opposes the turn.
+        if initial_turn_rate < 0:
+            time_to_reverse = -initial_turn_rate / angular_acceleration
+            angle_at_reverse = (
+                initial_turn_rate * time_to_reverse
+                + 0.5 * angular_acceleration * time_to_reverse ** 2
+            )
+            angle_after_reverse = max(
+                0.0, heading_error - angle_at_reverse
+            )
+            turn_time = (
+                time_to_reverse
+                + math.sqrt(
+                    2 * angle_after_reverse / angular_acceleration
+                )
+            )
+            time_to_max_rate = time_to_reverse
+            angle_at_max_rate = angle_at_reverse
+        elif initial_turn_rate < max_turn_rate:
+            time_to_max_rate = (
+                max_turn_rate - initial_turn_rate
+            ) / angular_acceleration
+            angle_at_max_rate = (
+                initial_turn_rate * time_to_max_rate
+                + 0.5 * angular_acceleration * time_to_max_rate ** 2
+            )
+            if heading_error <= angle_at_max_rate:
+                turn_time = (
+                    -initial_turn_rate
+                    + math.sqrt(
+                        initial_turn_rate ** 2
+                        + 2 * angular_acceleration * heading_error
+                    )
+                ) / angular_acceleration
+            else:
+                turn_time = (
+                    time_to_max_rate
+                    + (heading_error - angle_at_max_rate) / max_turn_rate
+                )
+        else:
+            time_to_max_rate = 0.0
+            angle_at_max_rate = 0.0
+            turn_time = heading_error / max_turn_rate
+
+        turn_time = min(time_remaining, max(0.0, turn_time))
+
+        # Integrate boost in short steps so acceleration follows the
+        # rotating forward vector instead of being applied in one guessed
+        # direction after a fixed turn delay.
+        car_final_velocity = current_velocity.copy()
+        boost_acceleration = 1058.333 if car_boost > 0 else 0.0
+        boost_time_left = min(
+            time_remaining,
+            car_boost / boost_per_second
+        )
+        elapsed = 0.0
+        simulation_step = 0.05
+
+        while elapsed < time_remaining:
+            step = min(simulation_step, time_remaining - elapsed)
+            midpoint = elapsed + step * 0.5
+
+            if midpoint >= turn_time:
+                rotation_angle = heading_error
+            elif initial_turn_rate < 0:
+                if midpoint <= time_to_max_rate:
+                    rotation_angle = (
+                        initial_turn_rate * midpoint
+                        + 0.5 * angular_acceleration * midpoint ** 2
+                    )
+                else:
+                    after_reverse = midpoint - time_to_max_rate
+                    rotation_angle = (
+                        angle_at_max_rate
+                        + 0.5 * angular_acceleration * after_reverse ** 2
+                    )
+            elif midpoint <= time_to_max_rate:
+                rotation_angle = (
+                    initial_turn_rate * midpoint
+                    + 0.5 * angular_acceleration * midpoint ** 2
+                )
+            else:
+                rotation_angle = (
+                    angle_at_max_rate
+                    + max_turn_rate * (midpoint - time_to_max_rate)
+                )
+
+            rotation_angle = cap(
+                rotation_angle, -heading_error, heading_error
+            )
+            cosine = math.cos(rotation_angle)
+            sine = math.sin(rotation_angle)
+            axis_cross_forward = cross(turn_axis, car_forward)
+            forward_midpoint = (
+                car_forward * cosine
+                + axis_cross_forward * sine
+                + turn_axis * (
+                    turn_axis.dot(car_forward) * (1.0 - cosine)
+                )
+            ).normalize()
+
+            boost_step = min(step, boost_time_left)
+            if boost_step > 0:
+                car_final_velocity += (
+                    forward_midpoint
+                    * boost_acceleration
+                    * boost_step
+                )
+                boost_time_left -= boost_step
+
+            elapsed += step
+
         if gravity is not None:
-            car_final_velocity = car_final_velocity + gravity * time_remaining
+            car_final_velocity = (
+                car_final_velocity + gravity * time_remaining
+            )
 
         if car_final_velocity.magnitude() > max_speed:
             car_final_velocity = car_final_velocity.normalize() * max_speed
@@ -1205,7 +1349,10 @@ class Aerial:
             car_forward=agent.me.forward,
             car_boost=agent.me.boost,
             gravity=agent.gravity,
-            car_velocity=agent.me.velocity
+            car_velocity=agent.me.velocity,
+            car_angular_velocity=agent.me.angular_velocity,
+            car_right=agent.me.right,
+            car_up=agent.me.up
         )
 
         print(
