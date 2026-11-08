@@ -3465,6 +3465,7 @@ class jump_shot:
         self.wall_shot_normal = None
         self.side_adjustment_logged = False
         self.contact_point = None
+        self.dodge_wait_logged = False
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -3936,7 +3937,7 @@ class jump_shot:
             if T <= -0.12 or (not agent.me.airborne and self.counter >= 3):
                 print(
                     f"[JUMP SHOT ABORT] phase=jump "
-                    f"reason={'intercept_expired' if T <= -0.8 else 'landed_before_dodge'} "
+                    f"reason={'intercept_expired' if T <= -0.12 else 'landed_before_dodge'} "
                     f"id={id(self)} "
                     f"T={T:.3f} airborne={agent.me.airborne} "
                     f"counter={self.counter} "
@@ -4015,6 +4016,13 @@ class jump_shot:
                         dodge_direction = Vector(x=1)
 
                     print(
+                        f"[JUMP SHOT DODGE] T={T:.3f} "
+                        f"nose_gap={nose_to_contact.magnitude():.1f} "
+                        f"direction=({dodge_direction.x:.2f},"
+                        f"{dodge_direction.y:.2f},{dodge_direction.z:.2f})",
+                        flush=True
+                    )
+                    print(
                         f"[JUMP HITBOX AIM] nose_offset={nose_offset:.1f} "
                         f"hitbox=({hitbox.length:.0f},"
                         f"{hitbox.width:.0f},{hitbox.height:.0f}) "
@@ -4031,6 +4039,19 @@ class jump_shot:
                     agent.last_flip_time = agent.time
                     self.dodging = True
                     self.counter = 4
+
+                elif (
+                    close_enough
+                    and (local_target.x > 0 or self.side_mode)
+                    and not self.dodge_wait_logged
+                ):
+                    print(
+                        f"[JUMP SHOT DODGE WAIT] T={T:.3f} "
+                        f"distance={agent.me.location.dist(self.offset_target):.1f} "
+                        f"required_T<=0.075",
+                        flush=True
+                    )
+                    self.dodge_wait_logged = True
 
                 elif (local_target.x <= 0 and not self.side_mode) or (
                     agent.me.location.dist(self.offset_target)
