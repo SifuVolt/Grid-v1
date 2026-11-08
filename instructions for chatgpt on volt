@@ -920,18 +920,28 @@ class Bot(VirxERLU):
 
         return False
     def get_transition2_receiver(self):
-        """Return the teammate currently released forward to receive a pass."""
+        """Return the freshest teammate-communicated pass receiver."""
+        if self.defensive_emergency():
+            return None
+
+        candidates = []
+        team_indices = {
+            car.index for car in [self.me] + list(self.friends)
+            if not getattr(car, "demolished", False)
+        }
         for friend in self.friends:
             message = self.get_teammate_comm(friend.index, max_age=0.65) or {}
-            if not message.get("transition2_advance", False):
-                continue
             receiver = message.get("transition2_receiver")
-            if isinstance(receiver, int) and any(
-                car.index == receiver
-                for car in [self.me] + list(self.friends)
+            if (
+                message.get("transition2_advance", False)
+                and isinstance(receiver, int)
+                and receiver in team_indices
             ):
-                return receiver
-        return None
+                candidates.append((message.get("received_at", -999.0), receiver))
+
+        if not candidates:
+            return None
+        return max(candidates, key=lambda item: item[0])[1]
 
     def get_grid_team_roles(self):
         """
@@ -1181,6 +1191,7 @@ class Bot(VirxERLU):
 
         # Check for an urgent defensive situation or an ongoing emergency clear.
         if self.defensive_emergency() or emergency_clear_active:
+            self.transition2_advance = False
             self.teamplay_shot = None
             self.teamplay_score = 100.0
             self.teamplay_contact_time = 0.0
