@@ -25,12 +25,9 @@ def find_wall_drive(agent, cap_=2.5):
     if not slices:
         return None
 
-    ball = agent.ball.location
-    if abs(ball.x) < 3250 or ball.z < 210:
-        return None
-    if agent.ball.velocity.z < -420 and ball.z < 520:
-        return None
-
+    # Use the prediction rather than the current ball position: the ball
+    # may still be on the floor while its predicted path is already climbing
+    # one of the two long side walls.
     speed = math.hypot(car.velocity.x, car.velocity.y)
     effective_speed = max(1050.0, min(1950.0, speed + 650.0))
     best = None
@@ -42,9 +39,12 @@ def find_wall_drive(agent, cap_=2.5):
         loc = physics.location
         vel = physics.velocity
 
+        # Only the two long side walls (x = +/- arena edge). The
+        # predicted ball must be above this car and actively travelling up
+        # the wall; a ball merely sitting beside the wall is not enough.
         if abs(loc.x) < 3350 or not 230 <= loc.z <= 1750:
             continue
-        if vel.z < -520 and loc.z < 550:
+        if loc.z < car.location.z + 100 or vel.z < 35:
             continue
 
         intercept_in = ball_slice.game_seconds - agent.time
@@ -61,7 +61,16 @@ def find_wall_drive(agent, cap_=2.5):
 
         target = Vector(wall_side * 3850, loc.y, max(100.0, loc.z))
         delta = target - car.location
-        distance = delta.magnitude()
+        if on_side_wall:
+            distance = delta.magnitude()
+        else:
+            # A ground car must first reach the wall, then travel along it
+            # and climb. Euclidean distance underestimates that route.
+            distance = (
+                abs(target.x - car.location.x)
+                + abs(target.y - car.location.y)
+                + max(0.0, target.z - car.location.z)
+            )
 
         facing = 0.0
         flat_delta = delta.flatten()
