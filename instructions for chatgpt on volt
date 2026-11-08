@@ -1823,7 +1823,7 @@ class Bot(VirxERLU):
                         if new_shot_name == current_shot_name:
                             # Keep updating the same routine as predictions change.
                             self.stack[0].is_pass_shot = getattr(shot, "is_pass_shot", False)
-                        self.stack[0].update(shot)
+                            self.stack[0].update(shot)
                         else:
                             ordinary_shots = {
                                 "ground_shot",
