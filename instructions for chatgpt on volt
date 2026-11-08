@@ -829,6 +829,10 @@ class Bot(VirxERLU):
         to our goal with lateral distance capped at 900 units. The challenger
         takes priority if one car wins both roles, matching Noob Black.
         """
+        cached_time = getattr(self, "_noob_black_roles_time", None)
+        if cached_time == self.time:
+            return self._noob_black_roles_cache
+
         cars = [
             car for car in [self.me] + list(self.friends)
             if not getattr(car, "demolished", False)
@@ -836,9 +840,15 @@ class Bot(VirxERLU):
         cars.sort(key=lambda car: car.index)
 
         if not cars:
-            return None, None, None
+            result = (None, None, None)
+            self._noob_black_roles_time = self.time
+            self._noob_black_roles_cache = result
+            return result
         if len(cars) == 1:
-            return cars[0].index, None, None
+            result = (cars[0].index, None, None)
+            self._noob_black_roles_time = self.time
+            self._noob_black_roles_cache = result
+            return result
 
         ball = self.ball.location
         ball_velocity = self.ball.velocity
@@ -1000,11 +1010,14 @@ class Bot(VirxERLU):
             ),
             None
         )
-        return (
+        result = (
             attacker.index,
             goalie.index,
             transition.index if transition is not None else None
         )
+        self._noob_black_roles_time = self.time
+        self._noob_black_roles_cache = result
+        return result
 
     def get_grid_active_challenger(self):
         """Noob Black's selected challenger always owns the first challenge."""
