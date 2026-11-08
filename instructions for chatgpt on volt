@@ -1800,8 +1800,8 @@ class Bot(VirxERLU):
             # The goalie holds the net; the third 3v3 player uses the normal
             # non-goalie transition rather than joining the clear.
             if self.friends:
-                attacker, goalie, transition = self.get_grid_team_roles()
-                if self.me.index != attacker:
+                active_challenger = self.get_grid_active_challenger()
+                if self.me.index != active_challenger:
                     self.push(
                         routines.grid_defense(
                             goalie=self.should_hold_cover_role()
