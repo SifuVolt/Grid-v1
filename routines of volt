@@ -2346,6 +2346,7 @@ class grid_defense:
         self.fast = fast
         self.prev_front = None
         self._transition2_following = False
+        self._transition1_advanced_at = None
 
     @staticmethod
     def _angle(a, b):
@@ -2484,9 +2485,21 @@ class grid_defense:
 
         transition1_depth = transition1.location.y * side_value
         transition2_depth = agent.me.location.y * side_value
+        transition1_has_advanced = (
+            transition1_depth < transition2_depth - 250
+        )
 
-        # T2 only starts rotating once T1 is at least 250 units ahead.
-        return transition1_depth < transition2_depth - 250, transition1_depth
+        if not transition1_has_advanced:
+            self._transition1_advanced_at = None
+            return False, transition1_depth
+
+        if self._transition1_advanced_at is None:
+            self._transition1_advanced_at = agent.time
+
+        # Wait a quarter-second after T1 has physically moved ahead before
+        # T2 leaves its deeper support lane.
+        delay_elapsed = agent.time - self._transition1_advanced_at
+        return delay_elapsed >= 0.25, transition1_depth
 
     def _run_defense(self, agent, fast):
         car = agent.me
