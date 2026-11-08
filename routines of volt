@@ -2730,7 +2730,7 @@ class grid_defense:
             self.prev_front = car.forward
             return
 
-        self._run_defense(agent, fast)
+        self._run_defense(agent, self.fast)
 
 
 class fast_intercept_finder:
