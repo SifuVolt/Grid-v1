@@ -306,17 +306,31 @@ class wall_approach:
             return
 
         if on_wall:
+            # Once attached, follow the predicted contact point along the wall.
             drive_target = contact_target
+            drive_phase = "WALL CLIMB"
         else:
+            # A grounded car must first drive into the wall at its current
+            # height and lane. Do not aim diagonally at the eventual contact
+            # point while still on the floor; transition onto the wall first.
             drive_target = Vector(
                 wall_side * self.WALL_X,
-                contact_target.y,
+                car.location.y,
                 max(100, car.location.z)
             )
+            drive_phase = "GROUND TO WALL"
 
         distance = car.location.dist(drive_target)
         time_left = max(0.12, min(T, 3.0))
         speed_required = min(2200, max(900, distance / time_left))
+        if self.last_debug_time < 0 or agent.time - self.last_debug_time >= 0.35:
+            self.last_debug_time = agent.time
+            print(
+                f"[WALL DRIVE] {drive_phase} side={wall_side} "
+                f"target=({drive_target.x:.0f},{drive_target.y:.0f},{drive_target.z:.0f}) "
+                f"distance={distance:.0f} T={T:.2f} speed={speed_required:.0f}",
+                flush=True
+            )
         defaultDrive(agent, speed_required, car.local_location(drive_target))
         agent.controller.boost = (
             car.boost > 0 and distance > 900 and speed_required > 1450
