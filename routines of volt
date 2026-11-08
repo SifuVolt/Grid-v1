@@ -2837,24 +2837,24 @@ class fast_intercept_finder:
         return None
 
 
-class cover_followup_wait:
+class transition1_followup_wait:
     """
-    Keep the non-goalie cover player in its transition lane while the
+    Keep Transition 1 in its support lane while the
     elected attacker takes the first attacking touch.
     """
 
     def __init__(self, release_time, contact_key=None):
         self.release_time = release_time
         self.contact_key = contact_key
-        self.defense = grid_defense(goalie=False)
+        self.defense = grid_defense(transition=1)
 
     def run(self, agent: VirxERLU):
         self.defense.run(agent)
 
 
-class goalie_followup_wait:
+class transition2_followup_wait:
     """
-    Keep the elected goalie in its defensive lane while the challenger
+    Keep Transition 2 at its central support point while the challenger
     makes the first save attempt. The bot logic releases this routine at
     the expected contact time and then plans a fresh follow-up intercept.
     """
@@ -2862,7 +2862,7 @@ class goalie_followup_wait:
     def __init__(self, release_time, contact_key=None):
         self.release_time = release_time
         self.contact_key = contact_key
-        self.defense = grid_defense(goalie=True)
+        self.defense = grid_defense(transition=2)
 
     def run(self, agent: VirxERLU):
         self.defense.run(agent)
