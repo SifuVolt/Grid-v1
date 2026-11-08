@@ -2137,8 +2137,11 @@ class grid_defense:
         goal_location = agent.foe_goal.location
         goal_sign = sign(goal_location.y) or 1
 
-        best_pad = self._choose_pad(
-            agent, goal_location, car_location
+        # The goalie must keep the goal-mouth lane; boost collection is
+        # handled by the other roles rather than by the last line of defence.
+        best_pad = (
+            None if goalie
+            else self._choose_pad(agent, goal_location, car_location)
         )
 
         if best_pad is not None:
