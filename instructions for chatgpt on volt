@@ -1430,6 +1430,14 @@ class Bot(VirxERLU):
         # to a central support point; the role election promotes the remaining
         # defender into Transition 2 while that pass is active.
 
+        # A pass receiver must not remain on a boost detour when called forward.
+        if (
+            self.get_transition2_receiver() == self.me.index
+            and current_name == "goto_boost"
+        ):
+            self.clear()
+            current_name = None
+
         # Transition 1 can clear a defender screening the attacker's lane.
         # Transition 2 is reserved for the explicit pass-receiver comm instead.
         if self.friends:
