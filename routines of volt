@@ -2188,6 +2188,10 @@ class grid_defense:
         self.transition = int(transition)
         self.fast = bool(fast)
         self.prev_front = None
+        # Reuse the goal-line crossing predictor for Transition 2 saves.
+        # The defense class is defined later in this module but is available
+        # by the time any routine instance is created.
+        self.goal_line_targeter = defense() if self.transition == 2 else None
 
     @staticmethod
     def _angle(a, b):
@@ -2324,13 +2328,10 @@ class grid_defense:
         if best_pad is not None:
             target = best_pad.location
         elif is_transition2:
-            # Hold the centre of the goal line, slightly field-side of the
-            # line itself. Transition 1 already occupies an offset side lane.
-            target = Vector(
-                x=0,
-                y=-goal_sign * 5050,
-                z=0
-            )
+            # Intercept the predicted ball crossing of our goal line. The
+            # predictor clamps the crossing inside the posts and places the
+            # car just field-side of the line.
+            target = self.goal_line_targeter.get_target(agent)
         elif transition == 3:
             # A communicated pass receiver moves up through the middle.
             target = Vector(
@@ -2378,26 +2379,10 @@ class grid_defense:
                 )
 
                 if is_transition2:
-                    ball_lane = (
-                        ball_location.flatten()
-                        - Vector(x=cap(ball_location.x, -900, 900))
-                        + goal_location
-                    )
-                    if self._angle(ball_lane, goal_location) <= math.pi / 3:
-                        steer_target = ball_location
-                    else:
-                        steer_target = (
-                            -goal_location
-                            + Vector(
-                                x=ball_location.x,
-                                y=(
-                                    sign(ball_location.y + goal_location.y)
-                                    / math.tan(math.pi / 3)
-                                    * (abs(ball_location.x) - 900)
-                                ),
-                                z=0
-                            )
-                        )
+                    # Keep steering toward the predicted goal-line crossing,
+                    # not the ball's current position, so the save is timed
+                    # against where it will enter the goal mouth.
+                    steer_target = target
                 else:
                     steer_target = Vector(
                         x=0, y=car_location.y, z=0
