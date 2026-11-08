@@ -1643,7 +1643,7 @@ class Bot(VirxERLU):
                 if not self.is_clear():
                     return
         elif len(self.friends) > 1:
-            if self.me.boost < 30 and not transition2_holding_position and not self.should_prioritize_ball() and not transition2_holding_position:
+            if self.me.boost < 30 and not transition2_holding_position and not self.should_prioritize_ball():
                 # If the stack is clear
                 if self.is_clear():
                     # Get a list of all of the large, active boosts
