@@ -2345,6 +2345,7 @@ class grid_defense:
         self.transition = 2 if transition == 2 else 1
         self.fast = fast
         self.prev_front = None
+        self._transition2_following = False
 
     @staticmethod
     def _angle(a, b):
@@ -2500,6 +2501,14 @@ class grid_defense:
         transition2_released, transition1_depth = self._transition2_state(
             agent, side_value
         )
+        if transition2_released != self._transition2_following:
+            self._transition2_following = transition2_released
+            print(
+                f"[TRANSITION 2] player={car.index} "
+                f"following={transition2_released} "
+                f"transition1_depth={transition1_depth}",
+                flush=True
+            )
 
         # Transition 2 cannot take a boost detour before Transition 1 advances.
         best_pad = (
@@ -2817,7 +2826,7 @@ class fast_intercept_finder:
 
 class cover_followup_wait:
     """
-    Keep the non-goalie cover player in its transition lane while the
+    Keep Transition 1 in its support lane while the
     elected attacker takes the first attacking touch.
     """
 
