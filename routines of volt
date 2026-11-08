@@ -2470,6 +2470,7 @@ class grid_defense:
             return False, None
 
         if transition2_index != agent.me.index or transition1_index is None:
+            self._transition1_advanced_at = None
             return False, None
 
         transition1 = next(
@@ -2481,6 +2482,7 @@ class grid_defense:
             None
         )
         if transition1 is None:
+            self._transition1_advanced_at = None
             return False, None
 
         transition1_depth = transition1.location.y * side_value
