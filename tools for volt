@@ -968,8 +968,12 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                 side_shot_selected = True
                 print(
                     f"[SHOT PLANNER] selected {approach_side} side_shot "
-                    f"projected_x={projected_goal_x:.0f} "
-                    f"T={time_to_intercept:.2f} "
+                    + (
+                        f"projected_x={projected_goal_x:.0f} "
+                        if projected_goal_x is not None
+                        else "projected_x=n/a "
+                    )
+                    + f"T={time_to_intercept:.2f} "
                     f"setup_distance={side_setup_distance:.0f} "
                     f"travel_estimate={side_setup_time:.2f}",
                     flush=True
@@ -1283,8 +1287,12 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
                 )
                 print(
                     f"[SHOT PLANNER] selected untargeted {approach_side} "
-                    f"side_shot projected_x={projected_goal_x:.0f} "
-                    f"T={time_to_intercept:.2f} "
+                    + (
+                        f"side_shot projected_x={projected_goal_x:.0f} "
+                        if projected_goal_x is not None
+                        else "side_shot projected_x=n/a "
+                    )
+                    + f"T={time_to_intercept:.2f} "
                     f"setup_distance={side_setup_distance:.0f} "
                     f"travel_estimate={side_setup_time:.2f}",
                     flush=True
