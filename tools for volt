@@ -716,6 +716,14 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
     best_intercept_time = None
     best_score = float("inf")
     best_ball_location = None
+    save_mode = _urgent_save_state(agent)
+    if save_mode:
+        print(
+            f"[SAVE INTERCEPT] earliest-contact mode | "
+            f"ball=({agent.ball.location.x:.0f},{agent.ball.location.y:.0f},"
+            f"{agent.ball.location.z:.0f})",
+            flush=True
+        )
 
     # Calculate Grid's double-jump candidate ONCE per search.
     grid_candidate = None
@@ -757,13 +765,26 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             ):
                 continue
 
-            score = shot_candidate_score(
-                agent,
-                ball_slice,
-                shot,
-                time_remaining,
-                target
-            )
+            if save_mode:
+                # In a fast own-half threat, choose the first reachable
+                # contact. Keep only a tiny preference for simpler touches;
+                # do not trade an earlier save for a prettier attacking shot.
+                shot_type = shot.get("shot_type", 0)
+                save_type_penalty = {
+                    0: 0.000,
+                    1: 0.005,
+                    2: 0.015,
+                    3: 0.025
+                }.get(shot_type, 0.02)
+                score = time_remaining + save_type_penalty
+            else:
+                score = shot_candidate_score(
+                    agent,
+                    ball_slice,
+                    shot,
+                    time_remaining,
+                    target
+                )
 
             if score < best_score:
                 best_score = score
@@ -806,13 +827,16 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                 grid_shot,
                 grid_time
             ):
-                grid_score = shot_candidate_score(
-                    agent,
-                    grid_slice,
-                    grid_shot,
-                    grid_time_remaining,
-                    target
-                )
+                if save_mode:
+                    grid_score = grid_time_remaining + 0.015
+                else:
+                    grid_score = shot_candidate_score(
+                        agent,
+                        grid_slice,
+                        grid_shot,
+                        grid_time_remaining,
+                        target
+                    )
 
                 if grid_score < best_score:
                     best_score = grid_score
@@ -1314,6 +1338,30 @@ def find_pass_shot(agent, cap_=4):
     )
 
 
+def _urgent_save_state(agent):
+    """Detect a fast ball travelling deep into our own half toward our goal."""
+    ball = agent.ball.location
+    velocity = agent.ball.velocity
+    team_side = side(agent.team)
+    own_goal = agent.friend_goal.location
+    to_goal = Vector(
+        own_goal.x - ball.x,
+        own_goal.y - ball.y,
+        own_goal.z - ball.z
+    ).flatten()
+    if to_goal.magnitude() < 1:
+        return False
+    toward_goal_speed = Vector(
+        velocity.x, velocity.y, velocity.z
+    ).flatten().dot(to_goal.normalize())
+    own_half_depth = ball.y * team_side
+    goal_distance = to_goal.magnitude()
+    return (
+        toward_goal_speed >= 400
+        and (own_half_depth >= 1500 or goal_distance <= 3200)
+    )
+
+
 def get_slices(agent, cap_):
     struct = agent.ball_prediction_struct
 
@@ -1348,6 +1396,7 @@ def get_slices(agent, cap_):
 
     selected = []
     last_sample = -999.0
+    urgent_save = _urgent_save_state(agent)
 
     for ball_slice in struct.slices:
         relative_time = ball_slice.game_seconds - agent.time
@@ -1358,10 +1407,15 @@ def get_slices(agent, cap_):
         if relative_time > max_time:
             break
 
-        # Search densely nearby, less densely at long range.
-        sample_interval = (
-            0.05 if relative_time < 1.5 else 0.10
-        )
+        # Defensive saves need the earliest reachable contact, not a
+        # cleaner later shot. Sample their prediction much more densely so
+        # the first viable slice is not skipped by the normal 10 Hz horizon.
+        if urgent_save:
+            sample_interval = 1 / 40
+        else:
+            sample_interval = (
+                0.05 if relative_time < 1.5 else 0.10
+            )
 
         if relative_time - last_sample < sample_interval:
             continue
