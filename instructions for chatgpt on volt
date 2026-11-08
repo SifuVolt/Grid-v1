@@ -50,8 +50,6 @@ class Bot(VirxERLU):
         # Teamplay communication state.
         self.cover_role_owner = None
         self.cover_role_released = False
-        self.transition2_advance = False
-        self.transition2_receiver = None
         self.teammate_comms = {}
         self.last_comms_signature = None
         self.last_comms_send_time = -999.0
@@ -144,13 +142,13 @@ class Bot(VirxERLU):
         # From our team's perspective, left is x * side(team) < 0.
         return self.me.location.x * utils.side(self.team) < 0
         
-    def transition2_must_personally_defend(self):
+    def goalie_must_personally_defend(self):
         """True only when the predicted goal-mouth threat is ours to save."""
         if not self.friends:
             return True
 
-        _, _, transition2_index = self.get_grid_team_roles()
-        if self.me.index != transition2_index:
+        _, goalie_index, _ = self.get_grid_team_roles()
+        if self.me.index != goalie_index:
             return True
 
         prediction = self.ball_prediction_struct
@@ -164,7 +162,7 @@ class Bot(VirxERLU):
 
         # Find the first predicted ball position entering the goal-mouth
         # approach corridor. A ball merely moving through our half is not
-        # enough reason for the transition2 to abandon the line.
+        # enough reason for the goalie to abandon the line.
         for ball_slice in slices:
             time_to_goal = ball_slice.game_seconds - self.time
             if time_to_goal < 0.05:
@@ -216,7 +214,7 @@ class Bot(VirxERLU):
             turn_penalty = (1.0 - facing) * 0.28
             return distance / effective_speed + turn_penalty
 
-        transition2_eta = eta_to_intercept(self.me)
+        goalie_eta = eta_to_intercept(self.me)
         teammate_etas = [
             eta_to_intercept(friend)
             for friend in self.friends
@@ -227,18 +225,18 @@ class Bot(VirxERLU):
         # merely around the same time. Fast shots need an additional safety
         # margin because a late challenge is not a reliable save.
         teammate_margin = 0.20 if high_speed_threat else 0.05
-        transition2_margin = 0.25 if high_speed_threat else 0.35
+        goalie_margin = 0.25 if high_speed_threat else 0.35
         teammate_can_save = (
             best_teammate_eta <= time_to_goal - teammate_margin
         )
-        transition2_can_save = transition2_eta <= time_to_goal + transition2_margin
-        must_save = transition2_can_save and not teammate_can_save
+        goalie_can_save = goalie_eta <= time_to_goal + goalie_margin
+        must_save = goalie_can_save and not teammate_can_save
 
-        if self.time - getattr(self, "_last_transition2_save_debug", -999.0) >= 0.5:
-            self._last_transition2_save_debug = self.time
+        if self.time - getattr(self, "_last_goalie_save_debug", -999.0) >= 0.5:
+            self._last_goalie_save_debug = self.time
             print(
-                f"[TRANSITION 2 SAVE READ] player={self.me.index} "
-                f"transition2_eta={transition2_eta:.2f} teammate_eta={best_teammate_eta:.2f} "
+                f"[GOALIE SAVE READ] player={self.me.index} "
+                f"goalie_eta={goalie_eta:.2f} teammate_eta={best_teammate_eta:.2f} "
                 f"goal_time={time_to_goal:.2f} "
                 f"goalward_speed={goalward_speed:.0f} "
                 f"fast_threat={high_speed_threat} "
@@ -253,13 +251,13 @@ class Bot(VirxERLU):
         ball = self.ball.location
         car = self.me
 
-        # A designated transition2 only leaves the line for a predicted
+        # A designated goalie only leaves the line for a predicted
         # goal-mouth threat that teammates cannot reach in time.
         if self.friends:
-            _, _, transition2_index = self.get_grid_team_roles()
+            _, goalie_index, _ = self.get_grid_team_roles()
             if (
-                self.me.index == transition2_index
-                and not self.transition2_must_personally_defend()
+                self.me.index == goalie_index
+                and not self.goalie_must_personally_defend()
             ):
                 return False
 
@@ -807,7 +805,7 @@ class Bot(VirxERLU):
 
         # In 3v3, the designated cover player yields when
         # second man has a comparable opportunity.
-        if len(self.friends) >= 2 and self.should_hold_transition2_role():
+        if len(self.friends) >= 2 and self.should_hold_cover_role():
             for friend in self.friends:
                 comms = self.get_teammate_comm(friend.index, max_age=0.5) or {}
 
@@ -920,162 +918,85 @@ class Bot(VirxERLU):
                 return True
 
         return False
-    def get_transition2_receiver(self):
-        """Return the freshest teammate-communicated pass receiver."""
-        if self.defensive_emergency():
-            return None
-
-        own_receiver = getattr(self, "transition2_receiver", None)
-        if (
-            getattr(self, "transition2_advance", False)
-            and isinstance(own_receiver, int)
-        ):
-            return own_receiver
-
-        candidates = []
-        team_indices = {
-            car.index for car in [self.me] + list(self.friends)
-            if not getattr(car, "demolished", False)
-        }
-        for friend in self.friends:
-            message = self.get_teammate_comm(friend.index, max_age=0.65) or {}
-            receiver = message.get("transition2_receiver")
-            if (
-                message.get("transition2_advance", False)
-                and isinstance(receiver, int)
-                and receiver in team_indices
-            ):
-                candidates.append((
-                    message.get("received_at", -999.0),
-                    receiver,
-                    friend.index
-                ))
-
-        if not candidates:
-            return None
-        return max(candidates, key=lambda item: item[0])[1]
-
-    def get_transition2_pass_sender(self, receiver):
-        """Identify the teammate who explicitly called the receiver forward."""
-        if (
-            getattr(self, "transition2_advance", False)
-            and getattr(self, "transition2_receiver", None) == receiver
-        ):
-            return self.me.index
-
-        candidates = []
-        for friend in self.friends:
-            message = self.get_teammate_comm(friend.index, max_age=0.65) or {}
-            if (
-                message.get("transition2_advance", False)
-                and message.get("transition2_receiver") == receiver
-            ):
-                candidates.append((
-                    message.get("received_at", -999.0),
-                    friend.index
-                ))
-        if not candidates:
-            return None
-        return max(candidates, key=lambda item: item[0])[1]
-
     def get_grid_team_roles(self):
         """
-        Shared deterministic roles:
-        - the pass-shot caller remains the attacker while its receiver advances,
-        - otherwise the closest viable player attacks,
-        - the more advanced remaining player is Transition 1,
-        - the deeper remaining player is Transition 2.
+        Grid's rotating team roles:
+        - closest viable car is the challenger,
+        - deepest remaining car is the single goalie,
+        - any third car is simply the other non-goalie player and uses
+          Grid's normal defense(False) / prepare_for_attack transition.
 
-        During a communicated pass, the receiver leaves the defensive rotation
-        and the only remaining support player inherits the central T2 point.
+        There is no permanently assigned second-man support role.
+        Every bot calculates the same roles from the shared packet.
         """
         cars = [
             car for car in [self.me] + list(self.friends)
             if not getattr(car, "demolished", False)
         ]
         cars.sort(key=lambda car: car.index)
+
         if not cars:
             return None, None, None
+
         if len(cars) == 1:
             return cars[0].index, None, None
 
         ball = self.ball.location
         side = utils.side(self.team)
+        own_goal = self.friend_goal.location
 
         def challenge_score(car):
-            score = car.location.dist(ball)
+            distance = car.location.dist(ball)
+            score = distance
+
+            # Match Grid's penalty for a car facing back toward its own goal.
             if car.forward.y * side > 0:
                 score += 5000.0
+
+            # Do not normally send a car parked in the goal mouth to challenge.
             own_depth = car.location.y * side
             if own_depth >= 4900 and abs(car.location.x) < 1100:
                 score += 5000.0
+
             return score
 
-        receiver = self.get_transition2_receiver()
-        pass_sender = (
-            self.get_transition2_pass_sender(receiver)
-            if receiver is not None else None
+        attacker = min(
+            cars,
+            key=lambda car: (challenge_score(car), car.index)
         )
-        receiver_released = (
-            receiver is not None
-            and pass_sender is not None
-            and any(car.index == receiver for car in cars)
-            and receiver != pass_sender
-        )
-
-        eligible = (
-            [car for car in cars if car.index != receiver]
-            if receiver_released else list(cars)
-        )
-        if not eligible:
-            eligible = list(cars)
-
-        attacker = next(
-            (car for car in eligible if car.index == pass_sender),
-            None
-        )
-        if attacker is None:
-            attacker = min(
-                eligible,
-                key=lambda car: (challenge_score(car), car.index)
-            )
 
         remaining = [
-            car for car in eligible if car.index != attacker.index
+            car for car in cars
+            if car.index != attacker.index
         ]
 
-        def depth(car):
-            return car.location.y * side
+        # Grid's furthest-back metric: prioritize the car closest to our
+        # goal line, with its lateral distance capped just as in src/bot.py.
+        def goalie_score(car):
+            return (
+                min(car.location.dist(own_goal), 900.0)
+                + abs(car.location.y - own_goal.y)
+            )
 
-        if receiver_released and remaining:
-            # The pass caller stays first man; the remaining teammate inherits T2.
-            transition1 = None
-            transition2 = max(
-                remaining,
-                key=lambda car: (depth(car), -car.index)
-            )
-        elif len(remaining) >= 2:
-            ordered = sorted(
-                remaining,
-                key=lambda car: (depth(car), car.index)
-            )
-            transition1 = ordered[0]
-            transition2 = ordered[-1]
-        elif remaining:
-            transition1 = remaining[0]
-            transition2 = None
-        else:
-            transition1 = transition2 = None
+        goalie = min(
+            remaining,
+            key=lambda car: (goalie_score(car), car.index)
+        )
+
+        transition = next(
+            (car for car in remaining if car.index != goalie.index),
+            None
+        )
 
         return (
             attacker.index,
-            transition1.index if transition1 is not None else None,
-            transition2.index if transition2 is not None else None
+            goalie.index,
+            transition.index if transition is not None else None
         )
 
     def get_grid_active_challenger(self):
         """Grid's closest viable player is the only normal challenger."""
-        attacker, transition1, transition2 = self.get_grid_team_roles()
+        attacker, goalie, transition = self.get_grid_team_roles()
         return attacker
 
     def get_transition_bump_target(self, attacker_index):
@@ -1150,17 +1071,27 @@ class Bot(VirxERLU):
             key=lambda foe: foe.location.flat_dist(ball)
         )
 
-    def get_transition2_owner(self):
-        """Return the elected central Transition 2 player, if present."""
-        if len(self.friends) < 2:
+    def get_cover_role_owner(self):
+        """Return the one Grid-elected goalie in 2v2 or 3v3."""
+        if not self.friends:
+            self.cover_role_owner = None
             return None
-        _, _, transition2 = self.get_grid_team_roles()
-        return transition2
 
-    def should_hold_transition2_role(self):
-        if len(self.friends) < 2:
+        attacker, goalie, transition = self.get_grid_team_roles()
+        self.cover_role_owner = goalie
+        return goalie
+
+    def should_hold_cover_role(self):
+        if not self.friends:
             return False
-        return self.get_transition2_owner() == self.me.index
+
+        side = utils.side(self.team)
+        ball = self.ball.location
+        ball_depth = ball.y * side
+
+        # The goalie keeps the net even during an emergency. The elected
+        # challenger, not the goalie, is responsible for the emergency clear.
+        return self.get_cover_role_owner() == self.me.index
 
     def should_commit_to_shot(self, my_score, my_contact_time):
         """Yield only when a teammate has a meaningfully better opportunity."""
@@ -1187,9 +1118,9 @@ class Bot(VirxERLU):
             # A teammate handling a defensive emergency should be allowed
             # to take responsibility when the ball is in our half.
             if status == "DEFEND" and ball_is_our_side:
-                # A transition2 reporting DEFEND is holding the net, not taking
+                # A goalie reporting DEFEND is holding the net, not taking
                 # the challenge. Only yield to the elected challenger.
-                attacker, transition1, transition2 = self.get_grid_team_roles()
+                attacker, goalie, transition = self.get_grid_team_roles()
                 if friend.index == attacker:
                     return False
 
@@ -1245,27 +1176,18 @@ class Bot(VirxERLU):
 
         """Refresh shot information and announce when we leave cover to commit."""
 
-        # An active emergency clear also releases the transition2 role, even
-        # if the ball has moved just outside the original emergency threshold.
-        emergency_clear_active = any(
-            routine.__class__.__name__ == "emergency_clear"
-            for routine in self.stack
-        )
-
-        # Check for an urgent defensive situation or an ongoing emergency clear.
-        if self.defensive_emergency() or emergency_clear_active:
-            self.transition2_advance = False
-            self.transition2_receiver = None
+        # Check for an urgent defensive situation first.
+        if self.defensive_emergency():
             self.teamplay_shot = None
             self.teamplay_score = 100.0
             self.teamplay_contact_time = 0.0
             self.teamplay_status = "DEFEND"
 
             # The elected challenger is the one making the first defensive
-            # contact. Publish an estimated contact time so the transition2 can
+            # contact. Publish an estimated contact time so the goalie can
             # schedule a second interception just after that attempt.
             if self.friends:
-                attacker, transition1, transition2 = self.get_grid_team_roles()
+                attacker, goalie, transition = self.get_grid_team_roles()
                 if self.me.index == attacker:
                     distance = self.me.location.dist(self.ball.location)
                     speed = self.me.velocity.magnitude()
@@ -1274,15 +1196,8 @@ class Bot(VirxERLU):
                         min(2.0, distance / max(900.0, speed + 1000.0))
                     )
 
-            # Only the player actually taking the emergency clear releases
-            # cover. Other teammates retain their existing defensive roles.
-            self.cover_role_released = (
-                emergency_clear_active
-                or (
-                    self.friends
-                    and self.me.index == self.get_grid_team_roles()[0]
-                )
-            )
+            # Announce that we're taking defensive action.
+            self.cover_role_released = True
             self.send_teamplay_comm(
                 "DEFEND", 100.0, self.teamplay_contact_time
             )
@@ -1294,6 +1209,7 @@ class Bot(VirxERLU):
             "jump_shot",
             "double_jump",
             "Aerial",
+            "wall_approach",
             "short_shot"
         }
 
@@ -1303,17 +1219,8 @@ class Bot(VirxERLU):
             for routine in self.stack
         )
 
-        # Release the general challenge commitment only once a shot is active.
+        # Release cover only once an actual shot routine is active.
         self.cover_role_released = active_shot
-        # Transition 2 advances only for the explicit pass-shot routine.
-        self.transition2_advance = any(
-            getattr(routine, "is_pass_shot", False)
-            for routine in self.stack
-        )
-        self.transition2_receiver = None
-        if self.transition2_advance and len(self.friends) >= 2:
-            # Capture the current T2 before announcing the release.
-            self.transition2_receiver = self.get_grid_team_roles()[2]
 
         # Recalculate on the same cadence as your existing shot selection.
         if self.is_clear() or self.odd_tick == 0:
@@ -1397,6 +1304,15 @@ class Bot(VirxERLU):
                 self.push(routines.goto_boost(closest_boost))
 
 
+        # A selected wall-drive is a committed surface-driving action.
+        # Keep it alive until its own routine ends; teamplay/shot selection
+        # must not replace it on the next packet.
+        if (
+            not self.is_clear()
+            and self.stack[0].__class__.__name__ == "wall_approach"
+        ):
+            return
+
         # Share and compare shot opportunities with teammates.
         self.update_teamplay()
 
@@ -1415,73 +1331,296 @@ class Bot(VirxERLU):
             else None
         )
 
-        # A teammate can explicitly release Transition 2 forward for a pass.
-        # The grid_defense routine reads this same comm and moves the receiver
-        # to a central support point; the role election promotes the remaining
-        # defender into Transition 2 while that pass is active.
-
-        # A pass receiver must not remain on a boost detour when called forward.
-        if (
-            self.get_transition2_receiver() == self.me.index
-            and current_name == "goto_boost"
-        ):
-            self.clear()
-            current_name = None
-
-        # Transition 1 can clear a defender screening the attacker's lane.
-        # Transition 2 is reserved for the explicit pass-receiver comm instead.
+        # A goalie must not simply wait for the challenger's save to work.
+        # Hold the existing Grid goalie lane until the challenger's expected
+        # contact, then take a fresh shot candidate from the next prediction
+        # slices if the ball is still dangerous.
         if self.friends:
-            attacker, transition1, transition2 = self.get_grid_team_roles()
-            if transition1 is not None and self.me.index == transition1:
+            attacker, goalie, transition = self.get_grid_team_roles()
+            is_goalie = self.me.index == goalie
+            side = utils.side(self.team)
+            ball_depth = self.ball.location.y * side
+
+            if is_goalie and ball_depth > 640:
                 attacker_message = self.get_teammate_comm(
                     attacker, max_age=0.65
                 ) if attacker is not None else None
-                active_attack = (
+
+                active_save = (
                     attacker_message is not None
                     and attacker_message.get("cover_released", False)
                     and attacker_message.get("status") in {
-                        "SHOT_FOUND", "ANY_SHOT_FOUND"
+                        "DEFEND", "SHOT_FOUND", "ANY_SHOT_FOUND"
                     }
-                    and ball_depth < 1280
-                    and not self.defensive_emergency()
                 )
 
-                if current_name == "transition_bump" and not active_attack:
+                # Continue an already scheduled wait without allowing the
+                # ordinary aerial/boost logic to replace it.
+                if current_name == "goalie_followup_wait":
+                    wait = self.stack[0]
+                    if self.time < wait.release_time:
+                        return
+
+                    contact_key = wait.contact_key
+                    self.clear()
+
+                    ball_depth = self.ball.location.y * side
+                    still_threatening = (
+                        ball_depth > 640
+                        and (
+                            self.ball.velocity.y * side > 100
+                            or ball_depth > 3500
+                        )
+                    )
+
+                    if still_threatening:
+                        followup = routines.fast_intercept_finder().find(
+                            self,
+                            earliest_time=self.time + 0.08
+                        )
+                        if (
+                            followup is not None
+                            and followup.intercept_time > self.time + 0.08
+                        ):
+                            print(
+                                f"[GOALIE FOLLOWUP] player={self.me.index} "
+                                f"after={contact_key:.2f} "
+                                f"shot={followup.__class__.__name__} "
+                                f"T={followup.intercept_time - self.time:.2f}",
+                                flush=True
+                            )
+                            self.push(followup)
+                            return
+
+                    print(
+                        f"[GOALIE FOLLOWUP] player={self.me.index} "
+                        "first save held; returning to goal",
+                        flush=True
+                    )
+                    self.push(routines.grid_defense(goalie=True))
+                    return
+
+                if (
+                    active_save
+                    and current_name in {
+                        None, "grid_defense", "goto_boost"
+                    }
+                ):
+                    contact_time = max(
+                        0.0,
+                        min(2.5, attacker_message.get("contact_time", 0.0))
+                    )
+
+                    # DEFEND messages now carry an estimated contact time.
+                    # Retain a conservative fallback for older clients.
+                    if (
+                        attacker_message.get("status") == "DEFEND"
+                        and contact_time <= 0.01
+                    ):
+                        attacker_car = next(
+                            (
+                                friend for friend in self.friends
+                                if friend.index == attacker
+                            ),
+                            None
+                        )
+                        if attacker_car is not None:
+                            distance = attacker_car.location.dist(
+                                self.ball.location
+                            )
+                            speed = attacker_car.velocity.magnitude()
+                            contact_time = max(
+                                0.12,
+                                min(2.0, distance / max(900.0, speed + 1000.0))
+                            )
+
+                    contact_at = (
+                        attacker_message["received_at"] + contact_time
+                    )
+                    contact_key = round(contact_at * 2.0) / 2.0
+                    last_key = getattr(
+                        self, "_goalie_followup_contact_key", None
+                    )
+                    last_start = getattr(
+                        self, "_goalie_followup_last_start", -999.0
+                    )
+
+                    if (
+                        last_key is None
+                        or abs(contact_key - last_key) >= 0.5
+                    ) and self.time - last_start >= 1.0:
+                        self._goalie_followup_contact_key = contact_key
+                        self._goalie_followup_last_start = self.time
+
+                        if current_name is not None:
+                            self.clear()
+
+                        release_time = max(
+                            self.time + 0.05,
+                            contact_at + 0.15
+                        )
+                        print(
+                            f"[GOALIE FOLLOWUP] player={self.me.index} "
+                            f"waiting_for={attacker} "
+                            f"contact_in={max(0.0, release_time - self.time):.2f}",
+                            flush=True
+                        )
+                        self.push(
+                            routines.goalie_followup_wait(
+                                release_time, contact_key
+                            )
+                        )
+                        return
+
+        # The third player in 3v3 is the non-goalie cover/transition
+        # player. They do not join the attacker's first challenge; they wait
+        # for that expected contact, then take the earliest reachable
+        # follow-up touch from the ball's updated trajectory.
+        if self.friends and transition is not None and self.me.index == transition:
+            attacker_message = self.get_teammate_comm(
+                attacker, max_age=0.65
+            ) if attacker is not None else None
+
+            active_attack = (
+                attacker_message is not None
+                and attacker_message.get("cover_released", False)
+                and attacker_message.get("status") in {
+                    "SHOT_FOUND", "ANY_SHOT_FOUND"
+                }
+                and ball_depth < 1280
+                and not self.defensive_emergency()
+            )
+
+            # A bump is only valid while the teammate's attack is still live.
+            # Drop it immediately if the attack ends or defence becomes urgent.
+            if current_name == "transition_bump" and not active_attack:
+                self.clear()
+                current_name = None
+
+            # When the attacker is actively playing the ball, use the
+            # transition player to remove a defender screening the direct
+            # route to goal. Never trade away an urgent defensive recovery.
+            if active_attack and not self.defensive_emergency():
+                bump_target = self.get_transition_bump_target(attacker)
+
+                if current_name == "transition_bump":
+                    active_target = getattr(
+                        self.stack[0], "target_index", None
+                    )
+                    if (
+                        bump_target is not None
+                        and bump_target.index == active_target
+                    ):
+                        return
+
                     self.clear()
                     current_name = None
 
-                if active_attack:
-                    bump_target = self.get_transition_bump_target(attacker)
-                    if current_name == "transition_bump":
-                        active_target = getattr(
-                            self.stack[0], "target_index", None
-                        )
-                        if (
-                            bump_target is not None
-                            and bump_target.index == active_target
-                        ):
-                            return
+                if (
+                    bump_target is not None
+                    and current_name in {
+                        None, "grid_defense", "goto_boost",
+                        "cover_followup_wait"
+                    }
+                    and self.time >= self.transition_bump_cooldown_until
+                ):
+                    if current_name is not None:
                         self.clear()
-                        current_name = None
 
-                    if (
-                        bump_target is not None
-                        and current_name in {
-                            None, "grid_defense", "goto_boost"
-                        }
-                        and self.time >= self.transition_bump_cooldown_until
-                    ):
-                        if current_name is not None:
-                            self.clear()
-                        self.transition_bump_cooldown_until = self.time + 2.25
-                        print(
-                            f"[TRANSITION 1 BUMP] player={self.me.index} "
-                            f"attacker={attacker} target={bump_target.index} "
-                            f"distance={self.me.location.flat_dist(bump_target.location):.0f}",
-                            flush=True
+                    self.transition_bump_cooldown_until = self.time + 2.25
+                    print(
+                        f"[TRANSITION BUMP] player={self.me.index} "
+                        f"attacker={attacker} target={bump_target.index} "
+                        f"distance={self.me.location.flat_dist(bump_target.location):.0f}",
+                        flush=True
+                    )
+                    self.push(
+                        routines.transition_bump(bump_target.index)
+                    )
+                    return
+
+            if current_name == "cover_followup_wait":
+                wait = self.stack[0]
+                if self.time < wait.release_time:
+                    return
+
+                contact_key = wait.contact_key
+                release_time = wait.release_time
+                self.clear()
+
+                followup = routines.fast_intercept_finder().find(
+                    self,
+                    earliest_time=release_time
+                )
+                if (
+                    followup is not None
+                    and followup.intercept_time > self.time + 0.08
+                ):
+                    print(
+                        f"[COVER FOLLOWUP] player={self.me.index} "
+                        f"after={contact_key:.2f} "
+                        f"shot={followup.__class__.__name__} "
+                        f"T={followup.intercept_time - self.time:.2f}",
+                        flush=True
+                    )
+                    self.push(followup)
+                    return
+
+                print(
+                    f"[COVER FOLLOWUP] player={self.me.index} "
+                    "no reachable second touch; returning to transition",
+                    flush=True
+                )
+                self.push(routines.grid_defense(goalie=False))
+                return
+
+            if (
+                active_attack
+                and current_name in {
+                    None, "grid_defense", "goto_boost"
+                }
+            ):
+                contact_time = max(
+                    0.0,
+                    min(2.5, attacker_message.get("contact_time", 0.0))
+                )
+                contact_at = (
+                    attacker_message["received_at"] + contact_time
+                )
+                contact_key = round(contact_at * 2.0) / 2.0
+                last_key = getattr(
+                    self, "_cover_followup_contact_key", None
+                )
+                last_start = getattr(
+                    self, "_cover_followup_last_start", -999.0
+                )
+
+                if (
+                    last_key is None
+                    or abs(contact_key - last_key) >= 0.5
+                ) and self.time - last_start >= 1.0:
+                    self._cover_followup_contact_key = contact_key
+                    self._cover_followup_last_start = self.time
+
+                    if current_name is not None:
+                        self.clear()
+
+                    release_time = max(
+                        self.time + 0.05,
+                        contact_at + 0.18
+                    )
+                    print(
+                        f"[COVER FOLLOWUP] player={self.me.index} "
+                        f"waiting_for={attacker} "
+                        f"contact_in={max(0.0, release_time - self.time):.2f}",
+                        flush=True
+                    )
+                    self.push(
+                        routines.cover_followup_wait(
+                            release_time, contact_key
                         )
-                        self.push(routines.transition_bump(bump_target.index))
-                        return
+                    )
+                    return
 
         # Keep a started half-flip intact until its own routine finishes.
         if current_name == "half_flip":
@@ -1601,13 +1740,16 @@ class Bot(VirxERLU):
             distance_to_ball = self.me.location.flat_dist(ball)
 
             # Team modes use Grid's elected challenger for emergency clears.
-            # The transition2 holds the net; the third 3v3 player uses the normal
-            # non-transition2 transition rather than joining the clear.
+            # The goalie holds the net; the third 3v3 player uses the normal
+            # non-goalie transition rather than joining the clear.
             if self.friends:
-                attacker, transition1, transition2 = self.get_grid_team_roles()
+                attacker, goalie, transition = self.get_grid_team_roles()
                 if self.me.index != attacker:
-                    transition_role = 2 if self.me.index == transition2 else 1
-                    self.push(routines.grid_defense(transition=transition_role))
+                    self.push(
+                        routines.grid_defense(
+                            goalie=(self.me.index == goalie)
+                        )
+                    )
                     return
 
             side = utils.side(self.team)
@@ -1626,22 +1768,22 @@ class Bot(VirxERLU):
             )
 
             if clear_cooldown:
-                transition_role = (
-                    2 if self.friends and self.should_hold_transition2_role()
-                    else 1
+                goalie_role = (
+                    bool(self.friends)
+                    and self.should_hold_cover_role()
                 )
-                self.push(routines.grid_defense(transition=transition_role))
+                self.push(routines.grid_defense(goalie=goalie_role))
                 return
 
             if ball_depth > 2500 or distance_to_ball < 1100:
                 self.last_emergency_clear_time = self.time
                 self.push(routines.emergency_clear())
             else:
-                transition_role = (
-                    2 if len(self.friends) >= 2 and self.should_hold_transition2_role()
-                    else 1
+                goalie_role = (
+                    bool(self.friends)
+                    and self.should_hold_cover_role()
                 )
-                self.push(routines.grid_defense(transition=transition_role))
+                self.push(routines.grid_defense(goalie=goalie_role))
 
             return
 
@@ -1654,20 +1796,20 @@ class Bot(VirxERLU):
         side = utils.side(self.team)
         ball_depth = self.ball.location.y * side
 
-        transition2_holding_middle = False
+        goalie_holding_net = False
         if self.friends:
-            _, _, transition2_index = self.get_grid_team_roles()
-            transition2_holding_middle = self.me.index == transition2_index
+            _, goalie_index, _ = self.get_grid_team_roles()
+            goalie_holding_net = self.me.index == goalie_index
 
-        transition2_holding_middle_deep = (
+        cover_player_deep_defending = (
             bool(self.friends)
-            and self.should_hold_transition2_role()
+            and self.should_hold_cover_role()
             and ball_depth > 2048
         )
 
-        # Neither the designated transition2 nor a deep cover player should
+        # Neither the designated goalie nor a deep cover player should
         # abandon the defensive lane for a boost detour.
-        if (transition2_holding_middle or transition2_holding_middle_deep) and not self.is_clear():
+        if (goalie_holding_net or cover_player_deep_defending) and not self.is_clear():
             current_name = self.stack[0].__class__.__name__
 
             if current_name == "goto_boost":
@@ -1680,12 +1822,12 @@ class Bot(VirxERLU):
         if (
             self.is_clear()
             and self.me.boost < 70
-            and not transition2_holding_middle
+            and not goalie_holding_net
             and not self.defensive_emergency()
             and not (
                 len(self.friends) >= 2
-                and self.should_hold_transition2_role()
-                and not transition2_holding_middle_deep
+                and self.should_hold_cover_role()
+                and not cover_player_deep_defending
             )
             and (
                 self.should_prioritize_ball()
@@ -1706,7 +1848,7 @@ class Bot(VirxERLU):
         # Normal boost collection when we aren't prioritising the ball.
 
         if len(self.friends) == 1:
-            if self.me.boost < 23 and not transition2_holding_middle and not self.should_prioritize_ball() and not transition2_holding_middle_deep:
+            if self.me.boost < 23 and not goalie_holding_net and not self.should_prioritize_ball() and not cover_player_deep_defending:
                 # If the stack is clear
                 if self.is_clear():
                     # Get a list of all of the large, active boosts
@@ -1723,7 +1865,7 @@ class Bot(VirxERLU):
                 if not self.is_clear():
                     return
         elif len(self.friends) > 1:
-            if self.me.boost < 30 and not transition2_holding_middle and not self.should_prioritize_ball() and not transition2_holding_middle_deep:
+            if self.me.boost < 30 and not goalie_holding_net and not self.should_prioritize_ball() and not cover_player_deep_defending:
                 # If the stack is clear
                 if self.is_clear():
                     # Get a list of all of the large, active boosts
@@ -1740,7 +1882,7 @@ class Bot(VirxERLU):
                 if not self.is_clear():
                     return
         else:
-            if self.me.boost < 18 and not transition2_holding_middle and not self.should_prioritize_ball():
+            if self.me.boost < 18 and not goalie_holding_net and not self.should_prioritize_ball():
                 # If the stack is clear
                 if self.is_clear():
                     # Get a list of all of the large, active boosts
@@ -1798,14 +1940,56 @@ class Bot(VirxERLU):
 
         # if the stack is clear, then run the following - otherwise, if the stack isn't empty, then look for a shot every 4th tick while the other routine is running
         
-        # Use the normal teamplay shot candidate; wall approaches are disabled.
+        # Evaluate wall-reset setups alongside normal shot selection.
+        # Shot routines are usually active, so requiring a clear stack made
+        # this opportunity almost unreachable. Aerial can also be replaced
+        # while the car is still grounded (it has not launched yet); once
+        # airborne, keep the aerial protected and do not interrupt it.
+        current_routine_name = (
+            self.stack[0].__class__.__name__
+            if not self.is_clear()
+            else None
+        )
+        ordinary_ground_shots = {
+            "ground_shot",
+            "jump_shot",
+            "double_jump",
+            "Aerial"
+        }
+
         if self.is_clear() or self.odd_tick == 0:
             shot = self.teamplay_shot
 
+            # The cached teamplay candidate may be a later ground shot.
+            # Recheck the live prediction first so a reachable wall touch
+            # can replace it instead of waiting for the ball to fall.
+            wall_allowed = (
+                not self.friends
+                or self.get_grid_active_challenger() == self.me.index
+                or self.defensive_emergency()
+            )
+            if wall_allowed:
+                wall_drive = tools.find_wall_drive(self)
+                if wall_drive is not None:
+                    shot = wall_drive
+            elif self.time - getattr(self, "_last_wall_drive_gate_debug", -999.0) >= 0.5:
+                self._last_wall_drive_gate_debug = self.time
+                print(
+                    f"[WALL DRIVE SKIP] team-role gate | "
+                    f"player={self.me.index} "
+                    f"active_challenger={self.get_grid_active_challenger()} "
+                    f"friends={len(self.friends)}",
+                    flush=True
+                )
+
             if shot is not None:
-                should_commit = self.should_commit_to_shot(
-                    self.teamplay_score,
-                    self.teamplay_contact_time
+                is_wall_drive = shot.__class__.__name__ == "wall_approach"
+                should_commit = (
+                    is_wall_drive
+                    or self.should_commit_to_shot(
+                        self.teamplay_score,
+                        self.teamplay_contact_time
+                    )
                 )
 
                 if not should_commit:
@@ -1822,6 +2006,7 @@ class Bot(VirxERLU):
                         "jump_shot",
                         "ground_shot",
                         "Aerial",
+                        "wall_approach"
                     }
 
                     if current_name in ordinary_shots:
@@ -1830,7 +2015,10 @@ class Bot(VirxERLU):
                     # Yield to the teammate's better opportunity.
                     # Continue to the existing fallback behaviour.
                 else:
-                    if routines.half_flip_manager.request_for_shot(self, shot):
+                    if (
+                        shot.__class__.__name__ != "wall_approach"
+                        and routines.half_flip_manager.request_for_shot(self, shot)
+                    ):
                         return
 
                     
@@ -1842,7 +2030,6 @@ class Bot(VirxERLU):
 
                         if new_shot_name == current_shot_name:
                             # Keep updating the same routine as predictions change.
-                            self.stack[0].is_pass_shot = getattr(shot, "is_pass_shot", False)
                             self.stack[0].update(shot)
                         else:
                             ordinary_shots = {
@@ -1887,11 +2074,32 @@ class Bot(VirxERLU):
                 or self.defensive_emergency()
             )
 
+            # Prefer a reachable wall drive over waiting for a later ground shot.
+            wall_drive = (
+                tools.find_wall_drive(self)
+                if can_take_first_challenge
+                else None
+            )
+            if (
+                not can_take_first_challenge
+                and self.time - getattr(self, "_last_wall_drive_gate_debug", -999.0) >= 0.5
+            ):
+                self._last_wall_drive_gate_debug = self.time
+                print(
+                    f"[WALL DRIVE SKIP] first-challenge gate | "
+                    f"player={self.me.index} "
+                    f"active_challenger={self.get_grid_active_challenger()} "
+                    f"friends={len(self.friends)}",
+                    flush=True
+                )
+
             fast_intercept_searched = (
                 fast_intercept_zone and can_take_first_challenge
             )
 
-            if fast_intercept_searched:
+            if wall_drive is not None:
+                shot = wall_drive
+            elif fast_intercept_searched:
                 shot = routines.fast_intercept_finder().find(self)
 
             elif ball_depth < 640 and can_take_first_challenge:
@@ -1944,7 +2152,6 @@ class Bot(VirxERLU):
 
                     if new_shot_name == current_shot_name:
                         # Keep updating the same routine as predictions change.
-                        self.stack[0].is_pass_shot = getattr(shot, "is_pass_shot", False)
                         self.stack[0].update(shot)
                     else:
                         ordinary_shots = {
@@ -1952,13 +2159,15 @@ class Bot(VirxERLU):
                             "jump_shot",
                             "double_jump",
                             "Aerial",
-                            }
+                            "wall_approach"
+                        }
 
                         # Don't cancel an ordinary shot just because a
                         # different ordinary shot is suggested.
                         if (
                             current_shot_name in ordinary_shots
                             and new_shot_name in ordinary_shots
+                            and new_shot_name != "wall_approach"
                         ):
                             current_intercept = getattr(
                                 self.stack[0], "intercept_time", float("inf")
@@ -1998,13 +2207,15 @@ class Bot(VirxERLU):
                     self.push(challenge)
                     return
 
-            # The attacker challenges; Transition 1 supports; Transition 2
-            # holds the central deeper point unless a teammate calls it forward.
-            transition_role = 1
-            if len(self.friends) >= 2:
-                attacker, transition1, transition2 = self.get_grid_team_roles()
-                transition_role = 2 if self.me.index == transition2 else 1
-            self.push(routines.grid_defense(transition=transition_role))
+            # Match Grid's rotating roles: exactly one goalie. The other
+            # player in 2v2 challenges; in 3v3 both non-goalies use the
+            # challenger/transition behaviours, with no fixed support role.
+            goalie_role = False
+            if self.friends:
+                attacker, goalie, transition = self.get_grid_team_roles()
+                goalie_role = self.me.index == goalie
+
+            self.push(routines.grid_defense(goalie=goalie_role))
             return
 
         # If we get here, then we are doing our kickoff, nor can we shoot, nor can we retreat or shadow - so let's just wait!
@@ -2078,13 +2289,7 @@ class Bot(VirxERLU):
                 return
 
             cover_released = message.get("cover_released", False)
-            transition2_advance = message.get("transition2_advance", False)
-            transition2_receiver = message.get("transition2_receiver")
             if not isinstance(cover_released, bool):
-                return
-            if not isinstance(transition2_advance, bool):
-                return
-            if transition2_receiver is not None and not isinstance(transition2_receiver, int):
                 return
 
             cover_owner = message.get("cover_owner")
@@ -2099,8 +2304,6 @@ class Bot(VirxERLU):
                 "contact_time": contact_time,
                 "cover_owner": cover_owner,
                 "cover_released": cover_released,
-                "transition2_advance": transition2_advance,
-                "transition2_receiver": transition2_receiver,
                 "received_at": self.time
             }
 
@@ -2129,14 +2332,8 @@ class Bot(VirxERLU):
             "shot_type": status if status in {"SHOT_FOUND", "ANY_SHOT_FOUND"} else "NO_SHOT",
             "score": round(max(0, min(100, score)), 1),
             "contact_time": round(max(0, min(10, contact_time)), 2),
-            "cover_owner": self.get_transition2_owner(),
-            "cover_released": bool(self.cover_role_released),
-            "transition2_advance": bool(getattr(self, "transition2_advance", False)),
-            "transition2_receiver": (
-                getattr(self, "transition2_receiver", None)
-                if getattr(self, "transition2_advance", False)
-                else None
-            )
+            "cover_owner": self.get_cover_role_owner(),
+            "cover_released": bool(self.cover_role_released)
         }
 
         # Include cover fields so a change in cover responsibility
@@ -2146,9 +2343,7 @@ class Bot(VirxERLU):
             message["score"],
             message["contact_time"],
             message["cover_owner"],
-            message["cover_released"],
-            message["transition2_advance"],
-            message["transition2_receiver"]
+            message["cover_released"]
         )
 
         # Refresh unchanged messages periodically so teammates don't
