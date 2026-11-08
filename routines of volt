@@ -1546,10 +1546,41 @@ class Aerial:
             if not self.jumping or not agent.me.airborne:
                 # A very short aerial should preserve the second jump
                 # for the contact dodge instead of spending it on takeoff.
+                # A car attached to the same side wall as the predicted
+                # ball can use a fast double-jump launch to leave the wall
+                # and reach the aerial contact. Do not trigger this from the
+                # opposite wall or from a backboard/ceiling.
+                on_side_wall = (
+                    abs(agent.me.location.x) > 3500
+                    and abs(agent.me.up.x) > 0.65
+                    and agent.me.up.x * agent.me.location.x < 0
+                )
+                ball_wall_side = 1 if self.ball.x >= 0 else -1
+                car_wall_side = 1 if agent.me.location.x >= 0 else -1
+                wall_double_jump = (
+                    on_side_wall
+                    and car_wall_side == ball_wall_side
+                    and not agent.me.doublejumped
+                    and T > 0.55
+                )
+
                 self.jump_type_fast = (
-                    self.fast_aerial and T > 0.55
+                    (self.fast_aerial or wall_double_jump)
+                    and T > 0.55
                 )
                 self.jumping = True
+
+                if wall_double_jump:
+                    print(
+                        f"[AERIAL WALL DOUBLE JUMP] "
+                        f"side={car_wall_side} T={T:.2f} "
+                        f"ball=({self.ball.x:.0f},{self.ball.y:.0f},"
+                        f"{self.ball.z:.0f}) "
+                        f"car=({agent.me.location.x:.0f},"
+                        f"{agent.me.location.y:.0f},"
+                        f"{agent.me.location.z:.0f})",
+                        flush=True
+                    )
                 self.jump_time = agent.time
                 self.counter = 0
                 self.second_jump_commanded = False
