@@ -91,18 +91,18 @@ def find_wall_drive(agent, cap_=2.5):
 
         score = intercept_in + eta * 0.20
         if best is None or score < best[0]:
-            best = (score, intercept_in, loc.x, loc.y, loc.z)
+            best = (score, intercept_in, loc.x, loc.y, loc.z, vel.z)
 
     if best is None:
         return None
 
-    _, intercept_in, x, y, z = best
+    _, intercept_in, x, y, z, vz = best
     ball_wall_side = 1 if x >= 0 else -1
     print(
         f"[WALL DRIVE FIND] airborne={car.airborne} wall={on_side_wall} "
         f"car_wall_side={car_wall_side} ball_wall_side={ball_wall_side} "
         f"car=({car.location.x:.0f},{car.location.y:.0f},{car.location.z:.0f}) "
-        f"intercept={intercept_in:.2f}s ball=({x:.0f},{y:.0f},{z:.0f})",
+        f"intercept={intercept_in:.2f}s ball=({x:.0f},{y:.0f},{z:.0f}) vz={vz:.0f} car_z={car.location.z:.0f}",
         flush=True
     )
     return wall_approach(agent.time + intercept_in, agent.foe_goal_shot)
