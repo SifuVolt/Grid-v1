@@ -203,6 +203,11 @@ def useful_non_aerial_shot(agent, ball_location, ball_velocity, shot, intercept_
     if len(agent.foes) == 0:
         return True
 
+    # For ten seconds after kickoff, take the contest rather than rejecting
+    # a reachable touch because an opponent appears to have an ETA advantage.
+    if agent.in_post_kickoff_contest_window():
+        return True
+
     closest_foe = min(
         agent.foes,
         key=lambda foe: foe.location.flat_dist(ball_pos)
