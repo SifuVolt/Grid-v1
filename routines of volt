@@ -3888,7 +3888,9 @@ class jump_shot:
                         # Ball right of goal -> right-side setup -> A.
                         # Ball left of goal -> left-side setup -> D.
                         agent.controller.pitch = 0
-                        agent.controller.yaw = (
+                        # A/D are air-roll inputs, not yaw. Roll left for
+                        # a right-side setup and right for a left-side setup.
+                        agent.controller.roll = (
                             -1 if self.approach_side == "right" else 1
                         )
                         side_adjustment = (
