@@ -1963,6 +1963,15 @@ class Bot(VirxERLU):
                 wall_drive = tools.find_wall_drive(self)
                 if wall_drive is not None:
                     shot = wall_drive
+            elif self.time - getattr(self, "_last_wall_drive_gate_debug", -999.0) >= 0.5:
+                self._last_wall_drive_gate_debug = self.time
+                print(
+                    f"[WALL DRIVE SKIP] team-role gate | "
+                    f"player={self.me.index} "
+                    f"active_challenger={self.get_grid_active_challenger()} "
+                    f"friends={len(self.friends)}",
+                    flush=True
+                )
 
             if shot is not None:
                 is_wall_drive = shot.__class__.__name__ == "wall_approach"
@@ -2062,6 +2071,18 @@ class Bot(VirxERLU):
                 if can_take_first_challenge
                 else None
             )
+            if (
+                not can_take_first_challenge
+                and self.time - getattr(self, "_last_wall_drive_gate_debug", -999.0) >= 0.5
+            ):
+                self._last_wall_drive_gate_debug = self.time
+                print(
+                    f"[WALL DRIVE SKIP] first-challenge gate | "
+                    f"player={self.me.index} "
+                    f"active_challenger={self.get_grid_active_challenger()} "
+                    f"friends={len(self.friends)}",
+                    flush=True
+                )
 
             fast_intercept_searched = (
                 fast_intercept_zone and can_take_first_challenge
