@@ -519,6 +519,11 @@ class Bot(VirxERLU):
 
 
     def ball_rolling_toward_me(self):
+        # The designated cover player must hold the goal-side position;
+        # it should not leave that role to chase an incoming rolling ball.
+        if self.should_hold_cover_role():
+            return False
+
         ball = self.ball
         car = self.me
 
