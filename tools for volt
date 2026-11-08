@@ -920,6 +920,18 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             elif projected_lateral < -half_goal_width + 92.75:
                 approach_side = "right"
 
+        # For an actual jump-shot opportunity, choose the setup side from
+        # the ball's lateral position relative to the opponent goal. A ball
+        # right of goal gets a right-side approach; a ball left of goal gets
+        # a left-side approach. This is independent of whether the ball is
+        # rolling toward the goal line.
+        if best_shot["shot_type"] == 1:
+            goal_lateral_offset = best_ball_location.x - goal_center.x
+            if goal_lateral_offset > 300:
+                approach_side = "right"
+            elif goal_lateral_offset < -300:
+                approach_side = "left"
+
         side_shot_selected = False
         if approach_side is not None:
             goal_center = Vector(
