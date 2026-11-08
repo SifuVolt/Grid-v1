@@ -1279,10 +1279,26 @@ class Aerial:
                     flush=True
                 )
 
-        # Party Cannon's wall-aerial correction: flatten the shot direction
-        # when the planned 155-unit contact approach is too close to a wall.
+        # The nose contact distance comes from the active car hitbox,
+        # including its forward offset, rather than a fixed ball-centre gap.
+        hitbox = agent.me.hitbox
+        hitbox_offset = hitbox.offset
+        nose_offset = hitbox.length * 0.5 + hitbox_offset.x
+        ball_radius = 92.75
+        desired_contact_height = 46.375
+        contact_horizontal_radius = math.sqrt(
+            max(
+                0.0,
+                ball_radius * ball_radius
+                - desired_contact_height * desired_contact_height
+            )
+        )
+        approach_distance = contact_horizontal_radius + nose_offset
+
+        # Party Cannon's wall-aerial correction uses the same geometric
+        # car-centre-to-ball-surface distance that the contact target uses.
         self.shot_vector, wall_normal, wall_clearance = WallShot.adjust_aerial(
-            self.ball, self.shot_vector
+            self.ball, self.shot_vector, approach_distance
         )
         if wall_normal is not None:
             print(
@@ -1292,15 +1308,44 @@ class Aerial:
                 flush=True
             )
 
-        # Aim the aerial's nose toward a point halfway from the
-        # ball centre to its bottom. Keep the existing shot-direction
-        # offset so the car still approaches from behind the intended hit.
-        aerial_contact_point = self.ball - Vector(z=46.375)
-        self.target = aerial_contact_point - (
-            self.shot_vector * agent.best_shot_value
+        # Select a real point on the ball surface at the requested height:
+        # halfway from the centre to the bottom. The horizontal component is
+        # the sphere cross-section radius at that height, not zero.
+        flat_shot_direction = self.shot_vector.flatten().normalize()
+        if flat_shot_direction.magnitude() < 0.001:
+            flat_shot_direction = Vector(
+                agent.me.forward.x, agent.me.forward.y, 0
+            ).normalize()
+
+        aerial_contact_point = (
+            self.ball
+            - flat_shot_direction * contact_horizontal_radius
+            - Vector(z=desired_contact_height)
         )
 
-        agent.sphere(self.ball, 92.75)
+        # Place the car's physics centre so the front of its actual hitbox
+        # reaches that surface point. Hitbox offset is local to the car:
+        # x moves the nose, y the right side, and z the roof.
+        hitbox_side_offset = (
+            agent.me.right * hitbox_offset.y
+            + agent.me.up * hitbox_offset.z
+        )
+        self.target = (
+            aerial_contact_point
+            - self.shot_vector * nose_offset
+            - hitbox_side_offset
+        )
+
+        print(
+            f"[AERIAL HITBOX] surface=({aerial_contact_point.x:.0f},"
+            f"{aerial_contact_point.y:.0f},{aerial_contact_point.z:.0f}) "
+            f"nose_offset={nose_offset:.1f} "
+            f"car_target=({self.target.x:.0f},{self.target.y:.0f},"
+            f"{self.target.z:.0f})",
+            flush=True
+        )
+
+        agent.sphere(self.ball, ball_radius)
         agent.sphere(aerial_contact_point, 12)
 
         if self.ceiling:
@@ -3115,12 +3160,12 @@ class WallShot:
         return adjusted, normal, target_height
 
     @classmethod
-    def adjust_aerial(cls, ball_location, shot_direction):
+    def adjust_aerial(cls, ball_location, shot_direction, approach_distance=155):
         """
-        Party Cannon AerialShot rule: if its 155-unit approach point is less
-        than 50 units from a wall, make the shot direction flatter to it.
+        Party Cannon AerialShot wall correction using the supplied
+        car-centre-to-ball-surface approach distance.
         """
-        target = ball_location - shot_direction * 155
+        target = ball_location - shot_direction * approach_distance
         distance, axis, plane, normal = cls.nearest_wall(target)
         target_surface = cls.surface_point(target, axis, plane)
         target_height = (target - target_surface).dot(normal)
@@ -3132,7 +3177,9 @@ class WallShot:
         if tangent.magnitude() < 0.001:
             return shot_direction, None, target_height
 
-        angle = math.asin(cap((target_height - 50) / 155, -1, 1))
+        angle = math.asin(
+            cap((target_height - 50) / max(approach_distance, 1), -1, 1)
+        )
         adjusted = (
             tangent.normalize() * math.cos(angle)
             + normal * math.sin(angle)
