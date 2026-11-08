@@ -2344,8 +2344,6 @@ class grid_defense:
         self.goalie = goalie
         self.fast = fast
         self.prev_front = None
-        # Match Transition 2's predicted goal-line crossing target.
-        self.goal_line_targeter = defense() if goalie else None
 
     @staticmethod
     def _angle(a, b):
@@ -2480,7 +2478,11 @@ class grid_defense:
         if best_pad is not None:
             target = best_pad.location
         elif goalie:
-            target = self.goal_line_targeter.get_target(agent)
+            target = Vector(
+                x=0,
+                y=-goal_location.y - goal_sign * 150,
+                z=0
+            )
         else:
             target = Vector(
                 x=sign(car_location.x) * 900,
@@ -2521,9 +2523,26 @@ class grid_defense:
                 )
 
                 if goalie:
-                    # Keep lateral steering aligned with the predicted
-                    # goal-line crossing instead of steering at the ball.
-                    steer_target = target
+                    ball_lane = (
+                        ball_location.flatten()
+                        - Vector(x=cap(ball_location.x, -900, 900))
+                        + goal_location
+                    )
+                    if self._angle(ball_lane, goal_location) <= math.pi / 3:
+                        steer_target = ball_location
+                    else:
+                        steer_target = (
+                            -goal_location
+                            + Vector(
+                                x=ball_location.x,
+                                y=(
+                                    sign(ball_location.y + goal_location.y)
+                                    / math.tan(math.pi / 3)
+                                    * (abs(ball_location.x) - 900)
+                                ),
+                                z=0
+                            )
+                        )
                 else:
                     steer_target = Vector(
                         x=0, y=car_location.y, z=0
