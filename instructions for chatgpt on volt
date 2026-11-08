@@ -1004,16 +1004,20 @@ class Bot(VirxERLU):
             )
 
         if goalie_released:
-            replacement_candidates = [
-                car for car in remaining
-                if car.index != goalie.index
+            # The player with the active commitment becomes the challenger;
+            # the other teammate takes over the goalie position.
+            released_goalie = goalie
+            attacker = released_goalie
+            remaining = [
+                car for car in cars
+                if car.index != attacker.index
             ]
             goalie = (
                 min(
-                    replacement_candidates,
+                    remaining,
                     key=lambda car: (goalie_score(car), car.index)
                 )
-                if replacement_candidates else None
+                if remaining else None
             )
 
         transition = next(
@@ -1026,7 +1030,7 @@ class Bot(VirxERLU):
 
         return (
             attacker.index,
-            goalie.index,
+            goalie.index if goalie is not None else None,
             transition.index if transition is not None else None
         )
 
