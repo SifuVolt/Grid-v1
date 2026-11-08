@@ -1540,21 +1540,21 @@ class Aerial:
         if self.ceiling:
             self.target -= Vector(z=92)
 
-        if self.jumping or not agent.me.airborne:
+        on_side_wall = (
+            abs(agent.me.location.x) > 3500
+            and abs(agent.me.up.x) > 0.65
+            and agent.me.up.x * agent.me.location.x < 0
+        )
+        if self.jumping or not agent.me.airborne or on_side_wall:
             agent.dbg_2d("Jumping")
 
-            if not self.jumping or not agent.me.airborne:
+            if not self.jumping or not agent.me.airborne or on_side_wall:
                 # A very short aerial should preserve the second jump
                 # for the contact dodge instead of spending it on takeoff.
                 # A car attached to the same side wall as the predicted
                 # ball can use a fast double-jump launch to leave the wall
                 # and reach the aerial contact. Do not trigger this from the
                 # opposite wall or from a backboard/ceiling.
-                on_side_wall = (
-                    abs(agent.me.location.x) > 3500
-                    and abs(agent.me.up.x) > 0.65
-                    and agent.me.up.x * agent.me.location.x < 0
-                )
                 ball_wall_side = 1 if self.ball.x >= 0 else -1
                 car_wall_side = 1 if agent.me.location.x >= 0 else -1
                 wall_double_jump = (
