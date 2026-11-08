@@ -3476,6 +3476,7 @@ class jump_shot:
         self.wall_shot_active = False
         self.wall_shot_normal = None
         self.side_adjustment_logged = False
+        self.contact_point = None
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -3879,33 +3880,31 @@ class jump_shot:
                 defaultPD(agent, local_ball.flatten())
 
                 if self.side_mode and not self.quick_shot:
-                    if jump_elapsed < 0.09:
-                        # S: lift the nose before adding lateral correction.
+                    if jump_elapsed < 0.18:
+                        # Hold the nose-back pitch and the chosen air-roll
+                        # direction together. A right-side approach uses A;
+                        # a left-side approach uses D.
                         agent.controller.pitch = 1
-                        agent.controller.yaw = 0
-                        side_adjustment = "S"
-                    elif jump_elapsed < 0.18:
-                        # Ball right of goal -> right-side setup -> A.
-                        # Ball left of goal -> left-side setup -> D.
-                        agent.controller.pitch = 0
-                        # A/D are air-roll inputs, not yaw. Roll left for
-                        # a right-side setup and right for a left-side setup.
                         agent.controller.roll = (
                             -1 if self.approach_side == "right" else 1
                         )
                         side_adjustment = (
-                            "A" if self.approach_side == "right" else "D"
+                            "S+A" if self.approach_side == "right" else "S+D"
                         )
                     else:
-                        side_adjustment = "none"
+                        # Stop the deliberate roll before the dodge input.
+                        agent.controller.roll = 0
+                        side_adjustment = "released"
 
                     if not self.side_adjustment_logged:
                         print(
                             f"[SIDE SHOT AIR ADJUST] "
                             f"approach={self.approach_side} "
-                            f"sequence=S(0.09s)->"
-                            f"{'A' if self.approach_side == 'right' else 'D'}(0.09s) "
-                            f"ball_x={self.ball_location.x:.0f}",
+                            f"hold={side_adjustment} "
+                            f"duration=0.18s "
+                            f"ball=({self.ball_location.x:.0f},"
+                            f"{self.ball_location.y:.0f},"
+                            f"{self.ball_location.z:.0f})",
                             flush=True
                         )
                         self.side_adjustment_logged = True
@@ -3983,17 +3982,49 @@ class jump_shot:
                     # centre/left/right contact has already shaped that approach.
                     # This also gives quick shots a directional flip without
                     # adding the S-tilt they do not have time to perform.
-                    local_ball_for_dodge = agent.me.local_location(
-                        self.ball_location
+                    # Aim from the front of the car's real hitbox, not
+                    # from its physics centre. The selected contact point is
+                    # the intended ball-surface point; hitbox.offset accounts
+                    # for cars whose collision box is not centred.
+                    hitbox = agent.me.hitbox
+                    hitbox_offset = hitbox.offset
+                    nose_offset = (
+                        hitbox.length * 0.5 + hitbox_offset.x
+                    )
+                    contact_target = (
+                        self.contact_point
+                        if self.contact_point is not None
+                        else self.ball_location
+                    )
+                    local_contact_for_dodge = agent.me.local_location(
+                        contact_target
                     ).flatten()
+                    local_nose_offset = Vector(
+                        nose_offset,
+                        hitbox_offset.y,
+                        hitbox_offset.z
+                    )
+                    nose_to_contact = (
+                        local_contact_for_dodge - local_nose_offset
+                    )
 
-                    if local_ball_for_dodge.magnitude() > 1:
-                        dodge_direction = local_ball_for_dodge.normalize()
+                    if nose_to_contact.magnitude() > 1:
+                        dodge_direction = nose_to_contact.normalize()
                     else:
                         dodge_direction = Vector(x=1)
 
+                    print(
+                        f"[JUMP HITBOX AIM] nose_offset={nose_offset:.1f} "
+                        f"hitbox=({hitbox.length:.0f},"
+                        f"{hitbox.width:.0f},{hitbox.height:.0f}) "
+                        f"nose_gap={nose_to_contact.magnitude():.1f} "
+                        f"contact={contact_target}",
+                        flush=True
+                    )
+
                     agent.controller.pitch = -dodge_direction.x
                     agent.controller.yaw = dodge_direction.y
+                    agent.controller.roll = 0
                     agent.controller.jump = True
 
                     agent.last_flip_time = agent.time
