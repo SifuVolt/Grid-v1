@@ -142,10 +142,112 @@ class Bot(VirxERLU):
         # From our team's perspective, left is x * side(team) < 0.
         return self.me.location.x * utils.side(self.team) < 0
         
+    def goalie_must_personally_defend(self):
+        """True only when the predicted goal-mouth threat is ours to save."""
+        if not self.friends:
+            return True
+
+        _, goalie_index, _ = self.get_grid_team_roles()
+        if self.me.index != goalie_index:
+            return True
+
+        prediction = self.ball_prediction_struct
+        slices = getattr(prediction, "slices", None) if prediction is not None else None
+        if not slices:
+            return False
+
+        side = utils.side(self.team)
+        goal_depth = self.friend_goal.location.y * side
+        threat = None
+
+        # Find the first predicted ball position entering the goal-mouth
+        # approach corridor. A ball merely moving through our half is not
+        # enough reason for the goalie to abandon the line.
+        for ball_slice in slices:
+            time_to_goal = ball_slice.game_seconds - self.time
+            if time_to_goal < 0.05:
+                continue
+            if time_to_goal > 3.0:
+                break
+
+            physics = ball_slice.physics
+            loc = physics.location
+            vel = physics.velocity
+            depth = loc.y * side
+
+            if depth < goal_depth - 650:
+                continue
+            if depth > goal_depth + 150:
+                break
+
+            if (
+                abs(loc.x) <= 900
+                and loc.z <= 650
+                and vel.y * side > 100
+            ):
+                threat = (
+                    time_to_goal,
+                    Vector(loc.x, loc.y, loc.z)
+                )
+                break
+
+        if threat is None:
+            return False
+
+        time_to_goal, intercept = threat
+
+        def eta_to_intercept(car):
+            delta = intercept - car.location
+            distance = delta.magnitude()
+            flat_delta = delta.flatten()
+            forward = car.forward.flatten()
+            facing = 1.0
+            if flat_delta.magnitude() > 1 and forward.magnitude() > 1:
+                facing = max(
+                    -1.0,
+                    min(1.0, forward.normalize().dot(flat_delta.normalize()))
+                )
+            speed = math.hypot(car.velocity.x, car.velocity.y)
+            effective_speed = max(850.0, min(2100.0, speed + 650.0))
+            turn_penalty = (1.0 - facing) * 0.28
+            return distance / effective_speed + turn_penalty
+
+        goalie_eta = eta_to_intercept(self.me)
+        teammate_etas = [
+            eta_to_intercept(friend)
+            for friend in self.friends
+        ]
+        best_teammate_eta = min(teammate_etas) if teammate_etas else float("inf")
+
+        # If a teammate can reach the threatened ball just as quickly,
+        # the goalie stays home. If not, the goalie is the last viable saver.
+        must_save = (
+            goalie_eta <= time_to_goal + 0.25
+            and best_teammate_eta > goalie_eta + 0.15
+        )
+
+        print(
+            f"[GOALIE SAVE READ] player={self.me.index} "
+            f"goalie_eta={goalie_eta:.2f} teammate_eta={best_teammate_eta:.2f} "
+            f"goal_time={time_to_goal:.2f} must_save={must_save}",
+            flush=True
+        )
+        return must_save
+
     def should_defensive_aerial(self):
         side = utils.side(self.team)
         ball = self.ball.location
         car = self.me
+
+        # A designated goalie only leaves the line for a predicted
+        # goal-mouth threat that teammates cannot reach in time.
+        if self.friends:
+            _, goalie_index, _ = self.get_grid_team_roles()
+            if (
+                self.me.index == goalie_index
+                and not self.goalie_must_personally_defend()
+            ):
+                return False
 
         # Ball must be high and in our half.
         ball_depth = ball.y * side
