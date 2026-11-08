@@ -2324,10 +2324,11 @@ class grid_defense:
         if best_pad is not None:
             target = best_pad.location
         elif is_transition2:
-            # Hold a central point in front of our box, not on the goal line.
+            # Hold the centre of the goal line, slightly field-side of the
+            # line itself. Transition 1 already occupies an offset side lane.
             target = Vector(
                 x=0,
-                y=-goal_sign * 3900,
+                y=-goal_sign * 5050,
                 z=0
             )
         elif transition == 3:
