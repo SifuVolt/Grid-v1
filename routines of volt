@@ -3999,13 +3999,26 @@ class jump_shot:
                     local_contact_for_dodge = agent.me.local_location(
                         contact_target
                     ).flatten()
-                    local_nose_offset = Vector(
+                    # Find the nearest point on the actual front face:
+                    # length sets the nose plane, while width/height and the
+                    # hitbox offset set the usable contact area.
+                    front_face_y = cap(
+                        local_contact_for_dodge.y,
+                        hitbox_offset.y - hitbox.width * 0.5,
+                        hitbox_offset.y + hitbox.width * 0.5
+                    )
+                    front_face_z = cap(
+                        local_contact_for_dodge.z,
+                        hitbox_offset.z - hitbox.height * 0.5,
+                        hitbox_offset.z + hitbox.height * 0.5
+                    )
+                    local_nose_contact = Vector(
                         nose_offset,
-                        hitbox_offset.y,
-                        hitbox_offset.z
+                        front_face_y,
+                        front_face_z
                     )
                     nose_to_contact = (
-                        local_contact_for_dodge - local_nose_offset
+                        local_contact_for_dodge - local_nose_contact
                     )
 
                     if nose_to_contact.magnitude() > 1:
