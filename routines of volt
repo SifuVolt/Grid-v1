@@ -384,7 +384,13 @@ class wall_approach:
                 f"distance={distance:.0f} T={T:.2f} speed={speed_required:.0f}",
                 flush=True
             )
-        defaultDrive(agent, speed_required, car.local_location(drive_target))
+        local_drive_target = car.local_location(drive_target)
+        turn_angle = abs(Vector(x=1).angle2D(local_drive_target.flatten()))
+        # Party Cannon's drive slows the car for tighter turns instead of
+        # expecting steering alone to hold the route at full speed.
+        turn_speed_cap = max(900.0, 2200.0 - turn_angle * 520.0)
+        speed_required = min(speed_required, turn_speed_cap)
+        defaultDrive(agent, speed_required, local_drive_target)
         agent.controller.boost = (
             car.boost > 0 and distance > 900 and speed_required > 1450
         )
