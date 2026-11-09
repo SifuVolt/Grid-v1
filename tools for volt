@@ -56,7 +56,7 @@ def find_wall_drive(agent, cap_=4.0):
         if wall_clearance > 180:
             wall_reject += 1
             continue
-        if not 190 <= loc.z <= 1850:
+        if not 190 <= loc.z <= 1850 or loc.z < car.location.z + 60:
             height_reject += 1
             continue
         if on_side_wall and car_wall_side != wall_side:
