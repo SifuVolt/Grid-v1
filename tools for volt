@@ -138,8 +138,11 @@ def find_wall_drive(agent, cap_=4.0):
 
     _, intercept_in, x, y, z, vz = best
     ball_wall_side = 1 if x >= 0 else -1
+    wall_gap = max(0.0, 4096.0 - abs(x) - 92.75)
     print(
-        f"[WALL DRIVE FIND] airborne={car.airborne} wall={on_side_wall} "
+        f"[WALL DRIVE FIND] wall_gap={wall_gap:.0f} "
+        f"mode={'wall_touch' if wall_gap <= 100 else 'wall_aerial'} "
+        f"airborne={car.airborne} wall={on_side_wall} "
         f"car_wall_side={car_wall_side} ball_wall_side={ball_wall_side} "
         f"car=({car.location.x:.0f},{car.location.y:.0f},{car.location.z:.0f}) "
         f"intercept={intercept_in:.2f}s ball=({x:.0f},{y:.0f},{z:.0f}) vz={vz:.0f} car_z={car.location.z:.0f}",
@@ -944,7 +947,7 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             if 0 < time_to_goal_line <= 2.5 else None
         )
         rolling_toward_goal = (
-            best_ball_location.z <= 260
+            best_ball_location.z <= 420
             and ball_velocity.flatten().magnitude() >= 300
             and 0 < time_to_goal_line <= 2.5
         )
@@ -969,9 +972,7 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             left_of_shot = Vector(
                 -shot_direction.y, shot_direction.x, 0
             ).normalize()
-            lateral_distance = agent.me.location.flat_dist(
-                best_ball_location
-            ) * 0.5
+            lateral_distance = cap(agent.me.location.flat_dist(best_ball_location) * 0.22, 350, 650)
             side_sign = 1 if approach_side == "right" else -1
             side_setup = (
                 best_ball_location
@@ -982,7 +983,12 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                 1000,
                 min(1700, agent.me.velocity.flatten().magnitude() + 500)
             )
-            side_setup_time = side_setup_distance / side_setup_speed
+            side_setup_local = agent.me.local_location(side_setup)
+            side_turn_angle = abs(Vector(x=1).angle2D(side_setup_local))
+            side_setup_time = (
+                side_setup_distance / side_setup_speed
+                + side_turn_angle * 0.30
+            )
             if (
                 time_to_intercept > side_setup_time + 0.35
                 and abs(side_setup.x) < 3900
@@ -1264,7 +1270,7 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
             if 0 < time_to_goal_line <= 2.5 else None
         )
         rolling_toward_goal = (
-            best_ball_location.z <= 260
+            best_ball_location.z <= 420
             and ball_velocity.flatten().magnitude() >= 300
             and 0 < time_to_goal_line <= 2.5
         )
@@ -1285,9 +1291,7 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
             left_of_shot = Vector(
                 -shot_direction.y, shot_direction.x, 0
             ).normalize()
-            lateral_distance = agent.me.location.flat_dist(
-                best_ball_location
-            ) * 0.5
+            lateral_distance = cap(agent.me.location.flat_dist(best_ball_location) * 0.22, 350, 650)
             side_sign = 1 if approach_side == "right" else -1
             side_setup = (
                 best_ball_location
@@ -1298,7 +1302,12 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
                 1000,
                 min(1700, agent.me.velocity.flatten().magnitude() + 500)
             )
-            side_setup_time = side_setup_distance / side_setup_speed
+            side_setup_local = agent.me.local_location(side_setup)
+            side_turn_angle = abs(Vector(x=1).angle2D(side_setup_local))
+            side_setup_time = (
+                side_setup_distance / side_setup_speed
+                + side_turn_angle * 0.30
+            )
             if (
                 time_to_intercept > side_setup_time + 0.35
                 and abs(side_setup.x) < 3900
