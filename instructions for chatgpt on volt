@@ -863,8 +863,8 @@ class Bot(VirxERLU):
         The best challenger is selected from all living teammates using
         ball-side dependency and a penalty for cars facing/positioned badly.
         The goalie is independently the deepest player, measured by distance
-        to our goal with lateral distance capped at 900 units. The challenger
-        takes priority if one car wins both roles, matching Noob Black.
+        to our goal with lateral distance capped at 900 units. If that goalie
+        has the best horizontal facing angle to the ball, it takes the challenge.
         """
         cached_time = getattr(self, "_noob_black_roles_time", None)
         if cached_time == self.time:
