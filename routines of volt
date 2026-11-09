@@ -1421,12 +1421,10 @@ class Aerial:
         )
 
         # Preserve Noob Black's paired-axis scaling.
-        if abs(corrected_pitch) > abs(corrected_yaw):
-            corrected_pitch /= abs(corrected_pitch)
-            corrected_yaw /= abs(corrected_pitch)
-        elif abs(corrected_yaw) > abs(corrected_pitch):
-            corrected_pitch /= abs(corrected_yaw)
-            corrected_yaw /= abs(corrected_yaw)
+        largest = max(abs(corrected_pitch), abs(corrected_yaw))
+        if largest > 0.0001:
+            corrected_pitch /= largest
+            corrected_yaw /= largest
 
         agent.controller.pitch = corrected_pitch
         agent.controller.yaw = corrected_yaw
@@ -1932,43 +1930,75 @@ class Aerial:
                     upside_down=self.shot_vector.z < 0
                 )
 
+        # Apply Noob Black's angular-rate compensation after Volt's PD
+        # controller has chosen the desired pitch and yaw.
+        if agent.me.airborne and not self.dodging:
+            self._apply_noob_black_rotation_damping(agent)
 
-        # only boost/throttle if we're facing the right direction
-        if abs(agent.me.forward.dot(direction)) > 0.5 and T > 0:
-            if T > 1 and not self.jumping: agent.controller.roll = 1 if self.shot_vector.z < 0 else -1
-            # the change in velocity the bot needs to put it on an intercept course with the target
-            delta_v = delta_x.dot(agent.me.forward) / T
-            if agent.me.boost > 0 and delta_v >= agent.boost_accel * min_boost_time:
+        # Party Cannon flight feedback: use the predicted contact offset,
+        # not a fixed alignment gate or boost amount.
+        if not self.dodging and T > 0:
+            forward = agent.me.forward.normalize()
+            forward_dot = cap(
+                forward.dot(delta_x.normalize()), -1.0, 1.0
+            )
+            turn_angle = math.acos(forward_dot)
+            projected_delta_v = delta_x.dot(forward) / T
+            boost_frame_time = max(dt, 13 / 120)
+            boost_threshold = (
+                agent.boost_accel + throttle_accel
+            ) * boost_frame_time
+
+            if (
+                turn_angle < 0.4
+                and agent.me.boost > 0
+                and projected_delta_v >= boost_threshold
+            ):
                 agent.controller.boost = True
-                delta_v -= agent.boost_accel * min_boost_time
 
-            if delta_v >= throttle_accel * min_boost_time:
-                agent.controller.throttle = cap(delta_v / (throttle_accel * min_boost_time), -1, 1)
+            throttle_frame_time = max(dt, 1 / 120)
+            agent.controller.throttle = cap(
+                projected_delta_v
+                / (throttle_accel * throttle_frame_time),
+                -1,
+                1
+            )
 
         # Once the car has actually left the ground, do not let the
         # conservative pre-launch viability test cancel an aerial mid-flight.
         # Keep the expiry check as the hard stop after the contact window.
+        if (
+            agent.me.airborne
+            and T > 0.5
+            and delta_x.magnitude() > 50
+        ):
+            required_acceleration = (
+                2.0 * delta_x.magnitude() / (T * T)
+            )
+            if (
+                required_acceleration * 0.8 > throttle_accel
+                and (
+                    agent.me.boost <= 0
+                    or required_acceleration * 0.8
+                    > agent.boost_accel + throttle_accel
+                )
+            ):
+                print(
+                    f"[AERIAL PC UNREACHABLE] T={T:.2f} "
+                    f"offset={delta_x.magnitude():.0f} "
+                    f"required_accel={required_acceleration:.0f} "
+                    f"boost={agent.me.boost:.0f}",
+                    flush=True
+                )
+                agent.pop()
+                agent.shooting = False
+                agent.push(ball_recovery())
+                return
+
         if T <= -0.4:
             print(
                 f"[AERIAL CANCEL] intercept expired T={T:.3f} "
                 f"jumping={self.jumping} airborne={agent.me.airborne}",
-                flush=True
-            )
-            agent.pop()
-            agent.shooting = False
-            agent.push(ball_recovery())
-        elif (
-            not self.jumping
-            and not agent.me.airborne
-            and T > 1.5
-            and not virxrlcu.aerial_shot_is_viable(
-                T, agent.boost_accel, tuple(agent.gravity),
-                agent.me.get_raw(agent), tuple(self.target)
-            )
-        ):
-            print(
-                f"[AERIAL CANCEL] pre-launch viability failed T={T:.3f} "
-                f"boost={agent.me.boost:.0f}",
                 flush=True
             )
             agent.pop()
