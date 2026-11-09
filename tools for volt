@@ -1,4 +1,4 @@
-from util.routines import Aerial, double_jump, ground_shot, jump_shot, side_shot, virxrlcu, wall_approach
+from util.routines import Aerial, double_jump, ground_shot, jump_shot, side_shot, virxrlcu, wall_approach, _safe_prediction_slice
 from util.utils import Vector, math, side, cap
 from util.grid_double_jump import find_double_jump as grid_find_double_jump
 
@@ -55,10 +55,16 @@ def find_wall_drive(agent, cap_=4.0):
     speed = math.hypot(car.velocity.x, car.velocity.y)
     effective_speed = max(1200.0, min(2200.0, speed + 800.0))
     best = None
-    max_index = min(len(slices), int(cap_ * 120))
 
-    for index in range(12, max_index):
-        ball_slice = slices[index]
+    # Prediction slices have their own timestamps; 120 Hz belongs to the
+    # bot's time grid, not to this array's index spacing.
+    for ball_slice in slices:
+        intercept_in = ball_slice.game_seconds - agent.time
+        if intercept_in > cap_:
+            break
+        if intercept_in < 0.10:
+            continue
+
         physics = ball_slice.physics
         loc = physics.location
         vel = physics.velocity
@@ -74,7 +80,6 @@ def find_wall_drive(agent, cap_=4.0):
             reject_height += 1
             continue
 
-        intercept_in = ball_slice.game_seconds - agent.time
         if intercept_in <= 0:
             continue
 
@@ -632,15 +637,13 @@ def within_elevated_dodge_angle(agent, time_to_intercept, max_angle=75):
     if prediction is None or not prediction.slices:
         return False
 
-    slice_n = max(
-        0,
-        min(
-            len(prediction.slices) - 1,
-            math.ceil(time_to_intercept * 120) - 1
-        )
+    ball_slice = _safe_prediction_slice(
+        agent, time_to_intercept, round_up=True
     )
+    if ball_slice is None:
+        return False
 
-    physics = prediction.slices[slice_n].physics
+    physics = ball_slice.physics
     ball_location = Vector(
         physics.location.x,
         physics.location.y,
