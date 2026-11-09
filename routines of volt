@@ -1999,25 +1999,6 @@ class Aerial:
             agent.pop()
             agent.shooting = False
             agent.push(ball_recovery())
-        elif (
-            not self.jumping
-            and not agent.me.airborne
-            and T > 1.5
-            and (
-                not virxrlcu.aerial_shot_is_viable(
-                    T, agent.boost_accel, tuple(agent.gravity),
-                    agent.me.get_raw(agent), tuple(self.target)
-                )
-            )
-        ):
-            print(
-                f"[AERIAL CANCEL] pre-launch viability failed T={T:.3f} "
-                f"boost={agent.me.boost:.0f}",
-                flush=True
-            )
-            agent.pop()
-            agent.shooting = False
-            agent.push(ball_recovery())
         elif (self.ceiling and self.target.dist(agent.me.location) < 92 + agent.me.hitbox.length and not agent.me.doublejumped and agent.me.location.z < agent.ball.location.z + 92 and self.target.y * side(agent.team) > -4240) or (not self.ceiling and not agent.me.doublejumped and T < 0.1):
             agent.dbg_2d("Flipping")
             local_target = agent.me.local_location(self.target).flatten().normalize()
