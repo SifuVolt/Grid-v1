@@ -1589,45 +1589,16 @@ class Bot(VirxERLU):
                     )
                     return
 
-            if current_name == "cover_followup_wait":
-                wait = self.stack[0]
-                if self.time < wait.release_time:
-                    return
-
-                contact_key = wait.contact_key
-                release_time = wait.release_time
-                self.clear()
-
-                followup = routines.fast_intercept_finder().find(
-                    self,
-                    earliest_time=release_time
-                )
-                if (
-                    followup is not None
-                    and followup.intercept_time > self.time + 0.08
-                ):
-                    print(
-                        f"[COVER FOLLOWUP] player={self.me.index} "
-                        f"after={contact_key:.2f} "
-                        f"shot={followup.__class__.__name__} "
-                        f"T={followup.intercept_time - self.time:.2f}",
-                        flush=True
-                    )
-                    self.push(followup)
-                    return
-
-                print(
-                    f"[COVER FOLLOWUP] player={self.me.index} "
-                    "no reachable second touch; returning to transition",
-                    flush=True
-                )
-                self.push(routines.grid_defense(goalie=False))
+            if current_name == "transition_receive":
                 return
 
+            # Predict the attacker's clear lane before contact, then let the
+            # transition_receive routine switch to the actual ball trajectory.
             if (
                 active_attack
                 and current_name in {
-                    None, "grid_defense", "goto_boost"
+                    None, "grid_defense", "goto_boost",
+                    "cover_followup_wait"
                 }
             ):
                 contact_time = max(
@@ -1648,26 +1619,22 @@ class Bot(VirxERLU):
                 if (
                     last_key is None
                     or abs(contact_key - last_key) >= 0.5
-                ) and self.time - last_start >= 1.0:
+                ) and self.time - last_start >= 0.75:
                     self._cover_followup_contact_key = contact_key
                     self._cover_followup_last_start = self.time
 
                     if current_name is not None:
                         self.clear()
 
-                    release_time = max(
-                        self.time + 0.05,
-                        contact_at + 0.18
-                    )
                     print(
-                        f"[COVER FOLLOWUP] player={self.me.index} "
-                        f"waiting_for={attacker} "
-                        f"contact_in={max(0.0, release_time - self.time):.2f}",
+                        f"[TRANSITION PREDICT] player={self.me.index} "
+                        f"attacker={attacker} "
+                        f"contact_in={max(0.0, contact_at - self.time):.2f}",
                         flush=True
                     )
                     self.push(
-                        routines.cover_followup_wait(
-                            release_time, contact_key
+                        routines.transition_receive(
+                            attacker, contact_at, contact_key
                         )
                     )
                     return
