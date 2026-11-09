@@ -456,8 +456,10 @@ def shot_candidate_score(agent, ball_slice, shot, time_remaining, target=None):
         score += 0.12
     elif shot_type == 2:     # Double jump
         score += 0.25
-    elif shot_type == 3:     # Aerial
-        score += 0.35
+    elif shot_type == 3:      # Aerial
+        # Keep a modest simplicity penalty, but don't make a viable aerial
+        # lose automatically to a weaker ground/double-jump candidate.
+        score += 0.22
 
     team_side = 1 if agent.team == 0 else -1
 
