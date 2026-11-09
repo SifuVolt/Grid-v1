@@ -1372,6 +1372,55 @@ class Aerial:
         agent.controller.pitch = corrected_pitch / largest
         agent.controller.yaw = corrected_yaw / largest
 
+    @staticmethod
+    def _party_cannon_boost_estimate(
+        agent, target, time_remaining, predicted_position,
+        predicted_velocity
+    ):
+        """
+        Port Party Cannon's GetBoostEstimate using Volt's predicted jump
+        position/velocity. Returns boost needed, viability, ratio and speed.
+        """
+        if time_remaining <= 0.05:
+            return float("inf"), False, float("inf"), float("inf")
+
+        offset = target - predicted_position
+        distance = offset.magnitude()
+        if distance < 1:
+            return 0.0, True, 0.0, predicted_velocity.magnitude()
+
+        direction = offset / distance
+        forward = agent.me.forward.normalize()
+        angle = math.acos(cap(forward.dot(direction), -1.0, 1.0))
+        angle = max(angle, 0.0001)
+        turn_time = 0.6 * (2.0 * math.sqrt(angle / 9.0))
+        turn_delay = turn_time * cap(1.0 - 0.4 / angle, 0.0, 1.0)
+        acceleration_time = time_remaining - turn_delay
+        if acceleration_time <= 0.05:
+            return float("inf"), False, float("inf"), float("inf")
+
+        total_acceleration = agent.boost_accel + throttle_accel
+        required_acceleration = (
+            2.0 * distance / (acceleration_time * acceleration_time)
+        )
+        ratio = required_acceleration / max(total_acceleration, 1.0)
+        boost_time = acceleration_time * (
+            1.0 - math.sqrt(1.0 - cap(ratio, 0.0, 1.0))
+        )
+        estimated_boost = boost_time * boost_per_second
+        final_velocity = (
+            predicted_velocity
+            + direction * total_acceleration * boost_time
+        )
+        final_speed = final_velocity.magnitude()
+
+        viable = (
+            abs(ratio) < 0.9
+            and estimated_boost < agent.me.boost * 0.9
+            and final_speed < max_speed * 0.9
+        )
+        return estimated_boost, viable, ratio, final_speed
+
     def run(self, agent: VirxERLU):
         if not agent.shooting:
             agent.shooting = True
@@ -1627,10 +1676,9 @@ class Aerial:
                     and T > 0.55
                 )
 
-                # Prefer the fast double-jump launch, but do not throw away
-                # a reachable aerial just because the second jump is tight.
-                # In the short window, use the first jump and preserve the
-                # second jump for the contact dodge.
+                # Party Cannon checks both jump options independently and
+                # chooses the one with the lower estimated boost cost.
+                # Keep Volt's short-window single-jump fallback.
                 minimum_launch_time = 0.08
                 double_jump_window = jump_max_duration + (2 / 120)
 
@@ -1644,7 +1692,77 @@ class Aerial:
                     agent.push(ball_recovery())
                     return
 
-                self.jump_type_fast = T > double_jump_window
+                jump_tau = min(jump_max_duration, max(0.0, T))
+                single_position = (
+                    xf
+                    + agent.me.up * jump_speed * T
+                    + agent.me.up * jump_acc * jump_tau
+                    * (T - 0.5 * jump_tau)
+                )
+                single_velocity = (
+                    vf
+                    + agent.me.up * jump_speed
+                    + agent.me.up * jump_acc * jump_tau
+                )
+                single_boost, single_viable, single_ratio, single_speed = (
+                    self._party_cannon_boost_estimate(
+                        agent, self.target, T,
+                        single_position, single_velocity
+                    )
+                )
+
+                double_viable = False
+                double_boost = float("inf")
+                double_ratio = float("inf")
+                double_speed = float("inf")
+                if T > double_jump_window and not agent.me.doublejumped:
+                    second_jump_delay = double_jump_window
+                    double_position = (
+                        single_position
+                        + agent.me.up * jump_speed
+                        * max(0.0, T - second_jump_delay)
+                    )
+                    double_velocity = (
+                        single_velocity + agent.me.up * jump_speed
+                    )
+                    (
+                        double_boost, double_viable,
+                        double_ratio, double_speed
+                    ) = self._party_cannon_boost_estimate(
+                        agent, self.target, T,
+                        double_position, double_velocity
+                    )
+
+                if wall_double_jump and double_viable:
+                    self.jump_type_fast = True
+                elif double_viable and (
+                    not single_viable or double_boost < single_boost
+                ):
+                    self.jump_type_fast = True
+                elif single_viable:
+                    self.jump_type_fast = False
+                else:
+                    # In the final 1.5 seconds, preserve the existing
+                    # emergency/late-aerial attempt rather than rejecting it
+                    # on a conservative boost estimate.
+                    if T > 1.5:
+                        print(
+                            f"[AERIAL PC REJECT] "
+                            f"single={single_viable} double={double_viable} "
+                            f"single_boost={single_boost:.1f} "
+                            f"double_boost={double_boost:.1f} "
+                            f"single_ratio={single_ratio:.2f} "
+                            f"double_ratio={double_ratio:.2f} "
+                            f"single_speed={single_speed:.0f} "
+                            f"double_speed={double_speed:.0f}",
+                            flush=True
+                        )
+                        agent.pop()
+                        agent.shooting = False
+                        agent.push(ball_recovery())
+                        return
+                    self.jump_type_fast = T > double_jump_window
+
                 self.jumping = True
 
                 if not self.jump_type_fast:
@@ -1652,6 +1770,14 @@ class Aerial:
                         f"[AERIAL SINGLE-JUMP FALLBACK] "
                         f"T={T:.3f} double_jump_window={double_jump_window:.3f}; "
                         f"preserving second jump for contact",
+                        flush=True
+                    )
+                else:
+                    print(
+                        f"[AERIAL PC LAUNCH] mode=double "
+                        f"boost={double_boost:.1f} "
+                        f"ratio={double_ratio:.2f} "
+                        f"speed={double_speed:.0f}",
                         flush=True
                     )
 
@@ -1794,56 +1920,17 @@ class Aerial:
             # fighting its existing pitch/yaw rotation during the aerial.
             self._apply_noob_black_rotation_damping(agent)
 
-        # Party Cannon GetBoostEstimate: predict the car's no-boost
-        # contact state (xf/vf already include Volt's jump model), reserve
-        # time for turning, then estimate boost time, final speed and boost.
+        # Party Cannon's actual flight controller uses offset/T for the
+        # acceleration request and waits until the nose is within 0.4 rad.
         forward = agent.me.forward.normalize()
         acceleration_direction = delta_x.normalize()
-        forward_alignment = cap(
-            forward.dot(acceleration_direction), -1.0, 1.0
-        )
-        turn_angle = math.acos(forward_alignment)
-        turn_time = 0.6 * (2.0 * math.sqrt(turn_angle / 9.0))
-        turn_delay = turn_time * cap(
-            1.0 - 0.4 / max(turn_angle, 0.0001), 0.0, 1.0
-        )
-        acceleration_time = max(T - turn_delay, 0.05)
-        required_acceleration = (
-            2.0 * delta_x.magnitude()
-            / (acceleration_time * acceleration_time)
+        turn_angle = math.acos(
+            cap(forward.dot(acceleration_direction), -1.0, 1.0)
         )
         available_acceleration = (
             agent.boost_accel + throttle_accel
         )
-        boost_ratio = (
-            required_acceleration / max(available_acceleration, 1.0)
-        )
-        boost_fraction = 1.0 - math.sqrt(
-            1.0 - cap(boost_ratio, 0.0, 1.0)
-        )
-        estimated_boost_time = acceleration_time * boost_fraction
-        estimated_boost_needed = (
-            estimated_boost_time * boost_per_second
-        )
-        estimated_final_velocity = (
-            vf
-            + acceleration_direction
-            * available_acceleration
-            * estimated_boost_time
-        )
-        enough_boost = (
-            estimated_boost_needed < agent.me.boost * 0.9
-        )
-        enough_time = abs(boost_ratio) < 0.9
-        enough_speed = (
-            estimated_final_velocity.magnitude() < max_speed * 0.9
-        )
-        party_cannon_aerial_viable = (
-            enough_boost and enough_time and enough_speed
-        )
 
-        # Party Cannon's actual flight controller uses offset/T for the
-        # acceleration request and waits until the nose is within 0.4 rad.
         if T > 0:
             projected_delta_v = delta_x.dot(forward) / T
             boost_frame_time = max(dt, 13 / 120)
@@ -1886,7 +1973,6 @@ class Aerial:
                     T, agent.boost_accel, tuple(agent.gravity),
                     agent.me.get_raw(agent), tuple(self.target)
                 )
-                or not party_cannon_aerial_viable
             )
         ):
             print(
