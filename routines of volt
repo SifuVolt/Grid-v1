@@ -203,10 +203,11 @@ class wave_dash:
                 agent.controller.pitch = 0
 
 class wall_approach:
-    WALL_X = 3850
-    MIN_BALL_HEIGHT = 230
-    MIN_WALL_X = 3350
-    MAX_BALL_HEIGHT = 1750
+    WALL_X = 3970
+    MIN_BALL_HEIGHT = 190
+    # Ball centre must be within 180 units of the side-wall surface.
+    MIN_WALL_X = 3820
+    MAX_BALL_HEIGHT = 1850
 
     def __init__(self, intercept_time, targets=None):
         self.intercept_time = intercept_time
@@ -4221,20 +4222,37 @@ class jump_shot:
                 local_contact_for_dodge = agent.me.local_location(
                     contact_target
                 )
-                front_face_y = cap(
-                    local_contact_for_dodge.y,
-                    hitbox_offset.y - hitbox.width * 0.5,
-                    hitbox_offset.y + hitbox.width * 0.5
+                # Test all four front-face corners. The selected corner is
+                # the one geometrically closest to the predicted ball-surface
+                # contact point; the physics centre is not used as the dodge
+                # origin.
+                front_corners = (
+                    Vector(
+                        nose_offset,
+                        hitbox_offset.y - hitbox.width * 0.5,
+                        hitbox_offset.z - hitbox.height * 0.5
+                    ),
+                    Vector(
+                        nose_offset,
+                        hitbox_offset.y - hitbox.width * 0.5,
+                        hitbox_offset.z + hitbox.height * 0.5
+                    ),
+                    Vector(
+                        nose_offset,
+                        hitbox_offset.y + hitbox.width * 0.5,
+                        hitbox_offset.z - hitbox.height * 0.5
+                    ),
+                    Vector(
+                        nose_offset,
+                        hitbox_offset.y + hitbox.width * 0.5,
+                        hitbox_offset.z + hitbox.height * 0.5
+                    )
                 )
-                front_face_z = cap(
-                    local_contact_for_dodge.z,
-                    hitbox_offset.z - hitbox.height * 0.5,
-                    hitbox_offset.z + hitbox.height * 0.5
-                )
-                local_nose_contact = Vector(
-                    nose_offset,
-                    front_face_y,
-                    front_face_z
+                local_nose_contact = min(
+                    front_corners,
+                    key=lambda corner: (
+                        local_contact_for_dodge - corner
+                    ).magnitude()
                 )
                 nose_to_contact = (
                     local_contact_for_dodge - local_nose_contact
@@ -4242,6 +4260,16 @@ class jump_shot:
 
                 # The low-boost case gets a bounded extra nose-contact
                 # window, but it must still be in front of the car.
+                ball_behind_car = (
+                    local_contact_for_dodge.x < -20
+                    and local_contact_for_dodge.magnitude() <= 520
+                    and not self.side_mode
+                )
+                pure_backflip = (
+                    ball_behind_car
+                    and nose_to_contact.magnitude() <= 700
+                )
+
                 close_enough = (
                     agent.me.location.dist(self.offset_target)
                     < (92.75 + hitbox.length) * 1.02
@@ -4249,6 +4277,7 @@ class jump_shot:
                         low_boost_dodge
                         and nose_to_contact.magnitude() <= 420
                     )
+                    or pure_backflip
                 )
 
                 # During an urgent own-half save, allow a rear-facing
@@ -4280,10 +4309,12 @@ class jump_shot:
                     or self.side_mode
                     or (low_boost_dodge and nose_to_contact.x > 0)
                     or defensive_backflip
+                    or pure_backflip
                 ):
-                    # A jump shot needs its directional dodge to supply the
-                    # final velocity. Aim from the hitbox nose at the selected
-                    # ball-surface point, not from the physics centre.
+                    # A normal dodge aims from the nearest front hitbox
+                    # corner. If the predicted contact is genuinely behind
+                    # the car, use a straight backflip: no yaw and no diagonal
+                    # pitch/yaw combination.
                     if nose_to_contact.magnitude() > 1:
                         dodge_direction = nose_to_contact.normalize()
                     else:
@@ -4299,18 +4330,30 @@ class jump_shot:
                         flush=True
                     )
 
-                    if defensive_backflip:
+                    if pure_backflip:
                         print(
-                            f"[SAVE DODGE] backflip selected "
-                            f"ball_depth={ball_depth:.0f} "
-                            f"ball_z={self.ball_location.z:.0f} "
-                            f"car_z={agent.me.location.z:.0f} "
-                            f"local_contact=({nose_to_contact.x:.0f},"
-                            f"{nose_to_contact.y:.0f})",
+                            f"[JUMP SHOT BACKFLIP] pure=True "
+                            f"local_ball=({local_contact_for_dodge.x:.0f},"
+                            f"{local_contact_for_dodge.y:.0f},"
+                            f"{local_contact_for_dodge.z:.0f}) "
+                            f"corner_gap={nose_to_contact.magnitude():.0f}",
                             flush=True
                         )
-                    agent.controller.pitch = -dodge_direction.x
-                    agent.controller.yaw = dodge_direction.y
+                        agent.controller.pitch = 1
+                        agent.controller.yaw = 0
+                    else:
+                        if defensive_backflip:
+                            print(
+                                f"[SAVE DODGE] backflip selected "
+                                f"ball_depth={ball_depth:.0f} "
+                                f"ball_z={self.ball_location.z:.0f} "
+                                f"car_z={agent.me.location.z:.0f} "
+                                f"local_contact=({nose_to_contact.x:.0f},"
+                                f"{nose_to_contact.y:.0f})",
+                                flush=True
+                            )
+                        agent.controller.pitch = -dodge_direction.x
+                        agent.controller.yaw = dodge_direction.y
                     agent.controller.roll = 0
                     agent.controller.jump = True
 
