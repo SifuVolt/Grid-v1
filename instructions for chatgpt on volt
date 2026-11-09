@@ -2395,11 +2395,16 @@ class Bot(VirxERLU):
             and planned_shot is not None
             and getattr(planned_shot, "intercept_time", None) is not None
         ):
-            contact_slice = routines.prediction_slice_at(
-                self, planned_shot.intercept_time
-            )
-            if contact_slice is not None:
-                physics = contact_slice.physics
+            prediction = getattr(self, "ball_prediction_struct", None)
+            slices = getattr(prediction, "slices", None) if prediction is not None else None
+            if slices:
+                seconds_to_contact = max(
+                    0.0, planned_shot.intercept_time - self.time
+                )
+                slice_index = max(
+                    0, min(len(slices) - 1, round(seconds_to_contact * 120))
+                )
+                physics = slices[slice_index].physics
                 contact_ball = Vector(
                     physics.location.x, physics.location.y, physics.location.z
                 )
@@ -2422,8 +2427,6 @@ class Bot(VirxERLU):
                         1050.0,
                         max(350.0, contact_ball.flat_dist(aim_point) * 0.28)
                     )
-                    # The transition player will offset this lane to the
-                    # opposite side of the attacker (or trail behind them).
                     receive_point = contact_ball + lane * lane_distance
                     receive_plan = {
                         "receive_x": round(receive_point.x, 1),
