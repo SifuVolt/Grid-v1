@@ -536,6 +536,30 @@ class Bot(VirxERLU):
         ball = self.ball
         car = self.me
 
+        # The goalie must hold its net instead of reacting to the generic
+        # rolling-ball clear. Keep this restriction for five seconds after
+        # the role changes away from goalie so it cannot immediately peel out.
+        goalie_role = False
+        if self.friends:
+            attacker_index, goalie_index, _ = self.get_grid_team_roles()
+            goalie_role = (
+                goalie_index == self.me.index
+                and attacker_index != self.me.index
+            )
+
+        if goalie_role:
+            self._last_goalie_role_time = self.time
+            return False
+
+        last_goalie_role_time = getattr(
+            self, "_last_goalie_role_time", None
+        )
+        if (
+            last_goalie_role_time is not None
+            and self.time - last_goalie_role_time < 5.0
+        ):
+            return False
+
         # Ball should be near the ground.
         if ball.location.z > 120:
             return False
