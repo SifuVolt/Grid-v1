@@ -4,7 +4,6 @@ from util.utils import (Vector, almost_equals, cap, cap_in_field, defaultDrive,
                         defaultPD, lerp, math, peek_generator, side, sign,
                         dodge_impulse)
 import random
-from types import SimpleNamespace
 from util.grid_double_jump import new_jump_time
 
 dt = 1/120
@@ -20,64 +19,20 @@ jump_acc = 1458 + (1/3)
 
 
 def _safe_prediction_slice(agent, time_remaining, round_up=False):
-    """
-    Sample the ball prediction on Volt's 120 Hz time grid.
-
-    RLBot's prediction array is not a 120 Hz array. Map the 120 Hz sample
-    time to the actual game_seconds timestamps, then interpolate the two
-    surrounding prediction states. This keeps all of Volt's timing math at
-    120 Hz without treating a prediction-array index as a frame number.
-    """
+    """Return a bounded prediction slice, or None when prediction is absent."""
     prediction = getattr(agent, "ball_prediction_struct", None)
     slices = getattr(prediction, "slices", None) if prediction is not None else None
     if not slices:
         return None
 
-    frames = (
-        math.ceil(max(0.0, float(time_remaining)) * 120)
-        if round_up
-        else round(max(0.0, float(time_remaining)) * 120)
-    )
-    target_time = agent.time + frames / 120.0
+    time_remaining = max(0.0, float(time_remaining))
+    if round_up:
+        index = math.ceil(time_remaining * 120) - 1
+    else:
+        index = round(time_remaining * 120) - 1
 
-    if target_time <= slices[0].game_seconds:
-        return slices[0]
-    if target_time > slices[-1].game_seconds:
-        return None
-
-    low = 0
-    high = len(slices) - 1
-    while low + 1 < high:
-        middle = (low + high) // 2
-        if slices[middle].game_seconds < target_time:
-            low = middle
-        else:
-            high = middle
-
-    before = slices[low]
-    after = slices[high]
-    span = after.game_seconds - before.game_seconds
-    if span <= 1e-6:
-        return before
-
-    blend = (target_time - before.game_seconds) / span
-
-    def interpolate(a, b):
-        return Vector(
-            x=a.x + (b.x - a.x) * blend,
-            y=a.y + (b.y - a.y) * blend,
-            z=a.z + (b.z - a.z) * blend
-        )
-
-    physics = SimpleNamespace(
-        location=interpolate(
-            before.physics.location, after.physics.location
-        ),
-        velocity=interpolate(
-            before.physics.velocity, after.physics.velocity
-        )
-    )
-    return SimpleNamespace(game_seconds=target_time, physics=physics)
+    index = max(0, min(index, len(slices) - 1))
+    return slices[index]
 
 
 def _relative_goal_aim_point(agent, targets=None):
@@ -286,13 +241,11 @@ class wall_approach:
             agent.shooting = False
             return
 
-        ball_slice = _safe_prediction_slice(agent, T, round_up=True)
-        if ball_slice is None:
-            print("[WALL DRIVE] STOP: intercept outside prediction", flush=True)
-            agent.pop()
-            agent.shooting = False
-            return
-        physics = ball_slice.physics
+        slice_n = max(
+            0,
+            min(len(prediction.slices) - 1, round(max(0.0, T) * 120))
+        )
+        physics = prediction.slices[slice_n].physics
         ball = Vector(
             physics.location.x, physics.location.y, physics.location.z
         )
@@ -1376,16 +1329,18 @@ class Aerial:
         if prediction is None or not prediction.slices:
             return
 
-        # Sample the prediction on the 120 Hz contact-time grid.
-        ball_slice = _safe_prediction_slice(
-            agent, self.intercept_time - agent.time
+        # Find the prediction slice closest to the actual intercept time.
+        slice_n = min(
+            range(len(prediction.slices)),
+            key=lambda i: abs(
+                prediction.slices[i].game_seconds
+                - self.intercept_time
+            )
         )
-        if ball_slice is None:
-            return
-        agent.dbg_2d(
-            f"Aerial prediction time: {ball_slice.game_seconds:.3f}"
-        )
-        physics = ball_slice.physics
+
+        agent.dbg_2d(f"Shot slice #: {slice_n}")
+
+        physics = prediction.slices[slice_n].physics
 
         ball_velocity = Vector(
             physics.velocity.x,
@@ -1466,13 +1421,12 @@ class Aerial:
         backboard_mode = False
         goal_direction = (goal_center - self.ball).normalize()
 
-        backboard_slice = (
-            _safe_prediction_slice(agent, T)
-            if agent.me.airborne and prediction is not None and prediction.slices
-            else None
-        )
-        if backboard_slice is not None:
-            physics = backboard_slice.physics
+        if (
+            agent.me.airborne
+            and prediction is not None
+            and 0 <= slice_n < len(prediction.slices)
+        ):
+            physics = prediction.slices[slice_n].physics
             ball_velocity = Vector(
                 physics.velocity.x,
                 physics.velocity.y,
@@ -3611,21 +3565,11 @@ class shot_patience:
             return intercept_time
 
         current_time = max(0.0, intercept_time - agent.time)
-        current_time = round(current_time * 120) / 120.0
-        current = _safe_prediction_slice(agent, current_time)
-        if current is None:
+        start = max(0, min(round(current_time * 120) - 1, len(slices) - 1))
+        if start >= len(slices) - 1:
             return intercept_time
 
-        target_game_time = agent.time + current_time
-        start = next(
-            (
-                i for i, item in enumerate(slices)
-                if item.game_seconds > target_game_time
-            ),
-            len(slices)
-        )
-        if start >= len(slices):
-            return intercept_time
+        current = slices[start]
         current_pos = current.physics.location
         current_vel = current.physics.velocity
 
@@ -3644,15 +3588,13 @@ class shot_patience:
 
         speed = agent.me.velocity.flatten().magnitude()
         estimated_speed = max(1000.0, min(2300.0, speed + 650.0))
-        for i in range(start, len(slices)):
+        max_index = min(len(slices) - 1, 600)
+
+        for i in range(start + 1, max_index + 1):
             future = slices[i]
-            future_time = future.game_seconds - agent.time
-            if future_time > 5.0:
-                break
-            # Keep reachability comparisons on Volt's 120 Hz time grid.
-            future_time = round(future_time * 120) / 120.0
             pos = future.physics.location
             vel = future.physics.velocity
+            future_time = (i + 1) / 120
             if future_time <= current_time + 0.15:
                 continue
 
@@ -3853,20 +3795,12 @@ class jump_shot:
                     agent.push(recovery())
                 return
 
-            ball_slice = _safe_prediction_slice(agent, T)
-            if ball_slice is None:
-                agent.pop()
-                agent.shooting = False
-                agent.shot_weight = -1
-                agent.shot_time = -1
-                if agent.me.airborne:
-                    agent.push(recovery())
-                return
+            slice_n = round(T * 120) - 1
+            slice_n = max(0, min(slice_n, len(slices) - 1))
 
-            agent.dbg_2d(
-                f"Shot prediction time: {ball_slice.game_seconds:.3f}"
-            )
-            ball = ball_slice.physics.location
+            agent.dbg_2d(f"Shot slice #: {slice_n}")
+
+            ball = slices[slice_n].physics.location
             self.ball_location = Vector(ball.x, ball.y, ball.z)
 
             self.needed_jump_time = virxrlcu.get_jump_time(
@@ -4528,7 +4462,8 @@ class ground_shot:
                 return
 
             agent.dbg_2d(
-                f"Shot prediction time: {ball_slice.game_seconds:.3f}"
+                f"Shot slice #: {round(T * 120) - 1} "
+                f"/ {len(agent.ball_prediction_struct.slices) - 1}"
             )
 
             ball = ball_slice.physics.location
@@ -5039,21 +4974,8 @@ class speedflip_kickoff:
             # Only start the speedflip once the car has built speed
             # and the ball is at a suitable distance.
             if speed > 800 and distance > 1800:
-                # Choose the flip side relative to the car, not world X.
-                # World-X handedness is mirrored incorrectly for orange.
-                if abs(local_ball.y) > 100:
-                    right_handed = local_ball.y > 0
-                else:
-                    right_handed = (
-                        agent.me.location.x * -side(agent.team) > 0
-                    )
+                right_handed = agent.me.location.x > 0
 
-                print(
-                    f"[KICKOFF SPEEDFLIP] local_ball_y={local_ball.y:.0f} "
-                    f"right_handed={right_handed} "
-                    f"team={agent.team} car_x={agent.me.location.x:.0f}",
-                    flush=True
-                )
                 self.phase = 1
 
                 agent.push(
@@ -5390,15 +5312,16 @@ class wall_shot:
                   flush=True)
             return
 
-        # Sample the predicted contact on the 120 Hz time grid.
-        ball_slice = _safe_prediction_slice(agent, T, round_up=True)
-        if ball_slice is None:
+        # Match the prediction indexing used by the existing Aerial routine.
+        slice_n = math.ceil(T * 120) - 1
+
+        if slice_n < 0 or slice_n >= len(prediction.slices):
             agent.pop()
             agent.shooting = False
-            print("[WALL SHOT] Intercept outside prediction", flush=True)
+            print("[WALL SHOT] Invalid prediction slice", flush=True)
             return
 
-        predicted = ball_slice.physics.location
+        predicted = prediction.slices[slice_n].physics.location
         ball = Vector(predicted.x, predicted.y, predicted.z)
 
         # Only continue while the ball still qualifies as a wall shot.
