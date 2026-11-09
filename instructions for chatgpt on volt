@@ -843,9 +843,9 @@ class Bot(VirxERLU):
 
         return False
     def _car_ball_facing_angle(self, car):
-        """Horizontal angle between a teammate's nose and the ball."""
-        to_ball = (self.ball.location - car.location).flatten()
-        forward = car.forward.flatten()
+        """3D angle between a teammate's nose and the ball."""
+        to_ball = self.ball.location - car.location
+        forward = car.forward
         if to_ball.magnitude() < 1 or forward.magnitude() < 0.001:
             return math.pi
         return math.acos(
