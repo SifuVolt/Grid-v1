@@ -1163,34 +1163,25 @@ class Bot(VirxERLU):
 
         attacker = best_challenger
 
-        # A predicted goal-bound ball changes the challenger calculation:
-        # select the player who can reach a useful save contact before the
-        # crossing deadline. This lets the goalie leave the line only when
-        # it is genuinely the best reachable defender.
+        # A predicted goal-bound ball changes the challenger calculation.
+        # For each teammate, find their first prediction slice they can reach
+        # before the goal deadline, then elect the earliest viable save.
         if save_deadline >= 0 and save_crossing is not None:
-            target_time = max(0.10, save_deadline - 0.20)
-            save_slice = None
-            eligible_slices = [
-                item for item in slices
-                if 0.05 <= item.game_seconds - self.time <= save_deadline
-            ]
-            if eligible_slices:
-                save_slice = min(
-                    eligible_slices,
-                    key=lambda item: abs(
-                        (item.game_seconds - self.time) - target_time
+            reachable_saves = []
+
+            for car in cars:
+                for ball_slice in slices:
+                    contact_time = ball_slice.game_seconds - self.time
+                    if contact_time < 0.05:
+                        continue
+                    if contact_time > save_deadline:
+                        break
+
+                    save_target = Vector(
+                        ball_slice.physics.location.x,
+                        ball_slice.physics.location.y,
+                        ball_slice.physics.location.z
                     )
-                )
-
-            if save_slice is not None:
-                save_target = Vector(
-                    save_slice.physics.location.x,
-                    save_slice.physics.location.y,
-                    save_slice.physics.location.z
-                )
-                reachable_saves = []
-
-                for car in cars:
                     offset = save_target - car.location
                     flat_offset = offset.flatten()
                     flat_distance = flat_offset.magnitude()
@@ -1227,27 +1218,29 @@ class Bot(VirxERLU):
                         )
                         eta = distance / effective_speed + turn_delay
 
-                    # A small margin accounts for prediction/frame timing.
-                    if eta <= target_time + 0.05:
+                    if eta <= contact_time + 0.05:
                         reachable_saves.append(
-                            (eta, distance, car)
+                            (contact_time, eta, distance, car)
                         )
+                        break
 
-                if reachable_saves:
-                    urgent_challenger = min(
-                        reachable_saves,
-                        key=lambda item: (item[0], item[1])
-                    )[2]
-                    if urgent_challenger.index != attacker.index:
-                        print(
-                            f"[GOALIE CHALLENGE OVERRIDE] "
-                            f"base={attacker.index} "
-                            f"selected={urgent_challenger.index} "
-                            f"goal_in={save_deadline:.2f}s "
-                            f"eta={min(reachable_saves, key=lambda item: (item[0], item[1]))[0]:.2f}s",
-                            flush=True
-                        )
-                    attacker = urgent_challenger
+            if reachable_saves:
+                selected_save = min(
+                    reachable_saves,
+                    key=lambda item: (item[0], item[1], item[2])
+                )
+                urgent_challenger = selected_save[3]
+                if urgent_challenger.index != attacker.index:
+                    print(
+                        f"[GOALIE CHALLENGE OVERRIDE] "
+                        f"base={attacker.index} "
+                        f"selected={urgent_challenger.index} "
+                        f"goal_in={save_deadline:.2f}s "
+                        f"contact_in={selected_save[0]:.2f}s "
+                        f"eta={selected_save[1]:.2f}s",
+                        flush=True
+                    )
+                attacker = urgent_challenger
 
         goalie = deepest_player
         transition = next(
