@@ -842,6 +842,47 @@ class Bot(VirxERLU):
                 return True
 
         return False
+    def get_goal_crossing_deadline(self):
+        """
+        Return the first predicted own-goal crossing within five seconds.
+
+        Follow Noob Black's 5235-unit goal-plane deadline, but reject
+        trajectories that pass outside the posts or above the crossbar.
+        """
+        prediction = getattr(self, "ball_prediction_struct", None)
+        slices = (
+            getattr(prediction, "slices", None)
+            if prediction is not None else None
+        ) or ()
+        team_side = utils.side(self.team)
+
+        for ball_slice in slices:
+            time_to_goal = ball_slice.game_seconds - self.time
+            if time_to_goal <= 0:
+                continue
+            if time_to_goal > 5.0:
+                break
+
+            location = ball_slice.physics.location
+            if location.y * team_side < 5235:
+                continue
+
+            # Rocket League's goal opening is about 1786 wide and 643 high.
+            # Include the ball radius so edge-of-post/crossbar saves count.
+            if (
+                abs(location.x) <= 985
+                and 0 <= location.z <= 735
+            ):
+                return (
+                    time_to_goal,
+                    Vector(location.x, location.y, location.z)
+                )
+
+            # The ball has crossed the goal plane outside the scoring opening.
+            return None, None
+
+        return None, None
+
     def get_grid_team_roles(self):
         """
         Noob Black's rotating 3s role selection.
@@ -883,18 +924,10 @@ class Bot(VirxERLU):
             if prediction is not None else None
         ) or ()
 
-        # Noob Black limits its urgent-save window to five seconds and treats
-        # a predicted crossing of the goal plane as a save deadline.
-        save_deadline = -1.0
-        for ball_slice in slices:
-            time_to_goal = ball_slice.game_seconds - self.time
-            if time_to_goal <= 0:
-                continue
-            if time_to_goal > 5.0:
-                break
-            if abs(ball_slice.physics.location.y) >= 5235:
-                save_deadline = time_to_goal
-                break
+        # Noob Black's goal-plane deadline controls defensive role priority.
+        save_deadline, save_crossing = self.get_goal_crossing_deadline()
+        if save_deadline is None:
+            save_deadline = -1.0
 
         sidewall_clear = (
             abs(ball.y - own_goal.y) <= 1000
@@ -1129,6 +1162,93 @@ class Bot(VirxERLU):
                 best_dependency = bool(dependency)
 
         attacker = best_challenger
+
+        # A predicted goal-bound ball changes the challenger calculation:
+        # select the player who can reach a useful save contact before the
+        # crossing deadline. This lets the goalie leave the line only when
+        # it is genuinely the best reachable defender.
+        if save_deadline >= 0 and save_crossing is not None:
+            target_time = max(0.10, save_deadline - 0.20)
+            save_slice = None
+            eligible_slices = [
+                item for item in slices
+                if 0.05 <= item.game_seconds - self.time <= save_deadline
+            ]
+            if eligible_slices:
+                save_slice = min(
+                    eligible_slices,
+                    key=lambda item: abs(
+                        (item.game_seconds - self.time) - target_time
+                    )
+                )
+
+            if save_slice is not None:
+                save_target = Vector(
+                    save_slice.physics.location.x,
+                    save_slice.physics.location.y,
+                    save_slice.physics.location.z
+                )
+                reachable_saves = []
+
+                for car in cars:
+                    offset = save_target - car.location
+                    flat_offset = offset.flatten()
+                    flat_distance = flat_offset.magnitude()
+                    distance = offset.magnitude()
+
+                    if flat_distance < 1:
+                        eta = distance / 2300.0
+                    else:
+                        direction = flat_offset / flat_distance
+                        forward = car.forward.flatten()
+                        forward_length = forward.magnitude()
+                        alignment = (
+                            forward.dot(direction) / forward_length
+                            if forward_length > 0.01 else -1.0
+                        )
+                        alignment = max(-1.0, min(1.0, alignment))
+                        turn_angle = math.acos(alignment)
+                        turn_time = (
+                            0.6 * (2.0 * math.sqrt(turn_angle / 9.0))
+                        )
+                        turn_delay = turn_time * max(
+                            0.0,
+                            min(
+                                1.0,
+                                1.0 - 0.4 / max(turn_angle, 0.0001)
+                            )
+                        )
+                        closing_speed = car.velocity.flatten().dot(
+                            direction
+                        )
+                        effective_speed = max(
+                            900.0,
+                            min(2300.0, closing_speed + 700.0)
+                        )
+                        eta = distance / effective_speed + turn_delay
+
+                    # A small margin accounts for prediction/frame timing.
+                    if eta <= target_time + 0.05:
+                        reachable_saves.append(
+                            (eta, distance, car)
+                        )
+
+                if reachable_saves:
+                    urgent_challenger = min(
+                        reachable_saves,
+                        key=lambda item: (item[0], item[1])
+                    )[2]
+                    if urgent_challenger.index != attacker.index:
+                        print(
+                            f"[GOALIE CHALLENGE OVERRIDE] "
+                            f"base={attacker.index} "
+                            f"selected={urgent_challenger.index} "
+                            f"goal_in={save_deadline:.2f}s "
+                            f"eta={min(reachable_saves, key=lambda item: (item[0], item[1]))[0]:.2f}s",
+                            flush=True
+                        )
+                    attacker = urgent_challenger
+
         goalie = deepest_player
         transition = next(
             (
@@ -1535,6 +1655,8 @@ class Bot(VirxERLU):
         side = utils.side(self.team)
         ball_depth = self.ball.location.y * side
         fast_intercept_zone = 0 < ball_depth <= 1280
+        goal_save_deadline, _ = self.get_goal_crossing_deadline()
+        urgent_goal_save = goal_save_deadline is not None
 
         current_name = (
             self.stack[0].__class__.__name__
@@ -1805,40 +1927,51 @@ class Bot(VirxERLU):
                     )
                     return
 
-            side = utils.side(self.team)
-            car_is_behind_ball = (
-                self.me.location.y * side
-                > ball.y * side + 100
-            )
-
-            if ball_depth > 4200 and car_is_behind_ball:
-                self.last_emergency_clear_time = self.time
-                self.push(routines.emergency_clear())
-                return
-
-            clear_cooldown = (
-                self.time - self.last_emergency_clear_time < 0.8
-            )
-
-            if clear_cooldown:
-                goalie_role = (
-                    bool(self.friends)
-                    and self.should_hold_cover_role()
+            if urgent_goal_save:
+                # Do not wait for the ball to become one car-length from goal
+                # and then launch a generic emergency clear. The selected
+                # challenger now searches the predicted save trajectory.
+                print(
+                    f"[URGENT GOAL SAVE] player={self.me.index} "
+                    f"goal_in={goal_save_deadline:.2f}s "
+                    f"ball=({ball.x:.0f},{ball.y:.0f},{ball.z:.0f})",
+                    flush=True
                 )
-                self.push(routines.grid_defense(goalie=goalie_role))
-                return
-
-            if ball_depth > 2500 or distance_to_ball < 1100:
-                self.last_emergency_clear_time = self.time
-                self.push(routines.emergency_clear())
             else:
-                goalie_role = (
-                    bool(self.friends)
-                    and self.should_hold_cover_role()
+                side = utils.side(self.team)
+                car_is_behind_ball = (
+                    self.me.location.y * side
+                    > ball.y * side + 100
                 )
-                self.push(routines.grid_defense(goalie=goalie_role))
 
-            return
+                if ball_depth > 4200 and car_is_behind_ball:
+                    self.last_emergency_clear_time = self.time
+                    self.push(routines.emergency_clear())
+                    return
+
+                clear_cooldown = (
+                    self.time - self.last_emergency_clear_time < 0.8
+                )
+
+                if clear_cooldown:
+                    goalie_role = (
+                        bool(self.friends)
+                        and self.should_hold_cover_role()
+                    )
+                    self.push(routines.grid_defense(goalie=goalie_role))
+                    return
+
+                if ball_depth > 2500 or distance_to_ball < 1100:
+                    self.last_emergency_clear_time = self.time
+                    self.push(routines.emergency_clear())
+                else:
+                    goalie_role = (
+                        bool(self.friends)
+                        and self.should_hold_cover_role()
+                    )
+                    self.push(routines.grid_defense(goalie=goalie_role))
+
+                return
 
 
         # TODO this bot will go for boost no matter what - this is AWFUL, especially in a 1v1!
@@ -2010,16 +2143,19 @@ class Bot(VirxERLU):
             "Aerial"
         }
 
-        if self.is_clear() or self.odd_tick == 0:
-            shot = self.teamplay_shot
+        if self.is_clear() or self.odd_tick == 0 or urgent_goal_save:
+            shot = None if urgent_goal_save else self.teamplay_shot
 
             # The cached teamplay candidate may be a later ground shot.
             # Recheck the live prediction first so a reachable wall touch
             # can replace it instead of waiting for the ball to fall.
             wall_allowed = (
-                not self.friends
-                or self.get_grid_active_challenger() == self.me.index
-                or self.defensive_emergency()
+                not urgent_goal_save
+                and (
+                    not self.friends
+                    or self.get_grid_active_challenger() == self.me.index
+                    or self.defensive_emergency()
+                )
             )
             if wall_allowed:
                 wall_drive = tools.find_wall_drive(self)
@@ -2104,7 +2240,10 @@ class Bot(VirxERLU):
                                 # In the fast zone, allow a genuinely earlier
                                 # reachable touch to replace a later planned hit.
                                 if (
-                                    not fast_intercept_zone
+                                    (
+                                        not fast_intercept_zone
+                                        and not urgent_goal_save
+                                    )
                                     or shot.intercept_time >= current_intercept - 0.05
                                 ):
                                     return
@@ -2130,7 +2269,7 @@ class Bot(VirxERLU):
             # Prefer a reachable wall drive over waiting for a later ground shot.
             wall_drive = (
                 tools.find_wall_drive(self)
-                if can_take_first_challenge
+                if can_take_first_challenge and not urgent_goal_save
                 else None
             )
             if (
@@ -2228,7 +2367,10 @@ class Bot(VirxERLU):
                             # In the shallow own-half zone, let an earlier
                             # feasible touch replace a later one.
                             if (
-                                not fast_intercept_zone
+                                (
+                                    not fast_intercept_zone
+                                    and not urgent_goal_save
+                                )
                                 or shot.intercept_time >= current_intercept - 0.05
                             ):
                                 return
