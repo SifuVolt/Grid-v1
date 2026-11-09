@@ -1241,9 +1241,14 @@ class Bot(VirxERLU):
                     key=lambda item: (item[0], item[1], item[2])
                 )
                 urgent_challenger = selected_save[3]
-                if urgent_challenger.index != attacker.index:
+                if (
+                    self.time - getattr(
+                        self, "_last_goalie_save_select_debug", -999.0
+                    ) >= 0.5
+                ):
+                    self._last_goalie_save_select_debug = self.time
                     print(
-                        f"[GOALIE CHALLENGE OVERRIDE] "
+                        f"[GOALIE SAVE SELECT] "
                         f"base={attacker.index} "
                         f"selected={urgent_challenger.index} "
                         f"goal_in={save_deadline:.2f}s "
