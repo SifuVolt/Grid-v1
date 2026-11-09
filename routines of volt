@@ -4,7 +4,6 @@ from util.utils import (Vector, almost_equals, cap, cap_in_field, defaultDrive,
                         defaultPD, lerp, math, peek_generator, side, sign,
                         dodge_impulse)
 import random
-from types import SimpleNamespace
 from util.grid_double_jump import new_jump_time
 
 dt = 1/120
@@ -19,71 +18,21 @@ jump_acc = 1458 + (1/3)
 
 
 
-def prediction_slice_at(agent, game_time, round_up=False):
-    """
-    Return the prediction at an absolute game time.
-
-    RLBot prediction slices carry their own game_seconds timestamps. Their
-    spacing must not be inferred from the bot's 120 Hz physics timestep.
-    Between two slices, interpolate position and velocity.
-    """
+def _safe_prediction_slice(agent, time_remaining, round_up=False):
+    """Return a bounded prediction slice, or None when prediction is absent."""
     prediction = getattr(agent, "ball_prediction_struct", None)
     slices = getattr(prediction, "slices", None) if prediction is not None else None
     if not slices:
         return None
 
-    target_time = float(game_time)
-    if target_time <= slices[0].game_seconds:
-        return slices[0]
-    if target_time > slices[-1].game_seconds:
-        return None
-
-    low = 0
-    high = len(slices) - 1
-    while low + 1 < high:
-        middle = (low + high) // 2
-        if slices[middle].game_seconds < target_time:
-            low = middle
-        else:
-            high = middle
-
-    before = slices[low]
-    after = slices[high]
+    time_remaining = max(0.0, float(time_remaining))
     if round_up:
-        return after
-    if target_time - before.game_seconds <= 1e-6:
-        return before
-    if after.game_seconds - target_time <= 1e-6:
-        return after
+        index = math.ceil(time_remaining * 120) - 1
+    else:
+        index = round(time_remaining * 120) - 1
 
-    span = after.game_seconds - before.game_seconds
-    if span <= 1e-6:
-        return before
-    blend = (target_time - before.game_seconds) / span
-
-    def interpolate_vector(a, b):
-        return Vector(
-            x=a.x + (b.x - a.x) * blend,
-            y=a.y + (b.y - a.y) * blend,
-            z=a.z + (b.z - a.z) * blend
-        )
-
-    a = before.physics
-    b = after.physics
-    physics = SimpleNamespace(
-        location=interpolate_vector(a.location, b.location),
-        velocity=interpolate_vector(a.velocity, b.velocity)
-    )
-    return SimpleNamespace(game_seconds=target_time, physics=physics)
-
-
-def _safe_prediction_slice(agent, time_remaining, round_up=False):
-    """Return an interpolated prediction slice for a relative time."""
-    return prediction_slice_at(
-        agent,
-        agent.time + max(0.0, float(time_remaining)),
-        round_up=round_up
-    )
+    index = max(0, min(index, len(slices) - 1))
+    return slices[index]
 
 
 def _relative_goal_aim_point(agent, targets=None):
@@ -292,13 +241,11 @@ class wall_approach:
             agent.shooting = False
             return
 
-        ball_slice = prediction_slice_at(agent, self.intercept_time)
-        if ball_slice is None:
-            print("[WALL DRIVE] STOP: intercept outside prediction", flush=True)
-            agent.pop()
-            agent.shooting = False
-            return
-        physics = ball_slice.physics
+        slice_n = max(
+            0,
+            min(len(prediction.slices) - 1, round(max(0.0, T) * 120))
+        )
+        physics = prediction.slices[slice_n].physics
         ball = Vector(
             physics.location.x, physics.location.y, physics.location.z
         )
@@ -333,7 +280,7 @@ class wall_approach:
             agent.foe_goal.location - ball
         ).flatten().normalize()
         if goal_direction.magnitude() < 0.01:
-            goal_direction = Vector(0, -side(agent.team), 0)
+            goal_direction = Vector(0, -utils.side(agent.team), 0)
 
         contact_target = Vector(
             wall_side * self.WALL_X,
@@ -358,32 +305,8 @@ class wall_approach:
             agent.shooting = False
             return
 
-        wall_gap = max(0.0, 4096.0 - abs(ball.x) - 92.75)
-        distance_to_ball = car.location.dist(ball)
-
-        # If the predicted ball is meaningfully off the wall, stop trying
-        # to drive into its centre. Once attached to the matching wall and
-        # close enough, launch the existing Aerial routine. Aerial.run has
-        # an explicit same-wall double-jump launch path.
-        wall_aerial_ready = (
-            on_wall
-            and wall_gap > 100
-            and 0.55 < T <= 1.75
-            and distance_to_ball < max(700.0, min(1500.0, T * 900.0))
-        )
-        if wall_aerial_ready:
-            print(
-                f"[WALL DRIVE] WALL AERIAL HANDOFF "
-                f"gap={wall_gap:.0f} distance={distance_to_ball:.0f} T={T:.2f}",
-                flush=True
-            )
-            agent.pop()
-            agent.push(Aerial(self.intercept_time, self.targets, True))
-            return
-
         if on_wall:
-            # For a true wall touch, follow the predicted contact point along
-            # the wall. Off-wall contacts are handled by the aerial handoff.
+            # Once attached, follow the predicted contact point along the wall.
             drive_target = contact_target
             drive_phase = "WALL CLIMB"
         else:
@@ -408,13 +331,7 @@ class wall_approach:
                 f"distance={distance:.0f} T={T:.2f} speed={speed_required:.0f}",
                 flush=True
             )
-        local_drive_target = car.local_location(drive_target)
-        turn_angle = abs(Vector(x=1).angle2D(local_drive_target.flatten()))
-        # Party Cannon's drive slows the car for tighter turns instead of
-        # expecting steering alone to hold the route at full speed.
-        turn_speed_cap = max(900.0, 2200.0 - turn_angle * 520.0)
-        speed_required = min(speed_required, turn_speed_cap)
-        defaultDrive(agent, speed_required, local_drive_target)
+        defaultDrive(agent, speed_required, car.local_location(drive_target))
         agent.controller.boost = (
             car.boost > 0 and distance > 900 and speed_required > 1450
         )
@@ -1412,18 +1329,18 @@ class Aerial:
         if prediction is None or not prediction.slices:
             return
 
-        # Interpolate the current prediction at the absolute contact time.
-        ball_slice = prediction_slice_at(agent, self.intercept_time)
-        if ball_slice is None:
-            agent.pop()
-            agent.shooting = False
-            agent.push(ball_recovery())
-            return
-
-        agent.dbg_2d(
-            f"Aerial prediction time: {ball_slice.game_seconds:.3f}"
+        # Find the prediction slice closest to the actual intercept time.
+        slice_n = min(
+            range(len(prediction.slices)),
+            key=lambda i: abs(
+                prediction.slices[i].game_seconds
+                - self.intercept_time
+            )
         )
-        physics = ball_slice.physics
+
+        agent.dbg_2d(f"Shot slice #: {slice_n}")
+
+        physics = prediction.slices[slice_n].physics
 
         ball_velocity = Vector(
             physics.velocity.x,
@@ -3015,7 +2932,6 @@ class transition_receive:
         ball_velocity = agent.ball.velocity.flatten()
         attacker = self._attacker(agent)
 
-        message = None
         if not self.hit_detected:
             # Prefer the attacker's communicated 3-second shot plan. It
             # contains a predicted contact point and a point in the intended
@@ -3027,28 +2943,29 @@ class transition_receive:
             planned_y = message.get("receive_y") if message else None
             planned_dx = message.get("receive_dir_x") if message else None
             planned_dy = message.get("receive_dir_y") if message else None
-            planned_target = None
             if all(value is not None for value in (
                 planned_x, planned_y, planned_dx, planned_dy
             )):
-                planned_target = self._clamp_target(
+                target = self._clamp_target(
                     Vector(float(planned_x), float(planned_y), 0)
                 )
                 direction = Vector(
                     float(planned_dx), float(planned_dy), 0
                 ).normalize()
-            else:
-                # Fallback for old teammates or a temporarily unavailable plan.
-                direction = (
-                    attacker.forward.flatten()
-                    if attacker is not None
-                    else ball_velocity
-                )
-                if direction.magnitude() < 0.1:
-                    direction = ball_velocity
-                if direction.magnitude() < 0.1:
-                    direction = Vector(0, -side(agent.team), 0)
-                direction = direction.normalize()
+                self.last_target = target
+                return target, direction
+
+            # Fallback for old teammates or a temporarily unavailable plan.
+            direction = (
+                attacker.forward.flatten()
+                if attacker is not None
+                else ball_velocity
+            )
+            if direction.magnitude() < 0.1:
+                direction = ball_velocity
+            if direction.magnitude() < 0.1:
+                direction = Vector(0, -side(agent.team), 0)
+            direction = direction.normalize()
         else:
             # Once contact is detected, trust the ball's real trajectory.
             direction = ball_velocity
@@ -3062,62 +2979,8 @@ class transition_receive:
                 direction = Vector(0, -side(agent.team), 0)
             direction = direction.normalize()
 
-        # Use the attacker's communicated receive lane when available.
-        # Otherwise build a support point beyond the expected/actual path.
-        target = self._clamp_target(
-            planned_target
-            if not self.hit_detected and planned_target is not None
-            else ball + direction * 1450
-        )
-
-        if not self.hit_detected and attacker is not None:
-            # The receiver should occupy the other side of the attacker,
-            # not stack directly behind the same attacking lane.
-            contact_ball = ball
-            if message is not None:
-                contact_x = message.get("contact_x")
-                contact_y = message.get("contact_y")
-                if contact_x is not None and contact_y is not None:
-                    contact_ball = Vector(float(contact_x), float(contact_y), 0)
-
-            lateral = Vector(-direction.y, direction.x, 0).normalize()
-            if lateral.magnitude() > 0.1:
-                attacker_offset = (
-                    attacker.location - contact_ball
-                ).flatten().dot(lateral)
-                if abs(attacker_offset) < 180:
-                    attacker_offset = attacker.forward.flatten().dot(lateral)
-                opposite_side = -sign(attacker_offset)
-                if opposite_side == 0:
-                    opposite_side = 1
-
-                opposite_lane = self._clamp_target(
-                    target + lateral * (opposite_side * 600)
-                )
-                behind_attacker = self._clamp_target(
-                    attacker.location.flatten()
-                    - direction * 650
-                    + lateral * (opposite_side * 300)
-                )
-
-                opposite_cost = agent.me.location.flat_dist(opposite_lane)
-                behind_cost = agent.me.location.flat_dist(behind_attacker)
-                # Prefer the true opposite-side lane; use the trailing
-                # position when it is materially easier to occupy and still
-                # keeps the receiver offset from the attacker.
-                if (
-                    behind_cost + 180 < opposite_cost
-                    and behind_attacker.flat_dist(attacker.location) > 400
-                ):
-                    target = behind_attacker
-                    position_mode = "behind"
-                else:
-                    target = opposite_lane
-                    position_mode = "opposite-side"
-            else:
-                position_mode = "lane"
-        else:
-            position_mode = "post-contact" if self.hit_detected else "lane"
+        # About 2-3 car lengths beyond the expected/actual contact path.
+        target = self._clamp_target(ball + direction * 1450)
 
         if self.last_target is not None:
             shift = target - self.last_target
@@ -3180,8 +3043,7 @@ class transition_receive:
             print(
                 f"[TRANSITION {phase.upper()}] attacker={self.attacker_index} "
                 f"target=({target.x:.0f},{target.y:.0f}) "
-                f"direction=({direction.x:.2f},{direction.y:.2f}) "
-                f"mode={position_mode}",
+                f"direction=({direction.x:.2f},{direction.y:.2f})",
                 flush=True
             )
 
@@ -3702,17 +3564,12 @@ class shot_patience:
         if not slices:
             return intercept_time
 
-        current = prediction_slice_at(agent, intercept_time)
-        if current is None:
-            return intercept_time
-        start = next(
-            (i for i, item in enumerate(slices)
-             if item.game_seconds >= intercept_time),
-            len(slices) - 1
-        )
+        current_time = max(0.0, intercept_time - agent.time)
+        start = max(0, min(round(current_time * 120) - 1, len(slices) - 1))
         if start >= len(slices) - 1:
             return intercept_time
-        current_time = max(0.0, intercept_time - agent.time)
+
+        current = slices[start]
         current_pos = current.physics.location
         current_vel = current.physics.velocity
 
@@ -3731,13 +3588,13 @@ class shot_patience:
 
         speed = agent.me.velocity.flatten().magnitude()
         estimated_speed = max(1000.0, min(2300.0, speed + 650.0))
-        for i in range(start + 1, len(slices)):
+        max_index = min(len(slices) - 1, 600)
+
+        for i in range(start + 1, max_index + 1):
             future = slices[i]
-            if future.game_seconds > agent.time + 5.0:
-                break
             pos = future.physics.location
             vel = future.physics.velocity
-            future_time = future.game_seconds - agent.time
+            future_time = (i + 1) / 120
             if future_time <= current_time + 0.15:
                 continue
 
@@ -3938,20 +3795,12 @@ class jump_shot:
                     agent.push(recovery())
                 return
 
-            ball_slice = prediction_slice_at(agent, self.intercept_time)
-            if ball_slice is None:
-                agent.pop()
-                agent.shooting = False
-                agent.shot_weight = -1
-                agent.shot_time = -1
-                if agent.me.airborne:
-                    agent.push(recovery())
-                return
+            slice_n = round(T * 120) - 1
+            slice_n = max(0, min(slice_n, len(slices) - 1))
 
-            agent.dbg_2d(
-                f"Shot prediction time: {ball_slice.game_seconds:.3f}"
-            )
-            ball = ball_slice.physics.location
+            agent.dbg_2d(f"Shot slice #: {slice_n}")
+
+            ball = slices[slice_n].physics.location
             self.ball_location = Vector(ball.x, ball.y, ball.z)
 
             self.needed_jump_time = virxrlcu.get_jump_time(
@@ -3959,19 +3808,6 @@ class jump_shot:
                 agent.me.velocity.z,
                 agent.gravity.z
             )
-        elif self.jumping and self.counter < 3 and not self.dodging:
-            latest_slice = prediction_slice_at(agent, self.intercept_time)
-            if latest_slice is not None:
-                latest = latest_slice.physics.location
-                latest_ball = Vector(latest.x, latest.y, latest.z)
-                prediction_shift = latest_ball.dist(self.ball_location)
-                if prediction_shift > 60:
-                    print(
-                        f"[SHOT REVALIDATE] prediction shifted "
-                        f"{prediction_shift:.0f}uu before dodge; refreshing contact",
-                        flush=True
-                    )
-                    self.ball_location = latest_ball
 
         # Always aim the contact toward the opponent's goal.
         # Never use car-to-ball direction as the shot direction:
@@ -4626,7 +4462,8 @@ class ground_shot:
                 return
 
             agent.dbg_2d(
-                f"Shot prediction time: {ball_slice.game_seconds:.3f}"
+                f"Shot slice #: {round(T * 120) - 1} "
+                f"/ {len(agent.ball_prediction_struct.slices) - 1}"
             )
 
             ball = ball_slice.physics.location
@@ -5475,15 +5312,16 @@ class wall_shot:
                   flush=True)
             return
 
-        # Resolve the contact by its absolute timestamp, not 120 Hz indexing.
-        ball_slice = prediction_slice_at(agent, self.aerial.intercept_time)
-        if ball_slice is None:
+        # Match the prediction indexing used by the existing Aerial routine.
+        slice_n = math.ceil(T * 120) - 1
+
+        if slice_n < 0 or slice_n >= len(prediction.slices):
             agent.pop()
             agent.shooting = False
-            print("[WALL SHOT] Intercept outside prediction", flush=True)
+            print("[WALL SHOT] Invalid prediction slice", flush=True)
             return
 
-        predicted = ball_slice.physics.location
+        predicted = prediction.slices[slice_n].physics.location
         ball = Vector(predicted.x, predicted.y, predicted.z)
 
         # Only continue while the ball still qualifies as a wall shot.
