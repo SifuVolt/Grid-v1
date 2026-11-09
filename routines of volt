@@ -4528,8 +4528,7 @@ class ground_shot:
                 return
 
             agent.dbg_2d(
-                f"Shot slice #: {round(T * 120) - 1} "
-                f"/ {len(agent.ball_prediction_struct.slices) - 1}"
+                f"Shot prediction time: {ball_slice.game_seconds:.3f}"
             )
 
             ball = ball_slice.physics.location
