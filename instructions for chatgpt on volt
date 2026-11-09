@@ -1158,6 +1158,17 @@ class Bot(VirxERLU):
             )
             if goalie_angle + 0.001 < best_other_angle:
                 attacker = goalie
+                if self.time - getattr(
+                    self, "_last_goalie_angle_debug", -999.0
+                ) >= 0.5:
+                    self._last_goalie_angle_debug = self.time
+                    print(
+                        f"[GOALIE ANGLE CHALLENGE] "
+                        f"goalie={goalie.index} "
+                        f"angle={math.degrees(goalie_angle):.1f}deg "
+                        f"other_best={math.degrees(best_other_angle):.1f}deg",
+                        flush=True
+                    )
 
         transition = next(
             (
