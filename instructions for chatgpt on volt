@@ -1590,7 +1590,13 @@ class Bot(VirxERLU):
                     return
 
             if current_name == "transition_receive":
-                return
+                # Never let a receiving position suppress a new defensive
+                # emergency or continue after the teammate's attack expires.
+                if not active_attack or self.defensive_emergency():
+                    self.clear()
+                    current_name = None
+                else:
+                    return
 
             # Predict the attacker's clear lane before contact, then let the
             # transition_receive routine switch to the actual ball trajectory.
