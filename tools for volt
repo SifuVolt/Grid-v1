@@ -729,6 +729,11 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             targets=(Vector(*targets[0]), Vector(*targets[1])),
             horizon=cap_
         )
+        if grid_aerial_candidate is not None and not (
+            min_aerial_height < grid_aerial_candidate["ball_location"][2]
+            < max_aerial_height
+        ):
+            grid_aerial_candidate = None
 
     # Compare the whole available prediction horizon. The score still values
     # urgency, but it can now select a substantially cleaner later intercept.
@@ -1103,6 +1108,7 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
     best_score = float("inf")
     best_ball_location = None
     grid_candidate = None
+    grid_aerial_candidate = None
 
     if can_double_jump and not agent.me.airborne:
         grid_candidate = grid_find_double_jump(
@@ -1110,6 +1116,17 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
             targets=None,
             horizon=cap_
         )
+
+    if can_aerial:
+        grid_aerial_candidate = grid_find_aerial_launch(
+            agent, targets=None, horizon=cap_
+        )
+        if grid_aerial_candidate is not None and not (
+            min_aerial_height < grid_aerial_candidate["ball_location"][2]
+            < max_aerial_height
+        ):
+            grid_aerial_candidate = None
+
     # Search all sampled slices rather than locking onto the first valid touch.
     for ball_slice in slices:
         intercept_time = ball_slice.game_seconds
@@ -1239,6 +1256,40 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
                         f"height={grid_ball_location.z:.0f}",
                         flush=True
                     )
+    if grid_aerial_candidate is not None:
+        grid_time = grid_aerial_candidate["time"]
+        grid_time_remaining = grid_time - agent.time - (1 / 120)
+        if grid_time_remaining > 0:
+            grid_slice = min(
+                slices,
+                key=lambda s: abs(s.game_seconds - grid_time)
+            )
+            grid_ball = Vector(*grid_aerial_candidate["ball_location"])
+            grid_aerial_shot = {
+                "found": 1,
+                "shot_type": 3,
+                "fast": True,
+                "targets": grid_aerial_candidate["targets"]
+            }
+            grid_score = shot_candidate_score(
+                agent, grid_slice, grid_aerial_shot,
+                grid_time_remaining, target=None
+            )
+            if grid_score < best_score:
+                best_score = grid_score
+                best_shot = grid_aerial_shot
+                best_intercept_time = grid_time
+                best_ball_z = grid_ball.z
+                best_ball_location = grid_ball
+                print(
+                    f"[GRID AERIAL LAUNCH] selected untargeted "
+                    f"T={grid_time_remaining:.2f} "
+                    f"vertical_reach={grid_aerial_candidate['vertical_reach']:.0f} "
+                    f"horizontal_reach={grid_aerial_candidate['reachable']:.0f} "
+                    f"boost={agent.me.boost:.0f} airborne={agent.me.airborne}",
+                    flush=True
+                )
+
     if best_shot is None:
         return None
     time_to_intercept = best_intercept_time - agent.time
