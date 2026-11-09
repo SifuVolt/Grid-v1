@@ -1806,7 +1806,10 @@ class Aerial:
             jump_elapsed = agent.time - self.jump_time
 
             # how much of the jump acceleration time is left
-            tau = max(0.0, jump_max_duration - jump_elapsed)
+            tau = max(
+                0.0,
+                min(jump_max_duration - jump_elapsed, T)
+            )
 
             # impulse from the first jump
             if jump_elapsed == 0:
@@ -1825,7 +1828,7 @@ class Aerial:
 
                 # Include the second-jump impulse in the predicted path only
                 # when there is still enough time for it to contribute.
-                if T > 0.18 and not agent.me.doublejumped:
+                if T > second_jump_delay and not agent.me.doublejumped:
                     vf += agent.me.up * jump_speed
                     xf += agent.me.up * jump_speed * max(
                         0.0, T - second_jump_delay
