@@ -286,7 +286,7 @@ class wall_approach:
             agent.foe_goal.location - ball
         ).flatten().normalize()
         if goal_direction.magnitude() < 0.01:
-            goal_direction = Vector(0, -utils.side(agent.team), 0)
+            goal_direction = Vector(0, -side(agent.team), 0)
 
         contact_target = Vector(
             wall_side * self.WALL_X,
