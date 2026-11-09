@@ -1333,10 +1333,11 @@ class Aerial:
         pitch = math.asin(cap(car.forward.z, -1.0, 1.0))
         roll = math.atan2(-car.right.z, car.up.z)
 
-        # Local angular components: x=roll, y=pitch, z=yaw.
-        roll_rate = angular.x
-        pitch_rate = angular.y
-        yaw_rate = angular.z
+        # RLBot local angular velocity uses x=pitch, y=yaw, z=roll.
+        # This matches Noob Black's rot_vel[0], [1], [2] ordering.
+        pitch_rate = angular.x
+        yaw_rate = angular.y
+        roll_rate = angular.z
         roll_phase = roll - roll_rate / 120.0
 
         pitch_compensation = (
@@ -1358,12 +1359,18 @@ class Aerial:
             * -math.sin(roll_phase)
         )
 
-        agent.controller.pitch = cap(
-            agent.controller.pitch - pitch_compensation, -1, 1
+        corrected_pitch = (
+            agent.controller.pitch - pitch_compensation
         )
-        agent.controller.yaw = cap(
-            agent.controller.yaw - yaw_compensation, -1, 1
+        corrected_yaw = (
+            agent.controller.yaw - yaw_compensation
         )
+
+        # Noob Black scales both axes together to preserve the intended
+        # pitch/yaw ratio instead of clipping each axis independently.
+        largest = max(abs(corrected_pitch), abs(corrected_yaw), 1.0)
+        agent.controller.pitch = corrected_pitch / largest
+        agent.controller.yaw = corrected_yaw / largest
 
     def run(self, agent: VirxERLU):
         if not agent.shooting:
@@ -1787,11 +1794,14 @@ class Aerial:
             # fighting its existing pitch/yaw rotation during the aerial.
             self._apply_noob_black_rotation_damping(agent)
 
-        # Party Cannon-style feedback: estimate how much of the remaining
-        # intercept window is lost turning, then calculate the acceleration
-        # and boost needed to remove the predicted contact-position error.
+        # Party Cannon GetBoostEstimate: predict the car's no-boost
+        # contact state (xf/vf already include Volt's jump model), reserve
+        # time for turning, then estimate boost time, final speed and boost.
         forward = agent.me.forward.normalize()
-        forward_alignment = cap(forward.dot(direction), -1.0, 1.0)
+        acceleration_direction = delta_x.normalize()
+        forward_alignment = cap(
+            forward.dot(acceleration_direction), -1.0, 1.0
+        )
         turn_angle = math.acos(forward_alignment)
         turn_time = 0.6 * (2.0 * math.sqrt(turn_angle / 9.0))
         turn_delay = turn_time * cap(
@@ -1815,35 +1825,45 @@ class Aerial:
         estimated_boost_needed = (
             estimated_boost_time * boost_per_second
         )
+        estimated_final_velocity = (
+            vf
+            + acceleration_direction
+            * available_acceleration
+            * estimated_boost_time
+        )
+        enough_boost = (
+            estimated_boost_needed < agent.me.boost * 0.9
+        )
+        enough_time = abs(boost_ratio) < 0.9
+        enough_speed = (
+            estimated_final_velocity.magnitude() < max_speed * 0.9
+        )
+        party_cannon_aerial_viable = (
+            enough_boost and enough_time and enough_speed
+        )
 
-        # Do not waste boost while the nose is still turning toward the
-        # intercept. Party Cannon waits until the angular error is below
-        # roughly 0.4 radians and then boosts only for a real acceleration need.
+        # Party Cannon's actual flight controller uses offset/T for the
+        # acceleration request and waits until the nose is within 0.4 rad.
         if T > 0:
-            projected_delta_v = (
-                delta_x.dot(forward) / acceleration_time
-            )
+            projected_delta_v = delta_x.dot(forward) / T
+            boost_frame_time = max(dt, 13 / 120)
             boost_threshold = (
-                agent.boost_accel + throttle_accel
-            ) * min_boost_time
+                available_acceleration * boost_frame_time
+            )
 
             if (
                 turn_angle < 0.4
                 and agent.me.boost > 0
                 and projected_delta_v >= boost_threshold
-                and required_acceleration > throttle_accel
             ):
                 agent.controller.boost = True
-                projected_delta_v -= (
-                    agent.boost_accel * min_boost_time
-                )
 
-            if abs(projected_delta_v) >= throttle_accel * min_boost_time:
-                agent.controller.throttle = cap(
-                    projected_delta_v
-                    / (throttle_accel * min_boost_time),
-                    -1, 1
-                )
+            throttle_frame_time = max(dt, 1 / 120)
+            agent.controller.throttle = cap(
+                projected_delta_v
+                / (throttle_accel * throttle_frame_time),
+                -1, 1
+            )
 
         # Once the car has actually left the ground, do not let the
         # conservative pre-launch viability test cancel an aerial mid-flight.
@@ -1866,8 +1886,7 @@ class Aerial:
                     T, agent.boost_accel, tuple(agent.gravity),
                     agent.me.get_raw(agent), tuple(self.target)
                 )
-                or boost_ratio >= 0.9
-                or estimated_boost_needed > agent.me.boost * 0.9
+                or not party_cannon_aerial_viable
             )
         ):
             print(
