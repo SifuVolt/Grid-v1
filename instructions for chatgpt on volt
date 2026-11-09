@@ -2425,7 +2425,7 @@ class Bot(VirxERLU):
                     lane = lane.normalize()
                     lane_distance = min(
                         1050.0,
-                        max(650.0, contact_ball.flat_dist(aim_point) * 0.28)
+                        max(350.0, contact_ball.flat_dist(aim_point) * 0.28)
                     )
                     receive_point = contact_ball + lane * lane_distance
                     receive_plan = {
@@ -2455,7 +2455,11 @@ class Bot(VirxERLU):
             message["score"],
             message["contact_time"],
             message["cover_owner"],
-            message["cover_released"]
+            message["cover_released"],
+            message.get("receive_x"),
+            message.get("receive_y"),
+            message.get("receive_dir_x"),
+            message.get("receive_dir_y")
         )
 
         # Refresh unchanged messages periodically so teammates don't
