@@ -267,10 +267,16 @@ class wall_approach:
             agent.shooting = False
             return
 
+        wall_side = 1 if ball.x >= 0 else -1
+        wall_clearance = 4096.0 - abs(ball.x) - 92.75
+        moving_away_from_wall = wall_side * ball_velocity.x < -180
+
         if (
-            abs(ball.x) < self.MIN_WALL_X
+            wall_clearance > 180
+            or moving_away_from_wall
             or ball.z < self.MIN_BALL_HEIGHT
             or ball.z > self.MAX_BALL_HEIGHT
+            or ball.z < car.location.z + 60
         ):
             print(
                 f"[WALL DRIVE] STOP: left wall window "
@@ -321,7 +327,7 @@ class wall_approach:
             # point while still on the floor; transition onto the wall first.
             drive_target = Vector(
                 wall_side * self.WALL_X,
-                car.location.y,
+                ball.y,
                 max(100, car.location.z)
             )
             drive_phase = "GROUND TO WALL"
