@@ -848,7 +848,11 @@ class Bot(VirxERLU):
 
         Follow Noob Black's 5235-unit goal-plane deadline, but reject
         trajectories that pass outside the posts or above the crossbar.
+        Cache per game tick because role/teamplay logic asks several times.
         """
+        if getattr(self, "_goal_deadline_cache_time", None) == self.time:
+            return self._goal_deadline_cache
+
         prediction = getattr(self, "ball_prediction_struct", None)
         slices = (
             getattr(prediction, "slices", None)
@@ -873,15 +877,22 @@ class Bot(VirxERLU):
                 abs(location.x) <= 800
                 and 0 <= location.z <= 550
             ):
-                return (
+                result = (
                     time_to_goal,
                     Vector(location.x, location.y, location.z)
                 )
+                self._goal_deadline_cache_time = self.time
+                self._goal_deadline_cache = result
+                return result
 
             # The ball has crossed the goal plane outside the scoring opening.
-            return None, None
+            self._goal_deadline_cache_time = self.time
+            self._goal_deadline_cache = (None, None)
+            return self._goal_deadline_cache
 
-        return None, None
+        self._goal_deadline_cache_time = self.time
+        self._goal_deadline_cache = (None, None)
+        return self._goal_deadline_cache
 
     def get_grid_team_roles(self):
         """
