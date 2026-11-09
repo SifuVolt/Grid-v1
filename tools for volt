@@ -1454,10 +1454,39 @@ def find_pass_shot(agent, cap_=4):
 
 
 def _urgent_save_state(agent):
-    """Detect a fast ball travelling deep into our own half toward our goal."""
+    """
+    Detect a predicted own-goal crossing, using Noob Black's five-second
+    goal-plane deadline instead of relying only on current ball speed.
+    """
     ball = agent.ball.location
     velocity = agent.ball.velocity
     team_side = side(agent.team)
+
+    prediction = getattr(agent, "ball_prediction_struct", None)
+    slices = (
+        getattr(prediction, "slices", None)
+        if prediction is not None else None
+    ) or ()
+
+    for ball_slice in slices:
+        time_to_goal = ball_slice.game_seconds - agent.time
+        if time_to_goal <= 0:
+            continue
+        if time_to_goal > 5.0:
+            break
+
+        location = ball_slice.physics.location
+        if location.y * team_side >= 5235:
+            # Count only a trajectory through the goal mouth. The extra
+            # margin accounts for the ball radius at the posts/crossbar.
+            if (
+                abs(location.x) <= 985
+                and 0 <= location.z <= 735
+            ):
+                return True
+            return False
+
+    # Keep the fast-moving-ball fallback for imperfect/short predictions.
     own_goal = agent.friend_goal.location
     to_goal = Vector(
         own_goal.x - ball.x,
@@ -1484,9 +1513,12 @@ def get_slices(agent, cap_):
         return None
 
     max_time = cap_
+    urgent_save = _urgent_save_state(agent)
 
-    # Respect an existing shot's useful window.
-    if agent.shooting and agent.stack:
+    # Respect an existing shot's useful window during ordinary play. A
+    # predicted goal-bound ball overrides that limit: the current shot must
+    # never hide the save window from the intercept search.
+    if not urgent_save and agent.shooting and agent.stack:
         current = agent.stack[0]
 
         if current.__class__.__name__ != "short_shot":
@@ -1495,15 +1527,13 @@ def get_slices(agent, cap_):
             )
 
             if intercept_time is not None:
-                remaining = intercept_time - agent.time
-
-                if 0 <= remaining < 0.5:
+                if 0 <= intercept_time - agent.time < 0.5:
                     return None
 
-                if remaining > 0:
+                if intercept_time > agent.time:
                     max_time = min(
                         max_time,
-                        remaining - 0.05
+                        intercept_time - agent.time - 0.05
                     )
 
     if max_time <= 0.10:
@@ -1511,7 +1541,6 @@ def get_slices(agent, cap_):
 
     selected = []
     last_sample = -999.0
-    urgent_save = _urgent_save_state(agent)
 
     for ball_slice in struct.slices:
         relative_time = ball_slice.game_seconds - agent.time
