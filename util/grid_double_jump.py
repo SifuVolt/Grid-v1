@@ -254,9 +254,10 @@ def find_aerial_launch(agent, targets=None, horizon=6.0):
 
         flat_distance = _flat_distance(contact, car)
         flat_speed = sqrt(velocity[0] ** 2 + velocity[1] ** 2)
+        # In the air, throttle does not provide ground-style acceleration;
+        # horizontal range comes from existing momentum and nose-directed boost.
         horizontal_reach = (
             flat_speed * t
-            + 0.5 * 450.0 * t * t
             + boost_displacement * 0.80
             + 180
         )
