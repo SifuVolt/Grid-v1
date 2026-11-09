@@ -148,12 +148,13 @@ def find_double_jump(agent, targets=None, horizon=5.0):
 
 
 def find_aerial_launch(agent, targets=None, horizon=6.0):
-    """Grid-style aerial candidate: double-jump launch plus boost-assisted flight.
+    """Find a boosted aerial using Grid's double-jump model as its launch.
 
-    Grid's jump model decides whether the car can establish vertical lift.
-    Boost is then budgeted over the remaining flight, rather than treating
-    the double-jump height ceiling as the aerial's final height ceiling.
-    The Aerial routine owns the subsequent continuous steering/boost control.
+    Grounded candidates must have enough time for Grid's first/second-jump
+    launch. The jump polynomial estimates the launch height; boost is then
+    integrated over the remaining flight. Already-airborne cars use their
+    current vertical state and boost instead of pretending they can jump
+    again. Volt's Aerial routine performs the continuous air steering.
     """
     prediction = getattr(agent, "ball_prediction_struct", None)
     slices = getattr(prediction, "slices", None) if prediction else None
@@ -162,9 +163,8 @@ def find_aerial_launch(agent, targets=None, horizon=6.0):
 
     car = _xyz(agent.me.location)
     velocity = _xyz(agent.me.velocity)
-    boost = max(0.0, float(agent.me.boost))
     up = _xyz(agent.me.up)
-    best = None
+    boost = max(0.0, float(agent.me.boost))
 
     if targets is not None:
         left, right = _xyz(targets[0]), _xyz(targets[1])
@@ -172,9 +172,17 @@ def find_aerial_launch(agent, targets=None, horizon=6.0):
     else:
         left = right = target_center = _xyz(agent.foe_goal.location)
 
+    on_side_wall = (
+        abs(agent.me.location.x) > 3500
+        and abs(agent.me.up.x) > 0.65
+        and agent.me.up.x * agent.me.location.x < 0
+    )
+    can_use_grid_launch = not agent.me.airborne or on_side_wall
+    best = None
+
     for ball_slice in slices:
         t = ball_slice.game_seconds - agent.time
-        if t < 0.12:
+        if t < (25 / 120 if can_use_grid_launch else 0.10):
             continue
         if t > horizon:
             break
@@ -185,72 +193,89 @@ def find_aerial_launch(agent, targets=None, horizon=6.0):
         ball = _xyz(bp.location)
         if abs(ball[1]) > 5212.75:
             break
+
         direction = _normalize(_subtract(target_center, ball))
         contact = (
             ball[0] - direction[0] * 92.75,
             ball[1] - direction[1] * 92.75,
             ball[2] - direction[2] * 92.75
         )
-        vertical_gap = contact[2] - car[2]
-        jump_time, jump_amount = new_jump_time(max(vertical_gap, 0.0), True)
 
-        # Aerial may begin from an already airborne car. Grounded launches
-        # need enough time for the Grid double-jump sequence; airborne cars
-        # retain their current vertical velocity and can boost immediately.
-        if agent.me.airborne:
-            launch_time = 0.0
-            launch_vz = velocity[2]
-            launch_height = car[2]
-        else:
+        flight_boost_time = min(t, boost / (100 / 3))
+        boost_acceleration = 991.0
+        boost_displacement = (
+            0.5 * boost_acceleration * flight_boost_time ** 2
+        )
+
+        if can_use_grid_launch:
+            # Grid's jump-time solver provides the unboosted launch timing.
+            # It is deliberately not treated as the aerial's total flight.
+            jump_time, jump_amount = new_jump_time(
+                max(contact[2] - car[2] - velocity[2] * t, 0.0),
+                True
+            )
             if jump_time is None:
                 continue
-            launch_time = min(jump_time + 25 / 120, t)
-            launch_vz = velocity[2] + 2 * 291.6667
-            launch_height = car[2] + new_max_jump_height(True)
 
-        flight_time = max(0.0, t - launch_time)
-        boost_time = min(flight_time, boost / (100 / 3))
-        # Rocket League boost acceleration is approximately 991 uu/s².
-        # Use a conservative projection along current up for candidate
-        # screening; the Aerial controller refines direction every frame.
-        boost_rise = 0.5 * 991.0 * boost_time * boost_time
-        vertical_reach = (
-            launch_height
-            + launch_vz * flight_time
-            + 0.5 * (-650.0) * flight_time * flight_time
-            + boost_rise
-        )
-        if not agent.me.airborne:
-            vertical_reach = max(
-                vertical_reach,
-                car[2] + new_max_jump_height(True)
-                + max(0.0, launch_vz) * flight_time
-                + boost_rise
-                - 325.0 * flight_time * flight_time
+            if t < 25 / 120:
+                jump_height = (
+                    -325.0556640625 * t * t
+                    + 564.9931640625 * t
+                    - 11.6591796875
+                )
+            else:
+                jump_height = (
+                    -325.0556640625 * t * t
+                    + 856.9931640625 * t
+                    - 11.6591796875
+                    - 292 * 25 / 120
+                )
+
+            # Ground and wall launches use the current car-up axis. Boost
+            # direction will be steered during flight, so only credit a
+            # conservative fraction of boost as vertical lift.
+            vertical_up = max(0.20, min(0.90, up[2]))
+            vertical_reach = (
+                car[2] + velocity[2] * t
+                + jump_height
+                + boost_displacement * vertical_up
+            )
+        else:
+            jump_time, jump_amount = 0.0, 0
+            vertical_reach = (
+                car[2] + velocity[2] * t
+                - 325.0 * t * t
+                + boost_displacement * max(0.20, min(0.90, up[2]))
             )
 
-        if contact[2] > vertical_reach + 110:
+        if contact[2] > vertical_reach + 100:
             continue
 
-        # Horizontal travel is estimated from current speed and available
-        # boost; avoid rejecting useful high contacts just because jump
-        # height alone cannot reach them.
         flat_distance = _flat_distance(contact, car)
         flat_speed = sqrt(velocity[0] ** 2 + velocity[1] ** 2)
-        boost_distance = 0.5 * 991.0 * boost_time * boost_time
-        horizontal_reach = flat_speed * t + 0.5 * 500.0 * t * t + boost_distance + 180
+        horizontal_reach = (
+            flat_speed * t
+            + 0.5 * 450.0 * t * t
+            + boost_displacement * 0.80
+            + 180
+        )
         if flat_distance > horizontal_reach:
             continue
 
         candidate = {
-            "found": 1, "shot_type": 3, "fast": True,
+            "found": 1,
+            "shot_type": 3,
+            "fast": True,
             "targets": (tuple(left), tuple(right)),
-            "time": ball_slice.game_seconds, "ball_location": ball,
-            "contact_location": contact, "jump_time": jump_time or 0.0,
-            "jump_amount": 2 if not agent.me.airborne else 0,
+            "time": ball_slice.game_seconds,
+            "ball_location": ball,
+            "contact_location": contact,
+            "jump_time": jump_time,
+            "jump_amount": jump_amount,
             "reachable": horizontal_reach,
             "vertical_reach": vertical_reach
         }
         if best is None or candidate["time"] < best["time"]:
             best = candidate
+
     return best
