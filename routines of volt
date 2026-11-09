@@ -242,9 +242,14 @@ class wall_approach:
             agent.shooting = False
             return
 
-        slice_n = max(
-            0,
-            min(len(prediction.slices) - 1, round(max(0.0, T) * 120))
+        # Resolve the prediction by its timestamp. Slice arrays are not
+        # guaranteed to be sampled at 120 Hz.
+        predicted_time = agent.time + max(0.0, T)
+        slice_n = min(
+            range(len(prediction.slices)),
+            key=lambda i: abs(
+                prediction.slices[i].game_seconds - predicted_time
+            )
         )
         physics = prediction.slices[slice_n].physics
         ball = Vector(
@@ -4271,8 +4276,7 @@ class jump_shot:
                 )
 
                 close_enough = (
-                    agent.me.location.dist(self.offset_target)
-                    < (92.75 + hitbox.length) * 1.02
+                    nose_to_contact.magnitude() <= 250
                     or (
                         low_boost_dodge
                         and nose_to_contact.magnitude() <= 420
