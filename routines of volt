@@ -1322,24 +1322,55 @@ class Aerial:
 
         return desired_direction.normalize()
 
-    @staticmethod
-    def _apply_noob_black_rotation_damping(agent):
+    def _apply_noob_black_rotation_damping(self, agent):
         """
-        Apply Noob Black's angular-velocity compensation to the aerial PD
-        output. The agent stores angular velocity in car-local coordinates.
+        Apply Noob Black's angular-rate compensation using Euler-angle
+        differences, matching its pitch/yaw/roll rot_vel calculation.
         """
         car = agent.me
-        angular = car.angular_velocity
         pitch = math.asin(cap(car.forward.z, -1.0, 1.0))
+        yaw = math.atan2(car.forward.y, car.forward.x)
         roll = math.atan2(-car.right.z, car.up.z)
 
-        # RLBot local angular velocity uses x=pitch, y=yaw, z=roll.
-        # This matches Noob Black's rot_vel[0], [1], [2] ordering.
-        pitch_rate = angular.x
-        yaw_rate = angular.y
-        roll_rate = angular.z
-        roll_phase = roll - roll_rate / 120.0
+        previous_time = getattr(
+            self, "_nb_rotation_sample_time", None
+        )
+        previous_pitch = getattr(
+            self, "_nb_previous_pitch", None
+        )
+        previous_yaw = getattr(
+            self, "_nb_previous_yaw", None
+        )
+        previous_roll = getattr(
+            self, "_nb_previous_roll", None
+        )
 
+        pitch_rate = yaw_rate = roll_rate = 0.0
+        if (
+            previous_time is not None
+            and previous_pitch is not None
+            and previous_yaw is not None
+            and previous_roll is not None
+        ):
+            elapsed = max(agent.time - previous_time, 1 / 240)
+            yaw_delta = math.atan2(
+                math.sin(yaw - previous_yaw),
+                math.cos(yaw - previous_yaw)
+            )
+            roll_delta = math.atan2(
+                math.sin(roll - previous_roll),
+                math.cos(roll - previous_roll)
+            )
+            pitch_rate = (pitch - previous_pitch) / elapsed
+            yaw_rate = yaw_delta / elapsed * math.cos(pitch)
+            roll_rate = roll_delta / elapsed
+
+        self._nb_rotation_sample_time = agent.time
+        self._nb_previous_pitch = pitch
+        self._nb_previous_yaw = yaw
+        self._nb_previous_roll = roll
+
+        roll_phase = roll - roll_rate / 120.0
         pitch_compensation = (
             math.sqrt(abs(pitch_rate) / 6.23)
             * sign(pitch_rate)
