@@ -358,8 +358,32 @@ class wall_approach:
             agent.shooting = False
             return
 
+        wall_gap = max(0.0, 4096.0 - abs(ball.x) - 92.75)
+        distance_to_ball = car.location.dist(ball)
+
+        # If the predicted ball is meaningfully off the wall, stop trying
+        # to drive into its centre. Once attached to the matching wall and
+        # close enough, launch the existing Aerial routine. Aerial.run has
+        # an explicit same-wall double-jump launch path.
+        wall_aerial_ready = (
+            on_wall
+            and wall_gap > 100
+            and 0.55 < T <= 1.75
+            and distance_to_ball < max(700.0, min(1500.0, T * 900.0))
+        )
+        if wall_aerial_ready:
+            print(
+                f"[WALL DRIVE] WALL AERIAL HANDOFF "
+                f"gap={wall_gap:.0f} distance={distance_to_ball:.0f} T={T:.2f}",
+                flush=True
+            )
+            agent.pop()
+            agent.push(Aerial(self.intercept_time, self.targets, True))
+            return
+
         if on_wall:
-            # Once attached, follow the predicted contact point along the wall.
+            # For a true wall touch, follow the predicted contact point along
+            # the wall. Off-wall contacts are handled by the aerial handoff.
             drive_target = contact_target
             drive_phase = "WALL CLIMB"
         else:
