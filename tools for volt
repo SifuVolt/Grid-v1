@@ -67,10 +67,10 @@ def find_wall_drive(agent, cap_=4.0):
         # the wall, or one whose normal velocity is carrying it into the wall;
         # reject a ball travelling away from it at speed.
         normal_speed = wall_side * vel.x
-        tangent_speed = abs(vel.y)
+        tangent_speed = math.hypot(vel.y, vel.z)
         stable_on_wall = abs(normal_speed) <= 180
         rolling_into_wall = normal_speed > 80
-        if not (stable_on_wall or rolling_into_wall) or tangent_speed < 80 and abs(vel.z) > 900:
+        if not (stable_on_wall or rolling_into_wall) or tangent_speed < 80:
             motion_reject += 1
             continue
 
