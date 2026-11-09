@@ -203,7 +203,7 @@ class wave_dash:
                 agent.controller.pitch = 0
 
 class wall_approach:
-    WALL_X = 3970
+    WALL_X = 4050
     MIN_BALL_HEIGHT = 190
     # Ball centre must be within 180 units of the side-wall surface.
     MIN_WALL_X = 3820
