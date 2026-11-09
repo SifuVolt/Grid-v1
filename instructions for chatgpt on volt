@@ -541,12 +541,11 @@ class Bot(VirxERLU):
         # the role changes away from goalie so it cannot immediately peel out.
         goalie_role = False
         if self.friends:
-            attacker_index, goalie_index, _ = self.get_grid_team_roles()
-            goalie_role = (
-                goalie_index == self.me.index
-                and attacker_index != self.me.index
-            )
+            _, goalie_index, _ = self.get_grid_team_roles()
+            goalie_role = goalie_index == self.me.index
 
+        # Refresh this timestamp every tick while assigned goalie. Once the
+        # role is lost, keep the rolling-ball clear disabled for five seconds.
         if goalie_role:
             self._last_goalie_role_time = self.time
             return False
