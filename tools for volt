@@ -1344,6 +1344,50 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
             elif projected_lateral < -half_goal_width + 92.75:
                 approach_side = "right"
 
+        # Untargeted shots use the same two-sided runaround search as
+        # goal-directed shots; do not limit side contacts to post misses.
+        if approach_side is None and (
+            best_ball_location.z <= 420
+            and best_ball_location.y * side(agent.team) < -250
+            and ball_velocity.flatten().magnitude() >= 250
+            and time_to_intercept >= 0.75
+        ):
+            shot_direction = (
+                goal_center - best_ball_location
+            ).flatten().normalize()
+            left_of_shot = Vector(
+                -shot_direction.y, shot_direction.x, 0
+            ).normalize()
+            lateral_distance = cap(
+                agent.me.location.flat_dist(best_ball_location) * 0.22,
+                350, 650
+            )
+            setup_speed = max(
+                1000,
+                min(1700, agent.me.velocity.flatten().magnitude() + 500)
+            )
+            best_setup = None
+            for candidate_side in ("left", "right"):
+                side_sign = 1 if candidate_side == "right" else -1
+                setup = (
+                    best_ball_location
+                    - left_of_shot * lateral_distance * side_sign
+                )
+                local_setup = agent.me.local_location(setup)
+                turn_angle = abs(Vector(x=1).angle2D(local_setup))
+                setup_distance = agent.me.location.flat_dist(setup)
+                setup_time = setup_distance / setup_speed + turn_angle * 0.30
+                if (
+                    time_to_intercept > setup_time + 0.40
+                    and abs(setup.x) < 3900
+                    and abs(setup.y) < 4900
+                ):
+                    candidate = (setup_time, candidate_side)
+                    if best_setup is None or candidate[0] < best_setup[0]:
+                        best_setup = candidate
+            if best_setup is not None:
+                approach_side = best_setup[1]
+
         if approach_side is not None:
             shot_direction = (
                 goal_center - best_ball_location
