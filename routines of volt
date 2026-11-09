@@ -2997,29 +2997,28 @@ class transition_receive:
             planned_y = message.get("receive_y") if message else None
             planned_dx = message.get("receive_dir_x") if message else None
             planned_dy = message.get("receive_dir_y") if message else None
+            planned_target = None
             if all(value is not None for value in (
                 planned_x, planned_y, planned_dx, planned_dy
             )):
-                target = self._clamp_target(
+                planned_target = self._clamp_target(
                     Vector(float(planned_x), float(planned_y), 0)
                 )
                 direction = Vector(
                     float(planned_dx), float(planned_dy), 0
                 ).normalize()
-                self.last_target = target
-                return target, direction
-
-            # Fallback for old teammates or a temporarily unavailable plan.
-            direction = (
-                attacker.forward.flatten()
-                if attacker is not None
-                else ball_velocity
-            )
-            if direction.magnitude() < 0.1:
-                direction = ball_velocity
-            if direction.magnitude() < 0.1:
-                direction = Vector(0, -side(agent.team), 0)
-            direction = direction.normalize()
+            else:
+                # Fallback for old teammates or a temporarily unavailable plan.
+                direction = (
+                    attacker.forward.flatten()
+                    if attacker is not None
+                    else ball_velocity
+                )
+                if direction.magnitude() < 0.1:
+                    direction = ball_velocity
+                if direction.magnitude() < 0.1:
+                    direction = Vector(0, -side(agent.team), 0)
+                direction = direction.normalize()
         else:
             # Once contact is detected, trust the ball's real trajectory.
             direction = ball_velocity
@@ -3033,8 +3032,13 @@ class transition_receive:
                 direction = Vector(0, -side(agent.team), 0)
             direction = direction.normalize()
 
-        # About 2-3 car lengths beyond the expected/actual contact path.
-        target = self._clamp_target(ball + direction * 1450)
+        # Use the attacker's communicated receive lane when available.
+        # Otherwise build a support point beyond the expected/actual path.
+        target = self._clamp_target(
+            planned_target
+            if not self.hit_detected and planned_target is not None
+            else ball + direction * 1450
+        )
 
         if not self.hit_detected and attacker is not None:
             # The receiver should occupy the other side of the attacker,
