@@ -1821,13 +1821,11 @@ class Bot(VirxERLU):
                     return
 
         # Keep a started half-flip intact until its own routine finishes.
-        if current_name == "half_flip":
+        if current_name == "half_flip" and not urgent_goal_save:
             return
 
         if self.should_defensive_aerial():
-            if current_name == "Aerial" and (
-                not urgent_goal_save or self.me.airborne
-            ):
+            if current_name == "Aerial" and not urgent_goal_save:
                 return
 
             # Don't interrupt an active flip or recovery.
