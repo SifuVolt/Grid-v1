@@ -1,4 +1,4 @@
-from util.routines import Aerial, double_jump, ground_shot, jump_shot, side_shot, virxrlcu, wall_approach
+from util.routines import (Aerial, double_jump, ground_shot, jump_shot, side_shot, virxrlcu, wall_approach, prediction_slice_at)
 from util.utils import Vector, math, side, cap
 from util.grid_double_jump import find_double_jump as grid_find_double_jump
 
@@ -53,12 +53,17 @@ def find_wall_drive(agent, cap_=4.0):
     # may still be on the floor while its predicted path is already climbing
     # one of the two long side walls.
     speed = math.hypot(car.velocity.x, car.velocity.y)
-    effective_speed = max(1200.0, min(2200.0, speed + 800.0))
     best = None
-    max_index = min(len(slices), int(cap_ * 120))
 
-    for index in range(12, max_index):
-        ball_slice = slices[index]
+    # Walk the real timestamped prediction horizon. The car physics model
+    # uses 120 Hz, but prediction slices are not 120 Hz.
+    for ball_slice in slices:
+        intercept_in = ball_slice.game_seconds - agent.time
+        if intercept_in > cap_:
+            break
+        if intercept_in < 0.18:
+            continue
+
         physics = ball_slice.physics
         loc = physics.location
         vel = physics.velocity
@@ -74,7 +79,6 @@ def find_wall_drive(agent, cap_=4.0):
             reject_height += 1
             continue
 
-        intercept_in = ball_slice.game_seconds - agent.time
         if intercept_in <= 0:
             continue
 
@@ -109,6 +113,16 @@ def find_wall_drive(agent, cap_=4.0):
                 min(1.0, flat_forward.normalize().dot(flat_delta.normalize()))
             )
 
+        boost_time = min(
+            max(0.0, car.boost) / 33.333,
+            intercept_in * 0.65
+        )
+        boost_accel = max(0.0, float(getattr(agent, "boost_accel", 991.0)))
+        boost_speed_gain = min(500.0, boost_accel * boost_time * 0.22)
+        effective_speed = max(
+            1200.0,
+            min(2200.0, speed + 650.0 + boost_speed_gain)
+        )
         eta = (
             distance / effective_speed
             + max(0.0, 1.0 - facing) * 0.30
@@ -632,15 +646,13 @@ def within_elevated_dodge_angle(agent, time_to_intercept, max_angle=75):
     if prediction is None or not prediction.slices:
         return False
 
-    slice_n = max(
-        0,
-        min(
-            len(prediction.slices) - 1,
-            math.ceil(time_to_intercept * 120) - 1
-        )
+    ball_slice = prediction_slice_at(
+        agent, agent.time + max(0.0, time_to_intercept), round_up=True
     )
+    if ball_slice is None:
+        return False
 
-    physics = prediction.slices[slice_n].physics
+    physics = ball_slice.physics
     ball_location = Vector(
         physics.location.x,
         physics.location.y,
@@ -913,9 +925,8 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             best_shot["fast"]
         )
     elif best_shot["shot_type"] in (0, 1) and can_jump:
-        # A side shot is a goal-line correction, not a half-field choice.
-        # Project the rolling ball to the opponent goal line and only use
-        # the side dodge when its path would pass outside a post.
+        # Keep the goal-line correction, but also consider a deliberate
+        # runaround when a low/elevated ball is in the attacking half.
         intercept_slice = min(
             slices,
             key=lambda s: abs(s.game_seconds - best_intercept_time)
@@ -961,18 +972,66 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             elif projected_lateral < -half_goal_width + 92.75:
                 approach_side = "right"
 
-        side_shot_selected = False
-        if approach_side is not None:
-            goal_center = Vector(
-                (best_targets[0][0] + best_targets[1][0]) * 0.5,
-                goal_y,
-                (best_targets[0][2] + best_targets[1][2]) * 0.5
-            )
-            shot_direction = (goal_center - best_ball_location).flatten().normalize()
+        # If the normal shot is not already a post-correction, test both
+        # sides of the ball. The best side is selected by turn-aware travel
+        # time, not by a fixed left/right preference.
+        side_setup_choice = None
+        attacking_half = best_ball_location.y * side(agent.team) < -250
+        if (
+            approach_side is None
+            and best_ball_location.z <= 420
+            and attacking_half
+            and ball_velocity.flatten().magnitude() >= 250
+            and time_to_intercept >= 0.75
+        ):
             left_of_shot = Vector(
                 -shot_direction.y, shot_direction.x, 0
             ).normalize()
-            lateral_distance = cap(agent.me.location.flat_dist(best_ball_location) * 0.22, 350, 650)
+            lateral_distance = cap(
+                agent.me.location.flat_dist(best_ball_location) * 0.22,
+                350, 650
+            )
+            setup_speed = max(
+                1000,
+                min(1700, agent.me.velocity.flatten().magnitude() + 500)
+            )
+            for candidate_side in ("left", "right"):
+                side_sign = 1 if candidate_side == "right" else -1
+                setup = (
+                    best_ball_location
+                    - left_of_shot * lateral_distance * side_sign
+                )
+                local_setup = agent.me.local_location(setup)
+                turn_angle = abs(Vector(x=1).angle2D(local_setup))
+                setup_distance = agent.me.location.flat_dist(setup)
+                setup_time = setup_distance / setup_speed + turn_angle * 0.30
+                if (
+                    abs(setup.x) < 3900
+                    and abs(setup.y) < 4900
+                    and time_to_intercept > setup_time + 0.40
+                ):
+                    candidate = (
+                        setup_time + max(0.0, 0.55 - abs(local_setup.x) /
+                                         max(1.0, setup_distance)) * 0.20,
+                        candidate_side,
+                        setup_distance,
+                        setup_time
+                    )
+                    if side_setup_choice is None or candidate[0] < side_setup_choice[0]:
+                        side_setup_choice = candidate
+
+        if approach_side is None and side_setup_choice is not None:
+            _, approach_side, _, _ = side_setup_choice
+
+        side_shot_selected = False
+        if approach_side is not None:
+            left_of_shot = Vector(
+                -shot_direction.y, shot_direction.x, 0
+            ).normalize()
+            lateral_distance = cap(
+                agent.me.location.flat_dist(best_ball_location) * 0.22,
+                350, 650
+            )
             side_sign = 1 if approach_side == "right" else -1
             side_setup = (
                 best_ball_location
@@ -1000,10 +1059,11 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                 side_shot_selected = True
                 print(
                     f"[SHOT PLANNER] selected {approach_side} side_shot "
-                    f"projected_x={projected_goal_x:.0f} "
+                    f"projected_x={projected_goal_x if projected_goal_x is not None else float('nan'):.0f} "
                     f"T={time_to_intercept:.2f} "
                     f"setup_distance={side_setup_distance:.0f} "
-                    f"travel_estimate={side_setup_time:.2f}",
+                    f"travel_estimate={side_setup_time:.2f} "
+                    f"mode={'post-correction' if rolling_toward_goal and projected_goal_x is not None else 'runaround'}",
                     flush=True
                 )
 
