@@ -781,7 +781,7 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                 if time_remaining < required_sequence_time:
                     continue
 
-            if not useful_non_aerial_shot(
+            if not save_mode and not useful_non_aerial_shot(
                 agent,
                 ball_location,
                 ball_slice.physics.velocity,
@@ -845,7 +845,7 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                 "targets": grid_candidate["targets"]
             }
 
-            if useful_non_aerial_shot(
+            if save_mode or useful_non_aerial_shot(
                 agent,
                 grid_ball_tuple,
                 grid_slice.physics.velocity,
@@ -895,7 +895,7 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                 "fast": True,
                 "targets": grid_aerial_candidate["targets"]
             }
-            if useful_non_aerial_shot(
+            if save_mode or useful_non_aerial_shot(
                 agent, grid_ball_tuple, grid_slice.physics.velocity,
                 grid_aerial_shot, grid_time
             ):
@@ -1109,6 +1109,15 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
     best_intercept_time = None
     best_score = float("inf")
     best_ball_location = None
+    save_mode = _urgent_save_state(agent)
+    if save_mode:
+        print(
+            f"[SAVE INTERCEPT] earliest-contact untargeted mode | "
+            f"ball=({agent.ball.location.x:.0f},"
+            f"{agent.ball.location.y:.0f},"
+            f"{agent.ball.location.z:.0f})",
+            flush=True
+        )
     grid_candidate = None
     grid_aerial_candidate = None
 
@@ -1175,7 +1184,7 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
         if shot['found'] != 1:
             continue
 
-        if not useful_non_aerial_shot(
+        if not save_mode and not useful_non_aerial_shot(
             agent,
             ball_location,
             ball_slice.physics.velocity,
@@ -1184,15 +1193,24 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
         ):
             continue
 
-        # No fixed goal target is supplied for find_any_shot.
-        # Score its approach direction and likely contact quality instead.
-        score = shot_candidate_score(
-            agent,
-            ball_slice,
-            shot,
-            time_remaining,
-            target=None
-        )
+        if save_mode:
+            save_type_penalty = {
+                0: 0.000,
+                1: 0.005,
+                2: 0.015,
+                3: 0.025
+            }.get(shot.get("shot_type", 0), 0.02)
+            score = time_remaining + save_type_penalty
+        else:
+            # No fixed goal target is supplied for find_any_shot.
+            # Score its approach direction and likely contact quality instead.
+            score = shot_candidate_score(
+                agent,
+                ball_slice,
+                shot,
+                time_remaining,
+                target=None
+            )
 
         if score < best_score:
             best_score = score
@@ -1229,19 +1247,23 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
                 "targets": grid_candidate["targets"]
             }
 
-            if useful_non_aerial_shot(
+            if save_mode or useful_non_aerial_shot(
                 agent,
                 grid_ball_tuple,
                 grid_slice.physics.velocity,
                 grid_shot,
                 grid_time
             ):
-                grid_score = shot_candidate_score(
-                    agent,
-                    grid_slice,
-                    grid_shot,
-                    grid_time_remaining,
-                    target=None
+                grid_score = (
+                    grid_time_remaining + 0.015
+                    if save_mode
+                    else shot_candidate_score(
+                        agent,
+                        grid_slice,
+                        grid_shot,
+                        grid_time_remaining,
+                        target=None
+                    )
                 )
 
                 if grid_score < best_score:
@@ -1273,9 +1295,13 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
                 "fast": True,
                 "targets": grid_aerial_candidate["targets"]
             }
-            grid_score = shot_candidate_score(
-                agent, grid_slice, grid_aerial_shot,
-                grid_time_remaining, target=None
+            grid_score = (
+                grid_time_remaining + 0.025
+                if save_mode
+                else shot_candidate_score(
+                    agent, grid_slice, grid_aerial_shot,
+                    grid_time_remaining, target=None
+                )
             )
             if grid_score < best_score:
                 best_score = grid_score
