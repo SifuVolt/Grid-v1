@@ -74,7 +74,7 @@ def find_wall_drive(agent, cap_=4.0):
             motion_reject += 1
             continue
 
-        target = Vector(wall_side * 3970, loc.y, max(100.0, loc.z - 35))
+        target = Vector(wall_side * 4050, loc.y, max(100.0, loc.z - 35))
         delta = target - car.location
         if on_side_wall:
             route_distance = delta.magnitude()
