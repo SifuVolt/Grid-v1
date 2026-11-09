@@ -2951,7 +2951,8 @@ class transition_receive:
 
         target, direction = self.get_target(agent)
         self.goto.target = target
-        self.goto.vector = direction * 1000
+        # goto.vector is a world-space point to face, not a direction vector.
+        self.goto.vector = target + direction * 1000
         self.goto.brake = False
 
         if (
