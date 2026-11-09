@@ -1576,12 +1576,16 @@ class Aerial:
                     and T > 0.55
                 )
 
-                # Volt aerials always use a double-jump launch. There is
-                # no single-jump aerial variant; abort if the second jump
-                # cannot be executed before the predicted contact.
-                if T <= jump_max_duration + (2 / 120):
+                # Prefer the fast double-jump launch, but do not throw away
+                # a reachable aerial just because the second jump is tight.
+                # In the short window, use the first jump and preserve the
+                # second jump for the contact dodge.
+                minimum_launch_time = 0.08
+                double_jump_window = jump_max_duration + (2 / 120)
+
+                if T <= minimum_launch_time:
                     print(
-                        f"[AERIAL ABORT] insufficient time for double jump T={T:.2f}",
+                        f"[AERIAL ABORT] too little launch time T={T:.3f}",
                         flush=True
                     )
                     agent.pop()
@@ -1589,8 +1593,16 @@ class Aerial:
                     agent.push(ball_recovery())
                     return
 
-                self.jump_type_fast = True
+                self.jump_type_fast = T > double_jump_window
                 self.jumping = True
+
+                if not self.jump_type_fast:
+                    print(
+                        f"[AERIAL SINGLE-JUMP FALLBACK] "
+                        f"T={T:.3f} double_jump_window={double_jump_window:.3f}; "
+                        f"preserving second jump for contact",
+                        flush=True
+                    )
 
                 if wall_double_jump:
                     print(
@@ -1740,7 +1752,32 @@ class Aerial:
             if delta_v >= throttle_accel * min_boost_time:
                 agent.controller.throttle = cap(delta_v / (throttle_accel * min_boost_time), -1, 1)
 
-        if T <= -0.4 or (not self.jumping and T > 1.5 and not virxrlcu.aerial_shot_is_viable(T, agent.boost_accel, tuple(agent.gravity), agent.me.get_raw(agent), tuple(self.target))):
+        # Once the car has actually left the ground, do not let the
+        # conservative pre-launch viability test cancel an aerial mid-flight.
+        # Keep the expiry check as the hard stop after the contact window.
+        if T <= -0.4:
+            print(
+                f"[AERIAL CANCEL] intercept expired T={T:.3f} "
+                f"jumping={self.jumping} airborne={agent.me.airborne}",
+                flush=True
+            )
+            agent.pop()
+            agent.shooting = False
+            agent.push(ball_recovery())
+        elif (
+            not self.jumping
+            and not agent.me.airborne
+            and T > 1.5
+            and not virxrlcu.aerial_shot_is_viable(
+                T, agent.boost_accel, tuple(agent.gravity),
+                agent.me.get_raw(agent), tuple(self.target)
+            )
+        ):
+            print(
+                f"[AERIAL CANCEL] pre-launch viability failed T={T:.3f} "
+                f"boost={agent.me.boost:.0f}",
+                flush=True
+            )
             agent.pop()
             agent.shooting = False
             agent.push(ball_recovery())
