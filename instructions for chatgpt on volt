@@ -1587,12 +1587,17 @@ class Bot(VirxERLU):
                 self.push(routines.goto_boost(closest_boost))
 
 
+        # Check goal-crossing deadlines before stack-specific early returns.
+        goal_save_deadline, _ = self.get_goal_crossing_deadline()
+        urgent_goal_save = goal_save_deadline is not None
+
         # A selected wall-drive is a committed surface-driving action.
         # Keep it alive until its own routine ends; teamplay/shot selection
         # must not replace it on the next packet.
         if (
             not self.is_clear()
             and self.stack[0].__class__.__name__ == "wall_approach"
+            and not urgent_goal_save
         ):
             # Once the wall drive has attached to the matching side wall,
             # look for an aerial intercept. The aerial routine owns the
@@ -1651,8 +1656,6 @@ class Bot(VirxERLU):
         side = utils.side(self.team)
         ball_depth = self.ball.location.y * side
         fast_intercept_zone = 0 < ball_depth <= 1280
-        goal_save_deadline, _ = self.get_goal_crossing_deadline()
-        urgent_goal_save = goal_save_deadline is not None
         if (
             urgent_goal_save
             and self.time - getattr(
@@ -1702,6 +1705,7 @@ class Bot(VirxERLU):
                 }
                 and ball_depth < 1280
                 and not self.defensive_emergency()
+                and not urgent_goal_save
             )
 
             # A bump is only valid while the teammate's attack is still live.
@@ -1713,7 +1717,11 @@ class Bot(VirxERLU):
             # When the attacker is actively playing the ball, use the
             # transition player to remove a defender screening the direct
             # route to goal. Never trade away an urgent defensive recovery.
-            if active_attack and not self.defensive_emergency():
+            if (
+                active_attack
+                and not self.defensive_emergency()
+                and not urgent_goal_save
+            ):
                 bump_target = self.get_transition_bump_target(attacker)
 
                 if current_name == "transition_bump":
@@ -1755,7 +1763,11 @@ class Bot(VirxERLU):
             if current_name == "transition_receive":
                 # Never let a receiving position suppress a new defensive
                 # emergency or continue after the teammate's attack expires.
-                if not active_attack or self.defensive_emergency():
+                if (
+                    not active_attack
+                    or self.defensive_emergency()
+                    or urgent_goal_save
+                ):
                     self.clear()
                     current_name = None
                 else:
@@ -1813,7 +1825,9 @@ class Bot(VirxERLU):
             return
 
         if self.should_defensive_aerial():
-            if current_name == "Aerial":
+            if current_name == "Aerial" and (
+                not urgent_goal_save or self.me.airborne
+            ):
                 return
 
             # Don't interrupt an active flip or recovery.
@@ -1864,7 +1878,7 @@ class Bot(VirxERLU):
         
                 # DANGEROUS OWN-GOAL THREAT:
         # Never let an ordinary jump shot override an emergency clear.
-        if self.ball_in_goal_danger():
+        if self.ball_in_goal_danger() and not urgent_goal_save:
             current_name = (
                 self.stack[0].__class__.__name__
                 if not self.is_clear()
@@ -2098,7 +2112,7 @@ class Bot(VirxERLU):
         
         # Give an incoming rolling ball priority over boost collection
         # and ordinary shot selection.
-        if self.ball_rolling_toward_me():
+        if self.ball_rolling_toward_me() and not urgent_goal_save:
 
             current_name = (
                 self.stack[-1].__class__.__name__
