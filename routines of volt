@@ -1367,10 +1367,11 @@ class Aerial:
         )
 
         # Noob Black scales both axes together to preserve the intended
-        # pitch/yaw ratio instead of clipping each axis independently.
-        largest = max(abs(corrected_pitch), abs(corrected_yaw), 1.0)
-        agent.controller.pitch = corrected_pitch / largest
-        agent.controller.yaw = corrected_yaw / largest
+        # pitch/yaw ratio and use the full available control range.
+        largest = max(abs(corrected_pitch), abs(corrected_yaw))
+        if largest > 0.0001:
+            agent.controller.pitch = corrected_pitch / largest
+            agent.controller.yaw = corrected_yaw / largest
 
     @staticmethod
     def _party_cannon_boost_estimate(
