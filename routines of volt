@@ -2778,6 +2778,64 @@ class fast_intercept_finder:
             slices[-1].game_seconds
         )
 
+        # For ten seconds after kickoff resolves, deliberately search
+        # reachable aerial contacts before accepting a ground/jump option.
+        # This makes aerials a preference, not a requirement: normal shot
+        # selection remains the fallback when no aerial can reach the ball.
+        kickoff_aerial_window = (
+            agent.time < getattr(agent, "kickoff_contest_until", -999.0)
+        )
+        if kickoff_aerial_window:
+            for ball_slice in slices:
+                intercept_time = ball_slice.game_seconds
+                if intercept_time < first_time:
+                    continue
+                if intercept_time > end_time:
+                    break
+
+                T = intercept_time - agent.time - (1 / 120)
+                if T <= 0:
+                    continue
+
+                physics = ball_slice.physics
+                location = physics.location
+                if abs(location.y) > 5212.75:
+                    break
+
+                ball_info = (
+                    (location.x, location.y, location.z),
+                    (
+                        physics.velocity.x,
+                        physics.velocity.y,
+                        physics.velocity.z
+                    )
+                )
+
+                aerial_result = virxrlcu.parse_slice_for_shot(
+                    False,
+                    False,
+                    False,
+                    True,
+                    T,
+                    *game_info,
+                    gravity,
+                    ball_info,
+                    me
+                )
+
+                if aerial_result.get("found") == 1 and int(
+                    aerial_result["shot_type"]
+                ) == 3:
+                    print(
+                        f"[KICKOFF AERIAL BIAS] reachable aerial "
+                        f"at {intercept_time - agent.time:.2f}s",
+                        flush=True
+                    )
+                    return Aerial(
+                        intercept_time,
+                        fast_aerial=bool(aerial_result.get("fast", True))
+                    )
+
         for ball_slice in slices:
             intercept_time = ball_slice.game_seconds
 
