@@ -2548,9 +2548,3 @@ class Bot(VirxERLU):
             self.print(quick_chat)
 if __name__ == "__main__":
     Bot().run()
-from util.agent import Vector, VirxERLU
-
-import json
-import math
-
-
