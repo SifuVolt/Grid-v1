@@ -703,13 +703,7 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
     best_score = float("inf")
     best_ball_location = None
     save_mode = _urgent_save_state(agent)
-    if (
-        save_mode
-        and agent.time - getattr(
-            agent, "_last_save_intercept_debug", -999.0
-        ) >= 0.5
-    ):
-        agent._last_save_intercept_debug = agent.time
+    if save_mode:
         print(
             f"[SAVE INTERCEPT] earliest-contact mode | "
             f"ball=({agent.ball.location.x:.0f},{agent.ball.location.y:.0f},"
@@ -787,7 +781,7 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                 if time_remaining < required_sequence_time:
                     continue
 
-            if not save_mode and not useful_non_aerial_shot(
+            if not useful_non_aerial_shot(
                 agent,
                 ball_location,
                 ball_slice.physics.velocity,
@@ -851,7 +845,7 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                 "targets": grid_candidate["targets"]
             }
 
-            if save_mode or useful_non_aerial_shot(
+            if useful_non_aerial_shot(
                 agent,
                 grid_ball_tuple,
                 grid_slice.physics.velocity,
@@ -901,7 +895,7 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                 "fast": True,
                 "targets": grid_aerial_candidate["targets"]
             }
-            if save_mode or useful_non_aerial_shot(
+            if useful_non_aerial_shot(
                 agent, grid_ball_tuple, grid_slice.physics.velocity,
                 grid_aerial_shot, grid_time
             ):
@@ -1115,21 +1109,6 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
     best_intercept_time = None
     best_score = float("inf")
     best_ball_location = None
-    save_mode = _urgent_save_state(agent)
-    if (
-        save_mode
-        and agent.time - getattr(
-            agent, "_last_save_intercept_debug", -999.0
-        ) >= 0.5
-    ):
-        agent._last_save_intercept_debug = agent.time
-        print(
-            f"[SAVE INTERCEPT] earliest-contact untargeted mode | "
-            f"ball=({agent.ball.location.x:.0f},"
-            f"{agent.ball.location.y:.0f},"
-            f"{agent.ball.location.z:.0f})",
-            flush=True
-        )
     grid_candidate = None
     grid_aerial_candidate = None
 
@@ -1196,7 +1175,7 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
         if shot['found'] != 1:
             continue
 
-        if not save_mode and not useful_non_aerial_shot(
+        if not useful_non_aerial_shot(
             agent,
             ball_location,
             ball_slice.physics.velocity,
@@ -1205,24 +1184,15 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
         ):
             continue
 
-        if save_mode:
-            save_type_penalty = {
-                0: 0.000,
-                1: 0.005,
-                2: 0.015,
-                3: 0.025
-            }.get(shot.get("shot_type", 0), 0.02)
-            score = time_remaining + save_type_penalty
-        else:
-            # No fixed goal target is supplied for find_any_shot.
-            # Score its approach direction and likely contact quality instead.
-            score = shot_candidate_score(
-                agent,
-                ball_slice,
-                shot,
-                time_remaining,
-                target=None
-            )
+        # No fixed goal target is supplied for find_any_shot.
+        # Score its approach direction and likely contact quality instead.
+        score = shot_candidate_score(
+            agent,
+            ball_slice,
+            shot,
+            time_remaining,
+            target=None
+        )
 
         if score < best_score:
             best_score = score
@@ -1259,23 +1229,19 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
                 "targets": grid_candidate["targets"]
             }
 
-            if save_mode or useful_non_aerial_shot(
+            if useful_non_aerial_shot(
                 agent,
                 grid_ball_tuple,
                 grid_slice.physics.velocity,
                 grid_shot,
                 grid_time
             ):
-                grid_score = (
-                    grid_time_remaining + 0.015
-                    if save_mode
-                    else shot_candidate_score(
-                        agent,
-                        grid_slice,
-                        grid_shot,
-                        grid_time_remaining,
-                        target=None
-                    )
+                grid_score = shot_candidate_score(
+                    agent,
+                    grid_slice,
+                    grid_shot,
+                    grid_time_remaining,
+                    target=None
                 )
 
                 if grid_score < best_score:
@@ -1307,13 +1273,9 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
                 "fast": True,
                 "targets": grid_aerial_candidate["targets"]
             }
-            grid_score = (
-                grid_time_remaining + 0.025
-                if save_mode
-                else shot_candidate_score(
-                    agent, grid_slice, grid_aerial_shot,
-                    grid_time_remaining, target=None
-                )
+            grid_score = shot_candidate_score(
+                agent, grid_slice, grid_aerial_shot,
+                grid_time_remaining, target=None
             )
             if grid_score < best_score:
                 best_score = grid_score
@@ -1492,39 +1454,10 @@ def find_pass_shot(agent, cap_=4):
 
 
 def _urgent_save_state(agent):
-    """
-    Detect a predicted own-goal crossing, using Noob Black's five-second
-    goal-plane deadline instead of relying only on current ball speed.
-    """
+    """Detect a fast ball travelling deep into our own half toward our goal."""
     ball = agent.ball.location
     velocity = agent.ball.velocity
     team_side = side(agent.team)
-
-    prediction = getattr(agent, "ball_prediction_struct", None)
-    slices = (
-        getattr(prediction, "slices", None)
-        if prediction is not None else None
-    ) or ()
-
-    for ball_slice in slices:
-        time_to_goal = ball_slice.game_seconds - agent.time
-        if time_to_goal <= 0:
-            continue
-        if time_to_goal > 5.0:
-            break
-
-        location = ball_slice.physics.location
-        if location.y * team_side >= 5235:
-            # Count only a trajectory through the goal mouth. The extra
-            # margin accounts for the ball radius at the posts/crossbar.
-            if (
-                abs(location.x) <= 800
-                and 0 <= location.z <= 550
-            ):
-                return True
-            return False
-
-    # Keep the fast-moving-ball fallback for imperfect/short predictions.
     own_goal = agent.friend_goal.location
     to_goal = Vector(
         own_goal.x - ball.x,
@@ -1551,12 +1484,9 @@ def get_slices(agent, cap_):
         return None
 
     max_time = cap_
-    urgent_save = _urgent_save_state(agent)
 
-    # Respect an existing shot's useful window during ordinary play. A
-    # predicted goal-bound ball overrides that limit: the current shot must
-    # never hide the save window from the intercept search.
-    if not urgent_save and agent.shooting and agent.stack:
+    # Respect an existing shot's useful window.
+    if agent.shooting and agent.stack:
         current = agent.stack[0]
 
         if current.__class__.__name__ != "short_shot":
@@ -1565,13 +1495,15 @@ def get_slices(agent, cap_):
             )
 
             if intercept_time is not None:
-                if 0 <= intercept_time - agent.time < 0.5:
+                remaining = intercept_time - agent.time
+
+                if 0 <= remaining < 0.5:
                     return None
 
-                if intercept_time > agent.time:
+                if remaining > 0:
                     max_time = min(
                         max_time,
-                        intercept_time - agent.time - 0.05
+                        remaining - 0.05
                     )
 
     if max_time <= 0.10:
@@ -1579,6 +1511,7 @@ def get_slices(agent, cap_):
 
     selected = []
     last_sample = -999.0
+    urgent_save = _urgent_save_state(agent)
 
     for ball_slice in struct.slices:
         relative_time = ball_slice.game_seconds - agent.time
