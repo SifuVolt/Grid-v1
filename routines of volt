@@ -1686,12 +1686,12 @@ class Aerial:
                     and T > 0.55
                 )
 
-                # Prefer the fast double-jump launch, but do not throw away
-                # a reachable aerial just because the second jump is tight.
-                # In the short window, use the first jump and preserve the
-                # second jump for the contact dodge.
+                # Compare single and double jump launches using Party
+                # Cannon's boost-cost estimate, while retaining Volt's Grid
+                # jump physics and second-jump timing.
                 minimum_launch_time = 0.08
                 double_jump_window = jump_max_duration + (2 / 120)
+                second_jump_delay = double_jump_window
 
                 if T <= minimum_launch_time:
                     print(
@@ -1703,8 +1703,88 @@ class Aerial:
                     agent.push(ball_recovery())
                     return
 
-                self.jump_type_fast = T > double_jump_window
+                jump_tau = min(jump_max_duration, max(0.0, T))
+                single_position = (
+                    xf
+                    + agent.me.up * jump_speed * T
+                    + agent.me.up * jump_acc * jump_tau
+                    * (T - 0.5 * jump_tau)
+                )
+                single_velocity = (
+                    vf
+                    + agent.me.up * jump_speed
+                    + agent.me.up * jump_acc * jump_tau
+                )
+                (
+                    single_boost, single_viable,
+                    single_ratio, single_speed
+                ) = self._party_cannon_boost_estimate(
+                    agent, self.target, T,
+                    single_position, single_velocity
+                )
+
+                double_boost = float("inf")
+                double_viable = False
+                double_ratio = float("inf")
+                double_speed = float("inf")
+                if T > second_jump_delay and not agent.me.doublejumped:
+                    double_position = (
+                        single_position
+                        + agent.me.up * jump_speed
+                        * (T - second_jump_delay)
+                    )
+                    double_velocity = (
+                        single_velocity + agent.me.up * jump_speed
+                    )
+                    (
+                        double_boost, double_viable,
+                        double_ratio, double_speed
+                    ) = self._party_cannon_boost_estimate(
+                        agent, self.target, T,
+                        double_position, double_velocity
+                    )
+
+                if wall_double_jump and double_viable:
+                    self.jump_type_fast = True
+                elif double_viable and (
+                    not single_viable or double_boost < single_boost
+                ):
+                    self.jump_type_fast = True
+                elif single_viable:
+                    self.jump_type_fast = False
+                elif T <= 1.5:
+                    self.jump_type_fast = T > double_jump_window
+                    print(
+                        f"[AERIAL PC LATE FALLBACK] T={T:.2f} "
+                        f"single={single_viable} double={double_viable}",
+                        flush=True
+                    )
+                else:
+                    print(
+                        f"[AERIAL PC REJECT] "
+                        f"single_boost={single_boost:.1f} "
+                        f"double_boost={double_boost:.1f} "
+                        f"single_ratio={single_ratio:.2f} "
+                        f"double_ratio={double_ratio:.2f} "
+                        f"single_speed={single_speed:.0f} "
+                        f"double_speed={double_speed:.0f} "
+                        f"boost={agent.me.boost:.0f}",
+                        flush=True
+                    )
+                    agent.pop()
+                    agent.shooting = False
+                    agent.push(ball_recovery())
+                    return
+
                 self.jumping = True
+                print(
+                    f"[AERIAL PC LAUNCH] mode="
+                    f"{'double' if self.jump_type_fast else 'single'} "
+                    f"single_boost={single_boost:.1f} "
+                    f"double_boost={double_boost:.1f} "
+                    f"T={T:.2f}",
+                    flush=True
+                )
 
                 if not self.jump_type_fast:
                     print(
@@ -1714,7 +1794,7 @@ class Aerial:
                         flush=True
                     )
 
-                if wall_double_jump:
+                if wall_double_jump and self.jump_type_fast:
                     print(
                         f"[AERIAL WALL DOUBLE JUMP] "
                         f"side={car_wall_side} T={T:.2f} "
@@ -1739,7 +1819,10 @@ class Aerial:
             jump_elapsed = agent.time - self.jump_time
 
             # how much of the jump acceleration time is left
-            tau = max(0.0, jump_max_duration - jump_elapsed)
+            tau = max(
+                0.0,
+                min(jump_max_duration - jump_elapsed, T)
+            )
 
             # impulse from the first jump
             if jump_elapsed == 0:
@@ -1758,7 +1841,7 @@ class Aerial:
 
                 # Include the second-jump impulse in the predicted path only
                 # when there is still enough time for it to contribute.
-                if T > 0.18 and not agent.me.doublejumped:
+                if T > second_jump_delay and not agent.me.doublejumped:
                     vf += agent.me.up * jump_speed
                     xf += agent.me.up * jump_speed * max(
                         0.0, T - second_jump_delay
