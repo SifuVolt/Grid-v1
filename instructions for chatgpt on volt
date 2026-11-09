@@ -1361,8 +1361,11 @@ class Bot(VirxERLU):
         if not self.friends:
             return True
 
-        # Don't let normal teamplay logic override an urgent own-goal threat.
-        if self.defensive_emergency():
+        # Don't let normal teamplay logic override a predicted goal threat.
+        if (
+            self.defensive_emergency()
+            or self.get_goal_crossing_deadline()[0] is not None
+        ):
             return True
 
         side = utils.side(self.team)
@@ -1650,6 +1653,21 @@ class Bot(VirxERLU):
         fast_intercept_zone = 0 < ball_depth <= 1280
         goal_save_deadline, _ = self.get_goal_crossing_deadline()
         urgent_goal_save = goal_save_deadline is not None
+        if (
+            urgent_goal_save
+            and self.time - getattr(
+                self, "_last_goal_save_debug", -999.0
+            ) >= 0.5
+        ):
+            self._last_goal_save_debug = self.time
+            print(
+                f"[GOAL SAVE DEADLINE] in={goal_save_deadline:.2f}s "
+                f"player={self.me.index} "
+                f"ball=({self.ball.location.x:.0f},"
+                f"{self.ball.location.y:.0f},"
+                f"{self.ball.location.z:.0f})",
+                flush=True
+            )
 
         current_name = (
             self.stack[0].__class__.__name__
