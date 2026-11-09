@@ -1412,18 +1412,18 @@ class Aerial:
         if prediction is None or not prediction.slices:
             return
 
-        # Find the prediction slice closest to the actual intercept time.
-        slice_n = min(
-            range(len(prediction.slices)),
-            key=lambda i: abs(
-                prediction.slices[i].game_seconds
-                - self.intercept_time
-            )
+        # Interpolate the current prediction at the absolute contact time.
+        ball_slice = prediction_slice_at(agent, self.intercept_time)
+        if ball_slice is None:
+            agent.pop()
+            agent.shooting = False
+            agent.push(ball_recovery())
+            return
+
+        agent.dbg_2d(
+            f"Aerial prediction time: {ball_slice.game_seconds:.3f}"
         )
-
-        agent.dbg_2d(f"Shot slice #: {slice_n}")
-
-        physics = prediction.slices[slice_n].physics
+        physics = ball_slice.physics
 
         ball_velocity = Vector(
             physics.velocity.x,
