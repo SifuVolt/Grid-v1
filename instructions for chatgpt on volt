@@ -1442,8 +1442,13 @@ class Bot(VirxERLU):
 
         """Refresh shot information and announce when we leave cover to commit."""
 
-        # Check for an urgent defensive situation first.
-        if self.defensive_emergency():
+        # Check for an urgent defensive situation first. A predicted
+        # own-goal crossing also publishes DEFEND before the ball enters the
+        # old close-range emergency zone.
+        if (
+            self.defensive_emergency()
+            or self.get_goal_crossing_deadline()[0] is not None
+        ):
             self.teamplay_shot = None
             self.teamplay_score = 100.0
             self.teamplay_contact_time = 0.0
