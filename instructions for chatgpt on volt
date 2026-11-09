@@ -842,6 +842,20 @@ class Bot(VirxERLU):
                 return True
 
         return False
+    def _car_ball_facing_angle(self, car):
+        """Horizontal angle between a teammate's nose and the ball."""
+        to_ball = (self.ball.location - car.location).flatten()
+        forward = car.forward.flatten()
+        if to_ball.magnitude() < 1 or forward.magnitude() < 0.001:
+            return math.pi
+        return math.acos(
+            cap(
+                forward.normalize().dot(to_ball.normalize()),
+                -1.0,
+                1.0
+            )
+        )
+
     def get_grid_team_roles(self):
         """
         Noob Black's rotating 3s role selection.
@@ -1130,6 +1144,21 @@ class Bot(VirxERLU):
 
         attacker = best_challenger
         goalie = deepest_player
+
+        # A goalie normally holds the net, but if its nose is already
+        # pointing at the ball better than either teammate, let it challenge.
+        # This is a narrow role-selection exception, not a global teamplay
+        # priority override.
+        if goalie.index != attacker.index:
+            goalie_angle = self._car_ball_facing_angle(goalie)
+            best_other_angle = min(
+                self._car_ball_facing_angle(car)
+                for car in cars
+                if car.index != goalie.index
+            )
+            if goalie_angle + 0.001 < best_other_angle:
+                attacker = goalie
+
         transition = next(
             (
                 car for car in cars
