@@ -234,10 +234,11 @@ def find_aerial_launch(agent, targets=None, horizon=6.0):
             # Ground and wall launches use the current car-up axis. Boost
             # direction will be steered during flight, so only credit a
             # conservative fraction of boost as vertical lift.
-            vertical_up = max(0.20, min(0.90, up[2]))
+            vertical_up = max(0.15, min(0.90, max(0.0, up[2])))
+            jump_vertical = jump_height * max(0.0, up[2])
             vertical_reach = (
                 car[2] + velocity[2] * t
-                + jump_height
+                + jump_vertical
                 + boost_displacement * vertical_up
             )
         else:
@@ -245,7 +246,7 @@ def find_aerial_launch(agent, targets=None, horizon=6.0):
             vertical_reach = (
                 car[2] + velocity[2] * t
                 - 325.0 * t * t
-                + boost_displacement * max(0.20, min(0.90, up[2]))
+                + boost_displacement * max(0.15, min(0.90, max(0.0, up[2])))
             )
 
         if contact[2] > vertical_reach + 100:
