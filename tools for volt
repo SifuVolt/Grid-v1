@@ -703,7 +703,13 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
     best_score = float("inf")
     best_ball_location = None
     save_mode = _urgent_save_state(agent)
-    if save_mode:
+    if (
+        save_mode
+        and agent.time - getattr(
+            agent, "_last_save_intercept_debug", -999.0
+        ) >= 0.5
+    ):
+        agent._last_save_intercept_debug = agent.time
         print(
             f"[SAVE INTERCEPT] earliest-contact mode | "
             f"ball=({agent.ball.location.x:.0f},{agent.ball.location.y:.0f},"
@@ -1110,7 +1116,13 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
     best_score = float("inf")
     best_ball_location = None
     save_mode = _urgent_save_state(agent)
-    if save_mode:
+    if (
+        save_mode
+        and agent.time - getattr(
+            agent, "_last_save_intercept_debug", -999.0
+        ) >= 0.5
+    ):
+        agent._last_save_intercept_debug = agent.time
         print(
             f"[SAVE INTERCEPT] earliest-contact untargeted mode | "
             f"ball=({agent.ball.location.x:.0f},"
