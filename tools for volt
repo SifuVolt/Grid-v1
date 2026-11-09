@@ -478,6 +478,16 @@ def shot_candidate_score(agent, ball_slice, shot, time_remaining, target=None):
     elif shot_type == 3:     # Aerial
         score += 0.35
 
+    # During the ten-second post-kickoff contest window, reduce the usual
+    # complexity penalty for aerials so a reachable aerial can beat a
+    # similarly good ground/jump option. Outside this window normal scoring
+    # is unchanged.
+    if (
+        shot_type == 3
+        and agent.time < getattr(agent, "kickoff_contest_until", -999.0)
+    ):
+        score -= 0.40
+
     team_side = 1 if agent.team == 0 else -1
 
     if target is not None:
