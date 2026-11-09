@@ -1508,12 +1508,19 @@ class Bot(VirxERLU):
                         )
                         ball_x = aerial_slice.physics.location.x
                         same_wall = ball_x * car.location.x > 0
+                        wall_gap = max(0.0, 4096.0 - abs(ball_x) - 92.75)
                     else:
                         same_wall = False
+                        wall_gap = 0.0
 
-                    if same_wall:
+                    # If the ball is more than 100 units off the wall,
+                    # do not try to drive through the gap: launch the aerial
+                    # from the wall instead. Direct wall contact is reserved
+                    # for a ball that is actually tight to the surface.
+                    if same_wall and wall_gap > 100:
                         print(
-                            f"[WALL DRIVE] handing off to same-wall aerial "
+                            f"[WALL DRIVE] wall aerial launch "
+                            f"gap={wall_gap:.0f} "
                             f"T={aerial.intercept_time - self.time:.2f}",
                             flush=True
                         )
@@ -1632,7 +1639,7 @@ class Bot(VirxERLU):
             ):
                 contact_time = max(
                     0.0,
-                    min(2.5, attacker_message.get("contact_time", 0.0))
+                    min(3.0, attacker_message.get("contact_time", 0.0))
                 )
                 contact_at = (
                     attacker_message["received_at"] + contact_time
@@ -2350,6 +2357,12 @@ class Bot(VirxERLU):
                 "contact_time": contact_time,
                 "cover_owner": cover_owner,
                 "cover_released": cover_released,
+                "receive_x": message.get("receive_x"),
+                "receive_y": message.get("receive_y"),
+                "receive_dir_x": message.get("receive_dir_x"),
+                "receive_dir_y": message.get("receive_dir_y"),
+                "contact_x": message.get("contact_x"),
+                "contact_y": message.get("contact_y"),
                 "received_at": self.time
             }
 
@@ -2372,6 +2385,58 @@ class Bot(VirxERLU):
         score: float = 0,
         contact_time: float = 10
     ):
+        # Send the predicted ball contact and intended goalward lane with the
+        # shot announcement. The transition player can use this before the
+        # ball is struck instead of guessing from the attacker's current nose.
+        receive_plan = {}
+        planned_shot = getattr(self, "teamplay_shot", None)
+        if (
+            status in {"SHOT_FOUND", "ANY_SHOT_FOUND"}
+            and planned_shot is not None
+            and getattr(planned_shot, "intercept_time", None) is not None
+        ):
+            prediction = getattr(self, "ball_prediction_struct", None)
+            slices = getattr(prediction, "slices", None) if prediction is not None else None
+            if slices:
+                seconds_to_contact = max(
+                    0.0, planned_shot.intercept_time - self.time
+                )
+                slice_index = max(
+                    0, min(len(slices) - 1, round(seconds_to_contact * 120))
+                )
+                physics = slices[slice_index].physics
+                contact_ball = Vector(
+                    physics.location.x, physics.location.y, physics.location.z
+                )
+                aim_point = self.foe_goal.location
+                planned_targets = getattr(planned_shot, "targets", None)
+                if planned_targets is not None and len(planned_targets) >= 2:
+                    try:
+                        aim_point = (
+                            Vector(*planned_targets[0])
+                            + Vector(*planned_targets[1])
+                        ) * 0.5
+                    except (TypeError, ValueError):
+                        pass
+                lane = (aim_point - contact_ball).flatten()
+                if lane.magnitude() < 1:
+                    lane = self.me.forward.flatten()
+                if lane.magnitude() > 1:
+                    lane = lane.normalize()
+                    lane_distance = min(
+                        1050.0,
+                        max(650.0, contact_ball.flat_dist(aim_point) * 0.28)
+                    )
+                    receive_point = contact_ball + lane * lane_distance
+                    receive_plan = {
+                        "receive_x": round(receive_point.x, 1),
+                        "receive_y": round(receive_point.y, 1),
+                        "receive_dir_x": round(lane.x, 4),
+                        "receive_dir_y": round(lane.y, 4),
+                        "contact_x": round(contact_ball.x, 1),
+                        "contact_y": round(contact_ball.y, 1)
+                    }
+
         message = {
             "protocol": "volt_teamplay_v1",
             "status": status,
@@ -2379,7 +2444,8 @@ class Bot(VirxERLU):
             "score": round(max(0, min(100, score)), 1),
             "contact_time": round(max(0, min(10, contact_time)), 2),
             "cover_owner": self.get_cover_role_owner(),
-            "cover_released": bool(self.cover_role_released)
+            "cover_released": bool(self.cover_role_released),
+            **receive_plan
         }
 
         # Include cover fields so a change in cover responsibility
