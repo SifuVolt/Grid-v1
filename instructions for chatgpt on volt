@@ -867,11 +867,11 @@ class Bot(VirxERLU):
             if location.y * team_side < 5235:
                 continue
 
-            # Rocket League's goal opening is about 1786 wide and 643 high.
-            # Include the ball radius so edge-of-post/crossbar saves count.
+            # Require the ball centre to fit inside the opening after
+            # accounting for its 92.75-unit radius at both posts and bar.
             if (
-                abs(location.x) <= 985
-                and 0 <= location.z <= 735
+                abs(location.x) <= 800
+                and 0 <= location.z <= 550
             ):
                 return (
                     time_to_goal,
