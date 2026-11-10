@@ -890,14 +890,21 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                 earliest_by_type[shot_type] = (
                     score, shot, intercept_time, Vector(*ball_location)
                 )
-                print(
-                    f"[INTERCEPT REACHABLE] type={shot_type} "
-                    f"T={time_remaining:.3f} "
-                    f"drive={reach_data['distance']:.0f}/"
-                    f"{reach_data['reachable']:.0f} "
-                    f"jump={reach_data['jump_time']:.3f}",
-                    flush=True
-                )
+                if reach_data is not None:
+                    print(
+                        f"[INTERCEPT REACHABLE] type={shot_type} "
+                        f"T={time_remaining:.3f} "
+                        f"drive={reach_data['distance']:.0f}/"
+                        f"{reach_data['reachable']:.0f} "
+                        f"jump={reach_data['jump_time']:.3f}",
+                        flush=True
+                    )
+                else:
+                    print(
+                        f"[INTERCEPT REACHABLE] type={shot_type} "
+                        f"T={time_remaining:.3f} aerial",
+                        flush=True
+                    )
     # Compare Grid's candidate against Volt's best C-parser candidate.
     if grid_candidate is not None:
         grid_time = grid_candidate["time"]
@@ -1295,14 +1302,21 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
             earliest_by_type[shot_type] = (
                 score, shot, intercept_time, Vector(*ball_location)
             )
-            print(
-                f"[INTERCEPT REACHABLE] untargeted type={shot_type} "
-                f"T={time_remaining:.3f} "
-                f"drive={reach_data['distance']:.0f}/"
-                f"{reach_data['reachable']:.0f} "
-                f"jump={reach_data['jump_time']:.3f}",
-                flush=True
-            )
+            if reach_data is not None:
+                print(
+                    f"[INTERCEPT REACHABLE] untargeted type={shot_type} "
+                    f"T={time_remaining:.3f} "
+                    f"drive={reach_data['distance']:.0f}/"
+                    f"{reach_data['reachable']:.0f} "
+                    f"jump={reach_data['jump_time']:.3f}",
+                    flush=True
+                )
+            else:
+                print(
+                    f"[INTERCEPT REACHABLE] untargeted type={shot_type} "
+                    f"T={time_remaining:.3f} aerial",
+                    flush=True
+                )
     if grid_candidate is not None:
         grid_time = grid_candidate["time"]
         grid_time_remaining = grid_time - agent.time - (1 / 120)
