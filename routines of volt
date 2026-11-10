@@ -1012,7 +1012,6 @@ class Aerial:
         self.counter = 0
         self.second_jump_commanded = False
         self.second_jump_command_time = -1
-        self.second_jump_use = None
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -1361,7 +1360,7 @@ class Aerial:
             physics.velocity.z
         )
 
-        if T > 0.1 or self.ball is None:
+        if T > 0.0 or self.ball is None:
             ball = physics.location
             self.ball = Vector(ball.x, ball.y, ball.z)
 
@@ -1620,7 +1619,6 @@ class Aerial:
                 self.counter = 0
                 self.second_jump_commanded = False
                 self.second_jump_command_time = -1
-                self.second_jump_use = None
                 print(
                     f"[AERIAL JUMP PLAN] T={T:.2f} "
                     f"fast_aerial={self.jump_type_fast} "
@@ -1648,10 +1646,14 @@ class Aerial:
                     jump_max_duration + (2 / 120) - jump_elapsed
                 )
 
-                # At the normal second-jump timing, compare the predicted
-                # contact error with and without spending the dodge.
-                # Only use the second jump when its extra lift moves the
-                # car closer to the current contact target.
+                # Include the second-jump impulse in the predicted path only
+                # when there is still enough time for it to contribute.
+                if T > 0.18 and not agent.me.doublejumped:
+                    vf += agent.me.up * jump_speed
+                    xf += agent.me.up * jump_speed * max(
+                        0.0, T - second_jump_delay
+                    )
+
                 if jump_elapsed <= jump_max_duration:
                     agent.controller.jump = True
                 elif (
@@ -1660,40 +1662,17 @@ class Aerial:
                         self.jump_time + jump_max_duration + (2 / 120)
                     )
                 ):
-                    second_jump_delta = (
-                        agent.me.up * jump_speed
-                        * max(0.0, T - second_jump_delay)
+                    # Time the second jump from elapsed time, not an
+                    # assumed number of routine callbacks per frame.
+                    agent.controller.jump = True
+                    self.second_jump_commanded = True
+                    self.second_jump_command_time = agent.time
+                    self.dodging = True
+                    print(
+                        f"[AERIAL SECOND JUMP] T={T:.2f} "
+                        f"elapsed={jump_elapsed:.3f}",
+                        flush=True
                     )
-                    error_without = (self.target - xf).magnitude()
-                    error_with = (
-                        self.target - (xf + second_jump_delta)
-                    ).magnitude()
-                    self.second_jump_use = (
-                        not agent.me.doublejumped
-                        and T > 0.18
-                        and error_with + 10 < error_without
-                    )
-
-                    if self.second_jump_use:
-                        agent.controller.jump = True
-                        self.second_jump_commanded = True
-                        self.second_jump_command_time = agent.time
-                        self.dodging = True
-                        print(
-                            f"[AERIAL SECOND JUMP] used | "
-                            f"error={error_without:.0f}->{error_with:.0f} "
-                            f"T={T:.2f}",
-                            flush=True
-                        )
-                    else:
-                        self.jumping = False
-                        self.dodging = False
-                        print(
-                            f"[AERIAL SECOND JUMP] saved | "
-                            f"error={error_without:.0f}->{error_with:.0f} "
-                            f"T={T:.2f}",
-                            flush=True
-                        )
                 elif self.second_jump_commanded:
                     self.dodging = not agent.me.doublejumped
                     if (
@@ -1730,45 +1709,48 @@ class Aerial:
             target = delta_x if delta_x.magnitude() > 50 else self.shot_vector
             target = agent.me.local(target)
 
-            # Keep the car in a consistent nose-first attitude. Do not
-            # invert merely because the ball is below the car or the shot
-            # vector points downward.
-            defaultPD(agent, target, up=Vector(z=1))
+            if agent.controller.jump:
+                defaultPD(agent, target.flatten(), up=agent.me.up)
+
+            elif backboard_mode:
+                # If the ball is below the car, invert to expose the
+                # underside. If it is above the car, keep the roof facing it.
+                ball_below_car = (
+                    self.ball.z < agent.me.location.z - 80
+                )
+
+                defaultPD(
+                    agent,
+                    target,
+                    upside_down=ball_below_car
+                )
+
+            elif virxrlcu.find_landing_plane(
+                tuple(agent.me.location),
+                tuple(agent.me.velocity),
+                agent.gravity.z
+            ) == 4:
+                defaultPD(agent, target, upside_down=True)
+
+            else:
+                defaultPD(
+                    agent,
+                    target,
+                    upside_down=self.shot_vector.z < 0
+                )
 
 
-        # Reassess the remaining positional error every frame. This is a
-        # soft reachability estimate: it guides boost use but never cancels
-        # an aerial that has already committed.
-        required_acceleration = (
-            2.0 * delta_x.magnitude() / max(T * T, 0.01)
-            if T > 0 else float("inf")
-        )
-        available_acceleration = (
-            agent.boost_accel if agent.me.boost > 0
-            else throttle_accel
-        )
-
-        # Preserve the original 60-degree nose-alignment gate.
+        # only boost/throttle if we're facing the right direction
         if abs(agent.me.forward.dot(direction)) > 0.5 and T > 0:
-            # The remaining acceleration estimate can request boost when
-            # ordinary throttle is clearly insufficient, without changing
-            # the alignment requirement.
+            if T > 1 and not self.jumping: agent.controller.roll = 1 if self.shot_vector.z < 0 else -1
+            # the change in velocity the bot needs to put it on an intercept course with the target
             delta_v = delta_x.dot(agent.me.forward) / T
-            needs_extra_acceleration = (
-                required_acceleration > available_acceleration
-            )
-            if agent.me.boost > 0 and (
-                delta_v >= agent.boost_accel * min_boost_time
-                or needs_extra_acceleration
-            ):
+            if agent.me.boost > 0 and delta_v >= agent.boost_accel * min_boost_time:
                 agent.controller.boost = True
                 delta_v -= agent.boost_accel * min_boost_time
 
             if delta_v >= throttle_accel * min_boost_time:
-                agent.controller.throttle = cap(
-                    delta_v / (throttle_accel * min_boost_time),
-                    -1, 1
-                )
+                agent.controller.throttle = cap(delta_v / (throttle_accel * min_boost_time), -1, 1)
 
         # Once the car has actually left the ground, do not let the
         # conservative pre-launch viability test cancel an aerial mid-flight.
@@ -1783,18 +1765,23 @@ class Aerial:
             agent.shooting = False
             agent.push(ball_recovery())
         elif (
-            self.ceiling
-            and self.target.dist(agent.me.location)
-            < 92 + agent.me.hitbox.length
-            and not agent.me.doublejumped
-            and agent.me.location.z < agent.ball.location.z + 92
-            and self.target.y * side(agent.team) > -4240
-        ) or (
-            not self.ceiling
-            and not agent.me.doublejumped
-            and T < 0.1
-            and delta_x.dot(agent.me.forward) > 0
+            not self.jumping
+            and not agent.me.airborne
+            and T > 1.5
+            and not virxrlcu.aerial_shot_is_viable(
+                T, agent.boost_accel, tuple(agent.gravity),
+                agent.me.get_raw(agent), tuple(self.target)
+            )
         ):
+            print(
+                f"[AERIAL CANCEL] pre-launch viability failed T={T:.3f} "
+                f"boost={agent.me.boost:.0f}",
+                flush=True
+            )
+            agent.pop()
+            agent.shooting = False
+            agent.push(ball_recovery())
+        elif (self.ceiling and self.target.dist(agent.me.location) < 92 + agent.me.hitbox.length and not agent.me.doublejumped and agent.me.location.z < agent.ball.location.z + 92 and self.target.y * side(agent.team) > -4240) or (not self.ceiling and not agent.me.doublejumped and T < 0.1):
             agent.dbg_2d("Flipping")
             local_target = agent.me.local_location(self.target).flatten().normalize()
             agent.controller.pitch = -local_target.x
