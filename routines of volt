@@ -1013,6 +1013,7 @@ class Aerial:
         self.second_jump_commanded = False
         self.second_jump_command_time = -1
         self.second_jump_use = None
+        self.inverted = None
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -1534,15 +1535,42 @@ class Aerial:
         if contact_direction.magnitude() < 0.001:
             contact_direction = agent.me.forward.normalize()
 
-        # Match Party Cannon: target the car centre 155 uu behind the ball
-        # along the full 3D shot direction, rather than separately offsetting
-        # a flattened surface point and the hitbox nose.
-        self.target = self.ball - contact_direction * approach_distance
+        # Keep the selected tools contact side/height when available.
+        # The 155 uu offset is the car-centre approach point; the ball-surface
+        # point is one ball radius along that same contact normal.
+        contact_label = getattr(self, "contact_label", None)
+        selected_contact_target = _contact_approach_from_label(
+            self.ball,
+            self.shot_vector,
+            contact_label,
+            approach_distance
+        )
+        if selected_contact_target is not None:
+            self.target = selected_contact_target
+        else:
+            self.target = self.ball - contact_direction * approach_distance
+
+        contact_normal = (self.target - self.ball).normalize()
+        self.contact_point = self.ball + contact_normal * 92.75
+
+        # Roll fully inverted only when there is enough time to complete the
+        # rotation and still align the nose for contact. Decide once per aerial
+        # so the desired up vector cannot oscillate during flight.
+        if self.inverted is None:
+            self.inverted = T >= 1.20 and not self.ceiling
+            print(
+                f"[AERIAL ORIENTATION] inverted={self.inverted} "
+                f"T={T:.2f} contact={contact_label or 'centre'}",
+                flush=True
+            )
 
         print(
-            f"[AERIAL CONTACT] offset={approach_distance:.1f} "
+            f"[AERIAL CONTACT] label={contact_label or 'centre'} "
+            f"offset={approach_distance:.1f} "
             f"direction=({contact_direction.x:.2f},"
             f"{contact_direction.y:.2f},{contact_direction.z:.2f}) "
+            f"ball_point=({self.contact_point.x:.0f},"
+            f"{self.contact_point.y:.0f},{self.contact_point.z:.0f}) "
             f"car_target=({self.target.x:.0f},{self.target.y:.0f},"
             f"{self.target.z:.0f})",
             flush=True
@@ -1734,7 +1762,11 @@ class Aerial:
             # Keep the car in a consistent nose-first attitude. Do not
             # invert merely because the ball is below the car or the shot
             # vector points downward.
-            defaultPD(agent, target, up=Vector(z=1))
+            defaultPD(
+                agent,
+                target,
+                up=Vector(z=-1 if self.inverted else 1)
+            )
 
 
         # Reassess the remaining positional error every frame. This is a
@@ -5078,7 +5110,12 @@ class speedflip_kickoff:
             # Only start the speedflip once the car has built speed
             # and the ball is at a suitable distance.
             if speed > 800 and distance > 1800:
-                right_handed = agent.me.location.x > 0
+                # Mirror the handedness in team-relative coordinates.
+                # Orange's forward-facing orientation is reversed from blue,
+                # so world-X alone gives it the opposite diagonal flip.
+                right_handed = (
+                    agent.me.location.x * side(agent.team) > 0
+                )
 
                 self.phase = 1
 
