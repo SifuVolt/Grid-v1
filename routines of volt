@@ -707,142 +707,6 @@ class double_jump:
         if agent.me.airborne:
             agent.push(ball_recovery())
 
-    def _aerial_contact_geometry(
-        self, agent, ball_location, shot_direction,
-        predicted_car_location, inverted
-    ):
-        """
-        Choose a ball surface point and a permitted front-half car hitbox
-        point together. Car contact points below the hitbox centre are never
-        considered.
-        """
-        shot_direction = shot_direction.normalize()
-        if shot_direction.magnitude() < 0.001:
-            shot_direction = agent.me.forward.normalize()
-
-        lateral = self._cross(Vector(z=1), shot_direction)
-        if lateral.magnitude() < 0.001:
-            lateral = agent.me.right.copy()
-        lateral = lateral.normalize()
-
-        ball_normals = {
-            "centre": -shot_direction,
-            "left": (-shot_direction + lateral * 0.55).normalize(),
-            "right": (-shot_direction - lateral * 0.55).normalize(),
-            "high": (-shot_direction + Vector(z=0.30)).normalize(),
-            "low": (-shot_direction - Vector(z=0.30)).normalize()
-        }
-
-        hitbox = agent.me.hitbox
-        length = float(hitbox.length)
-        width = float(hitbox.width)
-        height = float(hitbox.height)
-        offset = hitbox.offset
-
-        # The nose/front corners, windshield and the upper edge of the two
-        # front-wheel regions. Every candidate has local z >= 0, so no
-        # underside/lower-half hitbox point can be selected.
-        car_contacts = {
-            "nose_centre": Vector(length * 0.50, 0, 0),
-            "nose_left_edge": Vector(length * 0.50, -width * 0.50, 0),
-            "nose_right_edge": Vector(length * 0.50, width * 0.50, 0),
-            "windshield_centre": Vector(length * 0.28, 0, height * 0.50),
-            "windshield_left": Vector(length * 0.28, -width * 0.35, height * 0.50),
-            "windshield_right": Vector(length * 0.28, width * 0.35, height * 0.50),
-            "front_wheel_left_upper": Vector(length * 0.20, -width * 0.50, 0),
-            "front_wheel_right_upper": Vector(length * 0.20, width * 0.50, 0)
-        }
-
-        preferred_ball_label = getattr(self, "contact_label", None)
-
-        def build_contact(ball_label, car_label):
-            normal = ball_normals[ball_label]
-            desired_forward = (-normal).normalize()
-
-            # Build the orientation the car should have at contact. The
-            # inverted option changes the car's roof direction, not the
-            # selected hitbox region in car-local coordinates.
-            up_hint = Vector(z=-1 if inverted else 1)
-            desired_up = (
-                up_hint
-                - desired_forward * up_hint.dot(desired_forward)
-            )
-            if desired_up.magnitude() < 0.001:
-                desired_up = (
-                    agent.me.up
-                    - desired_forward * agent.me.up.dot(desired_forward)
-                )
-            if desired_up.magnitude() < 0.001:
-                desired_up = Vector(z=1)
-            desired_up = desired_up.normalize()
-
-            desired_right = self._cross(
-                desired_up, desired_forward
-            ).normalize()
-            if desired_right.magnitude() < 0.001:
-                desired_right = agent.me.right.normalize()
-            desired_up = self._cross(
-                desired_forward, desired_right
-            ).normalize()
-
-            local_contact = offset + car_contacts[car_label]
-            world_contact_offset = (
-                desired_forward * local_contact.x
-                + desired_right * local_contact.y
-                + desired_up * local_contact.z
-            )
-
-            # Noob Black's aerial reach test uses the ball's 92.75 uu
-            # surface point. Party Cannon's 155 uu centre offset is the
-            # approximate result for a standard nose contact; here the
-            # actual selected hitbox point supplies that car-centre offset.
-            ball_point = ball_location + normal * 92.75
-            car_centre_target = ball_point - world_contact_offset
-
-            heading_error = math.acos(cap(
-                agent.me.forward.dot(desired_forward), -1, 1
-            ))
-            position_error = (
-                car_centre_target - predicted_car_location
-            ).magnitude()
-
-            # Reachability is the main factor. Include the rotation needed
-            # to present this face of the hitbox, and lightly prefer the
-            # ball-side contact already selected by tools.
-            score = position_error + heading_error * 115
-            if ball_label == preferred_ball_label:
-                score -= 30
-
-            return {
-                "ball_label": ball_label,
-                "car_label": car_label,
-                "normal": normal,
-                "ball_point": ball_point,
-                "car_target": car_centre_target,
-                "car_offset": world_contact_offset,
-                "score": score
-            }
-
-        if (
-            self.selected_ball_contact_label in ball_normals
-            and self.hitbox_contact_label in car_contacts
-        ):
-            return build_contact(
-                self.selected_ball_contact_label,
-                self.hitbox_contact_label
-            )
-
-        best = None
-        for ball_label in ball_normals:
-            for car_label in car_contacts:
-                candidate = build_contact(ball_label, car_label)
-                if best is None or candidate["score"] < best["score"]:
-                    best = candidate
-
-        self.selected_ball_contact_label = best["ball_label"]
-        self.hitbox_contact_label = best["car_label"]
-        return best
-
     def run(self, agent: VirxERLU):
         if not agent.shooting:
             agent.shooting = True
@@ -1472,6 +1336,142 @@ class Aerial:
             return goal_direction
 
         return desired_direction.normalize()
+    def _aerial_contact_geometry(
+        self, agent, ball_location, shot_direction,
+        predicted_car_location, inverted
+    ):
+        """
+        Choose a ball surface point and a permitted front-half car hitbox
+        point together. Car contact points below the hitbox centre are never
+        considered.
+        """
+        shot_direction = shot_direction.normalize()
+        if shot_direction.magnitude() < 0.001:
+            shot_direction = agent.me.forward.normalize()
+
+        lateral = self._cross(Vector(z=1), shot_direction)
+        if lateral.magnitude() < 0.001:
+            lateral = agent.me.right.copy()
+        lateral = lateral.normalize()
+
+        ball_normals = {
+            "centre": -shot_direction,
+            "left": (-shot_direction + lateral * 0.55).normalize(),
+            "right": (-shot_direction - lateral * 0.55).normalize(),
+            "high": (-shot_direction + Vector(z=0.30)).normalize(),
+            "low": (-shot_direction - Vector(z=0.30)).normalize()
+        }
+
+        hitbox = agent.me.hitbox
+        length = float(hitbox.length)
+        width = float(hitbox.width)
+        height = float(hitbox.height)
+        offset = hitbox.offset
+
+        # The nose/front corners, windshield and the upper edge of the two
+        # front-wheel regions. Every candidate has local z >= 0, so no
+        # underside/lower-half hitbox point can be selected.
+        car_contacts = {
+            "nose_centre": Vector(length * 0.50, 0, 0),
+            "nose_left_edge": Vector(length * 0.50, -width * 0.50, 0),
+            "nose_right_edge": Vector(length * 0.50, width * 0.50, 0),
+            "windshield_centre": Vector(length * 0.28, 0, height * 0.50),
+            "windshield_left": Vector(length * 0.28, -width * 0.35, height * 0.50),
+            "windshield_right": Vector(length * 0.28, width * 0.35, height * 0.50),
+            "front_wheel_left_upper": Vector(length * 0.20, -width * 0.50, 0),
+            "front_wheel_right_upper": Vector(length * 0.20, width * 0.50, 0)
+        }
+
+        preferred_ball_label = getattr(self, "contact_label", None)
+
+        def build_contact(ball_label, car_label):
+            normal = ball_normals[ball_label]
+            desired_forward = (-normal).normalize()
+
+            # Build the orientation the car should have at contact. The
+            # inverted option changes the car's roof direction, not the
+            # selected hitbox region in car-local coordinates.
+            up_hint = Vector(z=-1 if inverted else 1)
+            desired_up = (
+                up_hint
+                - desired_forward * up_hint.dot(desired_forward)
+            )
+            if desired_up.magnitude() < 0.001:
+                desired_up = (
+                    agent.me.up
+                    - desired_forward * agent.me.up.dot(desired_forward)
+                )
+            if desired_up.magnitude() < 0.001:
+                desired_up = Vector(z=1)
+            desired_up = desired_up.normalize()
+
+            desired_right = self._cross(
+                desired_up, desired_forward
+            ).normalize()
+            if desired_right.magnitude() < 0.001:
+                desired_right = agent.me.right.normalize()
+            desired_up = self._cross(
+                desired_forward, desired_right
+            ).normalize()
+
+            local_contact = offset + car_contacts[car_label]
+            world_contact_offset = (
+                desired_forward * local_contact.x
+                + desired_right * local_contact.y
+                + desired_up * local_contact.z
+            )
+
+            # Noob Black's aerial reach test uses the ball's 92.75 uu
+            # surface point. Party Cannon's 155 uu centre offset is the
+            # approximate result for a standard nose contact; here the
+            # actual selected hitbox point supplies that car-centre offset.
+            ball_point = ball_location + normal * 92.75
+            car_centre_target = ball_point - world_contact_offset
+
+            heading_error = math.acos(cap(
+                agent.me.forward.dot(desired_forward), -1, 1
+            ))
+            position_error = (
+                car_centre_target - predicted_car_location
+            ).magnitude()
+
+            # Reachability is the main factor. Include the rotation needed
+            # to present this face of the hitbox, and lightly prefer the
+            # ball-side contact already selected by tools.
+            score = position_error + heading_error * 115
+            if ball_label == preferred_ball_label:
+                score -= 30
+
+            return {
+                "ball_label": ball_label,
+                "car_label": car_label,
+                "normal": normal,
+                "ball_point": ball_point,
+                "car_target": car_centre_target,
+                "car_offset": world_contact_offset,
+                "score": score
+            }
+
+        if (
+            self.selected_ball_contact_label in ball_normals
+            and self.hitbox_contact_label in car_contacts
+        ):
+            return build_contact(
+                self.selected_ball_contact_label,
+                self.hitbox_contact_label
+            )
+
+        best = None
+        for ball_label in ball_normals:
+            for car_label in car_contacts:
+                candidate = build_contact(ball_label, car_label)
+                if best is None or candidate["score"] < best["score"]:
+                    best = candidate
+
+        self.selected_ball_contact_label = best["ball_label"]
+        self.hitbox_contact_label = best["car_label"]
+        return best
+
     def run(self, agent: VirxERLU):
         if not agent.shooting:
             agent.shooting = True
