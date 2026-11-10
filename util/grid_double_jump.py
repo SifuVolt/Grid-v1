@@ -48,7 +48,7 @@ def new_jump_time(height, double=False):
 def acceleration_table(speed, boost):
     distances = [0.0]
     velocities = [max(0.0, speed)]
-    for i in range(600):
+    for i in range(720):
         v = velocities[-1]
         use_boost = (i / 120) < boost
         if v <= 1400:
