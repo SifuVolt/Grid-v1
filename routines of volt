@@ -5113,8 +5113,10 @@ class speedflip_kickoff:
                 # Mirror the handedness in team-relative coordinates.
                 # Orange's forward-facing orientation is reversed from blue,
                 # so world-X alone gives it the opposite diagonal flip.
+                # Preserve the original blue-side handedness, and mirror
+                # it for orange. side(team) is -1 for blue and +1 for orange.
                 right_handed = (
-                    agent.me.location.x * side(agent.team) > 0
+                    agent.me.location.x * -side(agent.team) > 0
                 )
 
                 self.phase = 1
