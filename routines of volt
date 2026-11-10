@@ -1375,6 +1375,38 @@ class Aerial:
         # the car changes between grounded and airborne states. The target
         # is intentionally not frozen at aerial startup.
         updated_goal_aim = _relative_goal_aim_point(agent, self.targets)
+
+        # Keep the goal centre as the default aerial aim. If the ball is
+        # already outside the mouth horizontally, bias the target across
+        # goal toward the opposite post so the shot is brought back inside.
+        left_post, right_post = agent.foe_goal_shot
+        if left_post.x > right_post.x:
+            left_post, right_post = right_post, left_post
+
+        aim_bias = None
+        if self.ball.x > right_post.x:
+            updated_goal_aim = (
+                updated_goal_aim + left_post
+            ) * 0.5
+            aim_bias = "left post"
+        elif self.ball.x < left_post.x:
+            updated_goal_aim = (
+                updated_goal_aim + right_post
+            ) * 0.5
+            aim_bias = "right post"
+
+        if aim_bias is not None:
+            updated_goal_aim.z = _relative_goal_aim_point(
+                agent, self.targets
+            ).z
+            print(
+                f"[AERIAL POST AIM] ball_x={self.ball.x:.0f} "
+                f"bias={aim_bias} "
+                f"target=({updated_goal_aim.x:.0f},"
+                f"{updated_goal_aim.y:.0f},{updated_goal_aim.z:.0f})",
+                flush=True
+            )
+
         if (
             self.goal_aim_point is None
             or self.goal_aim_point.dist(updated_goal_aim) > 25
@@ -1481,24 +1513,12 @@ class Aerial:
                     flush=True
                 )
 
-        # The nose contact distance comes from the active car hitbox,
-        # including its forward offset, rather than a fixed ball-centre gap.
-        hitbox = agent.me.hitbox
-        hitbox_offset = hitbox.offset
-        nose_offset = hitbox.length * 0.5 + hitbox_offset.x
-        ball_radius = 92.75
-        desired_contact_height = 46.375
-        contact_horizontal_radius = math.sqrt(
-            max(
-                0.0,
-                ball_radius * ball_radius
-                - desired_contact_height * desired_contact_height
-            )
-        )
-        approach_distance = contact_horizontal_radius + nose_offset
-
-        # Party Cannon's wall-aerial correction uses the same geometric
-        # car-centre-to-ball-surface distance that the contact target uses.
+        # Party Cannon's AerialShot uses a 155 uu car-centre offset from
+        # the predicted ball location along the intended shot direction.
+        # This already accounts for the car reaching the ball with its nose;
+        # adding a second hitbox-nose offset here pushed Volt's target too far
+        # behind the ball and caused it to pass underneath/in front of contact.
+        approach_distance = 155.0
         self.shot_vector, wall_normal, wall_clearance = WallShot.adjust_aerial(
             self.ball, self.shot_vector, approach_distance
         )
@@ -1510,45 +1530,26 @@ class Aerial:
                 flush=True
             )
 
-        # Select a real point on the ball surface at the requested height:
-        # halfway from the centre to the bottom. The horizontal component is
-        # the sphere cross-section radius at that height, not zero.
-        flat_shot_direction = self.shot_vector.flatten().normalize()
-        if flat_shot_direction.magnitude() < 0.001:
-            flat_shot_direction = Vector(
-                agent.me.forward.x, agent.me.forward.y, 0
-            ).normalize()
+        contact_direction = self.shot_vector.normalize()
+        if contact_direction.magnitude() < 0.001:
+            contact_direction = agent.me.forward.normalize()
 
-        aerial_contact_point = (
-            self.ball
-            - flat_shot_direction * contact_horizontal_radius
-            - Vector(z=desired_contact_height)
-        )
-
-        # Place the car's physics centre so the front of its actual hitbox
-        # reaches that surface point. Hitbox offset is local to the car:
-        # x moves the nose, y the right side, and z the roof.
-        hitbox_side_offset = (
-            agent.me.right * hitbox_offset.y
-            + agent.me.up * hitbox_offset.z
-        )
-        self.target = (
-            aerial_contact_point
-            - self.shot_vector * nose_offset
-            - hitbox_side_offset
-        )
+        # Match Party Cannon: target the car centre 155 uu behind the ball
+        # along the full 3D shot direction, rather than separately offsetting
+        # a flattened surface point and the hitbox nose.
+        self.target = self.ball - contact_direction * approach_distance
 
         print(
-            f"[AERIAL HITBOX] surface=({aerial_contact_point.x:.0f},"
-            f"{aerial_contact_point.y:.0f},{aerial_contact_point.z:.0f}) "
-            f"nose_offset={nose_offset:.1f} "
+            f"[AERIAL CONTACT] offset={approach_distance:.1f} "
+            f"direction=({contact_direction.x:.2f},"
+            f"{contact_direction.y:.2f},{contact_direction.z:.2f}) "
             f"car_target=({self.target.x:.0f},{self.target.y:.0f},"
             f"{self.target.z:.0f})",
             flush=True
         )
 
-        agent.sphere(self.ball, ball_radius)
-        agent.sphere(aerial_contact_point, 12)
+        agent.sphere(self.ball, 92.75)
+        agent.sphere(self.target, 12)
 
         if self.ceiling:
             self.target -= Vector(z=92)
