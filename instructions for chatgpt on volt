@@ -848,13 +848,8 @@ class Bot(VirxERLU):
         forward = car.forward
         if to_ball.magnitude() < 1 or forward.magnitude() < 0.001:
             return math.pi
-        return math.acos(
-            cap(
-                forward.normalize().dot(to_ball.normalize()),
-                -1.0,
-                1.0
-            )
-        )
+        dot = forward.normalize().dot(to_ball.normalize())
+        return math.acos(max(-1.0, min(1.0, dot)))
 
     def get_grid_team_roles(self):
         """
