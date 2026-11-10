@@ -1106,6 +1106,11 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
     can_jump = is_on_ground and can_jump
     can_double_jump = is_on_ground and can_double_jump
 
+    # Keep single-jump shots out of the goal mouth and post area.
+    # Double-jump saves/challenges remain available.
+    if can_jump and _near_own_goal(agent):
+        can_jump = False
+
     if not can_ground and not can_jump and not can_double_jump and not can_aerial:
         return
 
@@ -1258,10 +1263,20 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
         return None
     time_to_intercept = best_intercept_time - agent.time
     if best_shot['shot_type'] == 3:
-        return Aerial(
+        routine = Aerial(
             best_intercept_time,
             fast_aerial=best_shot['fast']
         )
+        contact = select_ball_contact(
+            agent,
+            best_ball_location,
+            None
+        )
+        routine.contact_label = contact["label"]
+        routine.contact_point = contact["contact_point"]
+        routine.contact_normal = contact["normal"]
+        routine.contact_approach_target = contact["approach_target"]
+        return routine
 
     if best_shot['shot_type'] in (0, 1) and can_jump:
         # Even without a supplied target, use the real opponent goal posts.
