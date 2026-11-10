@@ -1012,10 +1012,6 @@ class Aerial:
         self.counter = 0
         self.second_jump_commanded = False
         self.second_jump_command_time = -1
-        self._nb_rotation_sample_time = None
-        self._nb_previous_pitch = None
-        self._nb_previous_yaw = None
-        self._nb_previous_roll = None
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -1325,110 +1321,6 @@ class Aerial:
             return goal_direction
 
         return desired_direction.normalize()
-    def _party_cannon_boost_estimate(
-        self, agent, target, time_remaining,
-        predicted_position, predicted_velocity
-    ):
-        """Party Cannon GetBoostEstimate, using Volt's jump prediction."""
-        if time_remaining <= 0.05:
-            return float("inf"), False, float("inf"), float("inf")
-
-        offset = target - predicted_position
-        distance = offset.magnitude()
-        if distance < 1:
-            return 0.0, True, 0.0, predicted_velocity.magnitude()
-
-        direction = offset / distance
-        angle = math.acos(
-            cap(agent.me.forward.normalize().dot(direction), -1.0, 1.0)
-        )
-        angle = max(angle, 0.0001)
-        turn_time = 0.6 * (2.0 * math.sqrt(angle / 9.0))
-        tau1 = turn_time * cap(1.0 - 0.4 / angle, 0.0, 1.0)
-        available_time = time_remaining - tau1
-        if available_time <= 0.05:
-            return float("inf"), False, float("inf"), float("inf")
-
-        total_acceleration = agent.boost_accel + throttle_accel
-        required_acceleration = (
-            2.0 * distance / (available_time * available_time)
-        )
-        ratio = required_acceleration / max(total_acceleration, 1.0)
-        tau2 = time_remaining - available_time * math.sqrt(
-            1.0 - cap(ratio, 0.0, 1.0)
-        )
-        boost_time = max(0.0, tau2 - tau1)
-        estimated_boost = boost_time * boost_per_second
-        estimated_velocity = (
-            predicted_velocity
-            + direction * total_acceleration * boost_time
-        )
-        final_speed = estimated_velocity.magnitude()
-
-        viable = (
-            final_speed < max_speed * 0.9
-            and estimated_boost < agent.me.boost * 0.9
-            and abs(ratio) < 0.9
-        )
-        return estimated_boost, viable, ratio, final_speed
-
-    def _apply_noob_black_rotation_damping(self, agent):
-        """Noob Black's pitch/yaw angular-rate compensation."""
-        car = agent.me
-        pitch = math.asin(cap(car.forward.z, -1.0, 1.0))
-        yaw = math.atan2(car.forward.y, car.forward.x)
-        roll = math.atan2(-car.right.z, car.up.z)
-
-        previous_time = self._nb_rotation_sample_time
-        previous_pitch = self._nb_previous_pitch
-        previous_yaw = self._nb_previous_yaw
-        previous_roll = self._nb_previous_roll
-
-        pitch_rate = yaw_rate = roll_rate = 0.0
-        if previous_time is not None:
-            elapsed = max(agent.time - previous_time, 1 / 240)
-            yaw_delta = math.atan2(
-                math.sin(yaw - previous_yaw),
-                math.cos(yaw - previous_yaw)
-            )
-            roll_delta = math.atan2(
-                math.sin(roll - previous_roll),
-                math.cos(roll - previous_roll)
-            )
-            pitch_rate = (pitch - previous_pitch) / elapsed
-            yaw_rate = yaw_delta / elapsed * math.cos(pitch)
-            roll_rate = roll_delta / elapsed
-
-        self._nb_rotation_sample_time = agent.time
-        self._nb_previous_pitch = pitch
-        self._nb_previous_yaw = yaw
-        self._nb_previous_roll = roll
-
-        roll_phase = roll - roll_rate / 120.0
-        corrected_pitch = (
-            agent.controller.pitch
-            - math.sqrt(abs(pitch_rate) / 6.23)
-            * sign(pitch_rate) * math.cos(roll_phase)
-            - math.sqrt(abs(yaw_rate) / 6.23)
-            * sign(yaw_rate) * math.sin(roll_phase) * math.cos(pitch)
-        )
-        corrected_yaw = (
-            agent.controller.yaw
-            - math.sqrt(abs(yaw_rate) / 4.555)
-            * sign(yaw_rate) * math.cos(roll_phase) * math.cos(pitch)
-            - math.sqrt(abs(pitch_rate) / 4.555)
-            * sign(pitch_rate) * -math.sin(roll_phase)
-        )
-
-        # Preserve Noob Black's paired-axis scaling.
-        largest = max(abs(corrected_pitch), abs(corrected_yaw))
-        if largest > 0.0001:
-            corrected_pitch /= largest
-            corrected_yaw /= largest
-
-        agent.controller.pitch = corrected_pitch
-        agent.controller.yaw = corrected_yaw
-
     def run(self, agent: VirxERLU):
         if not agent.shooting:
             agent.shooting = True
@@ -1684,12 +1576,12 @@ class Aerial:
                     and T > 0.55
                 )
 
-                # Compare single and double jump launches using Party
-                # Cannon's boost-cost estimate, while retaining Volt's Grid
-                # jump physics and second-jump timing.
+                # Prefer the fast double-jump launch, but do not throw away
+                # a reachable aerial just because the second jump is tight.
+                # In the short window, use the first jump and preserve the
+                # second jump for the contact dodge.
                 minimum_launch_time = 0.08
                 double_jump_window = jump_max_duration + (2 / 120)
-                second_jump_delay = double_jump_window
 
                 if T <= minimum_launch_time:
                     print(
@@ -1701,88 +1593,8 @@ class Aerial:
                     agent.push(ball_recovery())
                     return
 
-                jump_tau = min(jump_max_duration, max(0.0, T))
-                single_position = (
-                    xf
-                    + agent.me.up * jump_speed * T
-                    + agent.me.up * jump_acc * jump_tau
-                    * (T - 0.5 * jump_tau)
-                )
-                single_velocity = (
-                    vf
-                    + agent.me.up * jump_speed
-                    + agent.me.up * jump_acc * jump_tau
-                )
-                (
-                    single_boost, single_viable,
-                    single_ratio, single_speed
-                ) = self._party_cannon_boost_estimate(
-                    agent, self.target, T,
-                    single_position, single_velocity
-                )
-
-                double_boost = float("inf")
-                double_viable = False
-                double_ratio = float("inf")
-                double_speed = float("inf")
-                if T > second_jump_delay and not agent.me.doublejumped:
-                    double_position = (
-                        single_position
-                        + agent.me.up * jump_speed
-                        * (T - second_jump_delay)
-                    )
-                    double_velocity = (
-                        single_velocity + agent.me.up * jump_speed
-                    )
-                    (
-                        double_boost, double_viable,
-                        double_ratio, double_speed
-                    ) = self._party_cannon_boost_estimate(
-                        agent, self.target, T,
-                        double_position, double_velocity
-                    )
-
-                if wall_double_jump and double_viable:
-                    self.jump_type_fast = True
-                elif double_viable and (
-                    not single_viable or double_boost < single_boost
-                ):
-                    self.jump_type_fast = True
-                elif single_viable:
-                    self.jump_type_fast = False
-                elif T <= 1.5:
-                    self.jump_type_fast = T > double_jump_window
-                    print(
-                        f"[AERIAL PC LATE FALLBACK] T={T:.2f} "
-                        f"single={single_viable} double={double_viable}",
-                        flush=True
-                    )
-                else:
-                    print(
-                        f"[AERIAL PC REJECT] "
-                        f"single_boost={single_boost:.1f} "
-                        f"double_boost={double_boost:.1f} "
-                        f"single_ratio={single_ratio:.2f} "
-                        f"double_ratio={double_ratio:.2f} "
-                        f"single_speed={single_speed:.0f} "
-                        f"double_speed={double_speed:.0f} "
-                        f"boost={agent.me.boost:.0f}",
-                        flush=True
-                    )
-                    agent.pop()
-                    agent.shooting = False
-                    agent.push(ball_recovery())
-                    return
-
+                self.jump_type_fast = T > double_jump_window
                 self.jumping = True
-                print(
-                    f"[AERIAL PC LAUNCH] mode="
-                    f"{'double' if self.jump_type_fast else 'single'} "
-                    f"single_boost={single_boost:.1f} "
-                    f"double_boost={double_boost:.1f} "
-                    f"T={T:.2f}",
-                    flush=True
-                )
 
                 if not self.jump_type_fast:
                     print(
@@ -1792,7 +1604,7 @@ class Aerial:
                         flush=True
                     )
 
-                if wall_double_jump and self.jump_type_fast:
+                if wall_double_jump:
                     print(
                         f"[AERIAL WALL DOUBLE JUMP] "
                         f"side={car_wall_side} T={T:.2f} "
@@ -1817,10 +1629,7 @@ class Aerial:
             jump_elapsed = agent.time - self.jump_time
 
             # how much of the jump acceleration time is left
-            tau = max(
-                0.0,
-                min(jump_max_duration - jump_elapsed, T)
-            )
+            tau = max(0.0, jump_max_duration - jump_elapsed)
 
             # impulse from the first jump
             if jump_elapsed == 0:
@@ -1839,7 +1648,7 @@ class Aerial:
 
                 # Include the second-jump impulse in the predicted path only
                 # when there is still enough time for it to contribute.
-                if T > second_jump_delay and not agent.me.doublejumped:
+                if T > 0.18 and not agent.me.doublejumped:
                     vf += agent.me.up * jump_speed
                     xf += agent.me.up * jump_speed * max(
                         0.0, T - second_jump_delay
@@ -1930,75 +1739,43 @@ class Aerial:
                     upside_down=self.shot_vector.z < 0
                 )
 
-        # Apply Noob Black's angular-rate compensation after Volt's PD
-        # controller has chosen the desired pitch and yaw.
-        if agent.me.airborne and not self.dodging:
-            self._apply_noob_black_rotation_damping(agent)
 
-        # Party Cannon flight feedback: use the predicted contact offset,
-        # not a fixed alignment gate or boost amount.
-        if not self.dodging and T > 0:
-            forward = agent.me.forward.normalize()
-            forward_dot = cap(
-                forward.dot(delta_x.normalize()), -1.0, 1.0
-            )
-            turn_angle = math.acos(forward_dot)
-            projected_delta_v = delta_x.dot(forward) / T
-            boost_frame_time = max(dt, 13 / 120)
-            boost_threshold = (
-                agent.boost_accel + throttle_accel
-            ) * boost_frame_time
-
-            if (
-                turn_angle < 0.4
-                and agent.me.boost > 0
-                and projected_delta_v >= boost_threshold
-            ):
+        # only boost/throttle if we're facing the right direction
+        if abs(agent.me.forward.dot(direction)) > 0.5 and T > 0:
+            if T > 1 and not self.jumping: agent.controller.roll = 1 if self.shot_vector.z < 0 else -1
+            # the change in velocity the bot needs to put it on an intercept course with the target
+            delta_v = delta_x.dot(agent.me.forward) / T
+            if agent.me.boost > 0 and delta_v >= agent.boost_accel * min_boost_time:
                 agent.controller.boost = True
+                delta_v -= agent.boost_accel * min_boost_time
 
-            throttle_frame_time = max(dt, 1 / 120)
-            agent.controller.throttle = cap(
-                projected_delta_v
-                / (throttle_accel * throttle_frame_time),
-                -1,
-                1
-            )
+            if delta_v >= throttle_accel * min_boost_time:
+                agent.controller.throttle = cap(delta_v / (throttle_accel * min_boost_time), -1, 1)
 
         # Once the car has actually left the ground, do not let the
         # conservative pre-launch viability test cancel an aerial mid-flight.
         # Keep the expiry check as the hard stop after the contact window.
-        if (
-            agent.me.airborne
-            and T > 0.5
-            and delta_x.magnitude() > 50
-        ):
-            required_acceleration = (
-                2.0 * delta_x.magnitude() / (T * T)
-            )
-            if (
-                required_acceleration * 0.8 > throttle_accel
-                and (
-                    agent.me.boost <= 0
-                    or required_acceleration * 0.8
-                    > agent.boost_accel + throttle_accel
-                )
-            ):
-                print(
-                    f"[AERIAL PC UNREACHABLE] T={T:.2f} "
-                    f"offset={delta_x.magnitude():.0f} "
-                    f"required_accel={required_acceleration:.0f} "
-                    f"boost={agent.me.boost:.0f}",
-                    flush=True
-                )
-                agent.pop()
-                agent.shooting = False
-                agent.push(ball_recovery())
-                return
-
         if T <= -0.4:
             print(
                 f"[AERIAL CANCEL] intercept expired T={T:.3f} "
                 f"jumping={self.jumping} airborne={agent.me.airborne}",
+                flush=True
+            )
+            agent.pop()
+            agent.shooting = False
+            agent.push(ball_recovery())
+        elif (
+            not self.jumping
+            and not agent.me.airborne
+            and T > 1.5
+            and not virxrlcu.aerial_shot_is_viable(
+                T, agent.boost_accel, tuple(agent.gravity),
+                agent.me.get_raw(agent), tuple(self.target)
+            )
+        ):
+            print(
+                f"[AERIAL CANCEL] pre-launch viability failed T={T:.3f} "
+                f"boost={agent.me.boost:.0f}",
                 flush=True
             )
             agent.pop()
