@@ -1150,7 +1150,7 @@ class Bot(VirxERLU):
 
         if (
             goalie.index != attacker.index
-            and ball_depth >= 0.0
+            and ball_depth > 0.0
         ):
             goalie_angle = self._car_ball_facing_angle(goalie)
             best_other_angle = min(
