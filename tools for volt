@@ -3,83 +3,8 @@ from util.utils import Vector, math, side, cap
 from util.grid_double_jump import (
     find_double_jump as grid_find_double_jump,
     find_aerial_launch as grid_find_aerial_launch,
-    acceleration_table,
-    new_jump_time,
-    new_max_jump_height
 )
 
-
-
-def _shot_reachability(agent, ball_location, shot, intercept_time, target, travel_d, travel_v):
-    """Noob Black-style 120 Hz drive/jump reachability for ground contacts."""
-    shot_type = int(shot.get("shot_type", 0))
-    if shot_type == 3:
-        return True, None
-    if agent.me.airborne:
-        return False, None
-
-    shot_targets = shot.get("targets")
-    if shot_targets is not None and len(shot_targets) >= 2:
-        left, right = shot_targets[0], shot_targets[1]
-    elif target is not None:
-        left, right = target[0], target[1]
-    else:
-        goal = agent.foe_goal.location
-        left = right = (goal.x, goal.y, goal.z)
-
-    left = left if isinstance(left, Vector) else Vector(*left)
-    right = right if isinstance(right, Vector) else Vector(*right)
-    target_center = (left + right) * 0.5
-    ball = ball_location if isinstance(ball_location, Vector) else Vector(*ball_location)
-    direction = (target_center - ball).normalize()
-    if direction.magnitude() < 0.001:
-        return False, None
-
-    # Offset to the ball surface along the intended shot direction.
-    contact = ball - direction * 92.75
-    distance = contact.flat_dist(agent.me.location)
-    time_remaining = intercept_time - agent.time - (1 / 120)
-    if time_remaining <= 0:
-        return False, None
-
-    if shot_type == 0:
-        jump_time = 0.0
-    else:
-        required_height = max(0.0, contact.z - agent.me.location.z)
-        double = shot_type == 2
-        if required_height > new_max_jump_height(double) + 60:
-            return False, None
-        jump_time, _ = new_jump_time(required_height, double)
-        if jump_time is None:
-            return False, None
-    if jump_time > time_remaining:
-        return False, None
-
-    charging_ticks = max(0, min(round(time_remaining * 120), len(travel_d) - 1))
-    driving_ticks = max(
-        0,
-        min(round(max(time_remaining - jump_time, 0.0) * 120), charging_ticks)
-    )
-    reachable = (
-        travel_d[driving_ticks]
-        + travel_v[driving_ticks] * (charging_ticks - driving_ticks) / 120
-    )
-
-    # The table is straight-line acceleration; add a modest heading/turn
-    # margin so a badly aligned car is not treated as instantly facing target.
-    heading = agent.me.forward.flatten()
-    to_contact = (contact - agent.me.location).flatten()
-    turn_margin = 0.0
-    if heading.magnitude() > 1 and to_contact.magnitude() > 1:
-        alignment = cap(heading.normalize().dot(to_contact.normalize()), -1, 1)
-        turn_margin = distance * (1 - alignment) * 0.12
-
-    required_distance = distance + turn_margin
-    return reachable >= required_distance, {
-        "contact": contact, "distance": distance,
-        "required": required_distance, "reachable": reachable,
-        "jump_time": jump_time
-    }
 
 
 def find_wall_drive(agent, cap_=4.0):
@@ -778,11 +703,6 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
     best_score = float("inf")
     best_ball_location = None
     save_mode = _urgent_save_state(agent)
-    earliest_by_type = {}
-    flat_speed = agent.me.velocity.flatten().magnitude()
-    travel_d, travel_v = acceleration_table(
-        flat_speed, max(0.0, float(agent.me.boost))
-    )
     if save_mode:
         print(
             f"[SAVE INTERCEPT] earliest-contact mode | "
@@ -838,13 +758,6 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
         # This operation is very expensive, so we use C to improve run time
         shot = virxrlcu.parse_slice_for_shot_with_target(can_ground, can_jump, can_double_jump, can_aerial and (min_aerial_height < ball_location[2] < max_aerial_height), time_remaining, *game_info, gravity, ball_info, me, targets)
         if shot['found'] == 1:
-            physically_reachable, reach_data = _shot_reachability(
-                agent, ball_location, shot, intercept_time, target,
-                travel_d, travel_v
-            )
-            if not physically_reachable:
-                continue
-
             # At very low boost, a single-jump shot must leave enough time
             # for the jump and the follow-up dodge impulse. Reject slices
             # whose timing only works if the car reaches the ball without
@@ -877,34 +790,21 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             ):
                 continue
 
-            shot_type = int(shot.get("shot_type", 0))
-            if shot_type not in earliest_by_type:
-                if save_mode:
-                    score = time_remaining + {
-                        0: 0.000, 1: 0.005, 2: 0.015, 3: 0.025
-                    }.get(shot_type, 0.02)
-                else:
-                    score = shot_candidate_score(
-                        agent, ball_slice, shot, time_remaining, target
-                    )
-                earliest_by_type[shot_type] = (
-                    score, shot, intercept_time, Vector(*ball_location)
+            if save_mode:
+                shot_type = shot.get("shot_type", 0)
+                score = time_remaining + {
+                    0: 0.000, 1: 0.005, 2: 0.015, 3: 0.025
+                }.get(shot_type, 0.02)
+            else:
+                score = shot_candidate_score(
+                    agent, ball_slice, shot, time_remaining, target
                 )
-                if reach_data is not None:
-                    print(
-                        f"[INTERCEPT REACHABLE] type={shot_type} "
-                        f"T={time_remaining:.3f} "
-                        f"drive={reach_data['distance']:.0f}/"
-                        f"{reach_data['reachable']:.0f} "
-                        f"jump={reach_data['jump_time']:.3f}",
-                        flush=True
-                    )
-                else:
-                    print(
-                        f"[INTERCEPT REACHABLE] type={shot_type} "
-                        f"T={time_remaining:.3f} aerial",
-                        flush=True
-                    )
+            if score < best_score:
+                best_score = score
+                best_shot = shot
+                best_intercept_time = intercept_time
+                best_ball_z = ball_location[2]
+                best_ball_location = Vector(*ball_location)
     # Compare Grid's candidate against Volt's best C-parser candidate.
     if grid_candidate is not None:
         grid_time = grid_candidate["time"]
@@ -951,13 +851,14 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                         target
                     )
 
-                existing = earliest_by_type.get(2)
-                if existing is None or grid_time < existing[2]:
-                    earliest_by_type[2] = (
-                        grid_score, grid_shot, grid_time, grid_ball_location
-                    )
+                if grid_score < best_score:
+                    best_score = grid_score
+                    best_shot = grid_shot
+                    best_intercept_time = grid_time
+                    best_ball_z = grid_ball_location.z
+                    best_ball_location = grid_ball_location
                     print(
-                        f"[GRID DOUBLE JUMP] earliest type=2 | "
+                        f"[GRID DOUBLE JUMP] Selected | "
                         f"time={grid_time_remaining:.2f} "
                         f"score={grid_score:.3f} "
                         f"height={grid_ball_location.z:.0f}",
@@ -992,14 +893,14 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                         agent, grid_slice, grid_aerial_shot,
                         grid_time_remaining, target
                     )
-                existing = earliest_by_type.get(3)
-                if existing is None or grid_time < existing[2]:
-                    earliest_by_type[3] = (
-                        grid_aerial_score, grid_aerial_shot,
-                        grid_time, grid_ball
-                    )
+                if grid_aerial_score < best_score:
+                    best_score = grid_aerial_score
+                    best_shot = grid_aerial_shot
+                    best_intercept_time = grid_time
+                    best_ball_z = grid_ball.z
+                    best_ball_location = grid_ball
                     print(
-                        f"[GRID AERIAL LAUNCH] earliest "
+                        f"[GRID AERIAL LAUNCH] selected "
                         f"T={grid_time_remaining:.2f} "
                         f"vertical_reach={grid_aerial_candidate['vertical_reach']:.0f} "
                         f"horizontal_reach={grid_aerial_candidate['reachable']:.0f} "
@@ -1008,17 +909,6 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                     )
 
     # The loop has ended; construct the best nearby feasible shot.
-    # Select between the earliest feasible candidate of each shot type.
-    # Scoring may choose between types, but cannot replace a type's earliest
-    # reachable contact with a later slice of that same type.
-    for score, shot, intercept_time, ball_location in earliest_by_type.values():
-        if score < best_score:
-            best_score = score
-            best_shot = shot
-            best_intercept_time = intercept_time
-            best_ball_z = ball_location.z
-            best_ball_location = ball_location
-
     if best_shot is None:
         return None
     time_to_intercept = best_intercept_time - agent.time
@@ -1206,11 +1096,6 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
     best_intercept_time = None
     best_score = float("inf")
     best_ball_location = None
-    earliest_by_type = {}
-    flat_speed = agent.me.velocity.flatten().magnitude()
-    travel_d, travel_v = acceleration_table(
-        flat_speed, max(0.0, float(agent.me.boost))
-    )
     grid_candidate = None
     grid_aerial_candidate = None
 
@@ -1277,13 +1162,6 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
         if shot['found'] != 1:
             continue
 
-        physically_reachable, reach_data = _shot_reachability(
-            agent, ball_location, shot, intercept_time, None,
-            travel_d, travel_v
-        )
-        if not physically_reachable:
-            continue
-
         if not useful_non_aerial_shot(
             agent,
             ball_location,
@@ -1293,30 +1171,15 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
         ):
             continue
 
-        # Keep only the first physically reachable candidate of each type.
-        shot_type = int(shot.get("shot_type", 0))
-        if shot_type not in earliest_by_type:
-            score = shot_candidate_score(
-                agent, ball_slice, shot, time_remaining, target=None
-            )
-            earliest_by_type[shot_type] = (
-                score, shot, intercept_time, Vector(*ball_location)
-            )
-            if reach_data is not None:
-                print(
-                    f"[INTERCEPT REACHABLE] untargeted type={shot_type} "
-                    f"T={time_remaining:.3f} "
-                    f"drive={reach_data['distance']:.0f}/"
-                    f"{reach_data['reachable']:.0f} "
-                    f"jump={reach_data['jump_time']:.3f}",
-                    flush=True
-                )
-            else:
-                print(
-                    f"[INTERCEPT REACHABLE] untargeted type={shot_type} "
-                    f"T={time_remaining:.3f} aerial",
-                    flush=True
-                )
+        score = shot_candidate_score(
+            agent, ball_slice, shot, time_remaining, target=None
+        )
+        if score < best_score:
+            best_score = score
+            best_shot = shot
+            best_intercept_time = intercept_time
+            best_ball_z = ball_location[2]
+            best_ball_location = Vector(*ball_location)
     if grid_candidate is not None:
         grid_time = grid_candidate["time"]
         grid_time_remaining = grid_time - agent.time - (1 / 120)
@@ -1361,13 +1224,14 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
                     target=None
                 )
 
-                existing = earliest_by_type.get(2)
-                if existing is None or grid_time < existing[2]:
-                    earliest_by_type[2] = (
-                        grid_score, grid_shot, grid_time, grid_ball_location
-                    )
+                if grid_score < best_score:
+                    best_score = grid_score
+                    best_shot = grid_shot
+                    best_intercept_time = grid_time
+                    best_ball_z = grid_ball_location.z
+                    best_ball_location = grid_ball_location
                     print(
-                        f"[GRID DOUBLE JUMP] earliest untargeted type=2 | "
+                        f"[GRID DOUBLE JUMP] Selected untargeted | "
                         f"time={grid_time_remaining:.2f} "
                         f"score={grid_score:.3f} "
                         f"height={grid_ball_location.z:.0f}",
@@ -1392,31 +1256,24 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
                 agent, grid_slice, grid_aerial_shot,
                 grid_time_remaining, target=None
             )
-            existing = earliest_by_type.get(3)
-            if existing is None or grid_time < existing[2]:
-                aerial_score = shot_candidate_score(
-                    agent, grid_slice, grid_aerial_shot,
-                    grid_time_remaining, target=None
-                )
-                earliest_by_type[3] = (
-                    aerial_score, grid_aerial_shot, grid_time, grid_ball
-                )
+            grid_score = shot_candidate_score(
+                agent, grid_slice, grid_aerial_shot,
+                grid_time_remaining, target=None
+            )
+            if grid_score < best_score:
+                best_score = grid_score
+                best_shot = grid_aerial_shot
+                best_intercept_time = grid_time
+                best_ball_z = grid_ball.z
+                best_ball_location = grid_ball
                 print(
-                    f"[GRID AERIAL LAUNCH] earliest untargeted "
+                    f"[GRID AERIAL LAUNCH] selected untargeted "
                     f"T={grid_time_remaining:.2f} "
                     f"vertical_reach={grid_aerial_candidate['vertical_reach']:.0f} "
                     f"horizontal_reach={grid_aerial_candidate['reachable']:.0f} "
                     f"boost={agent.me.boost:.0f} airborne={agent.me.airborne}",
                     flush=True
                 )
-
-    for score, shot, intercept_time, ball_location in earliest_by_type.values():
-        if score < best_score:
-            best_score = score
-            best_shot = shot
-            best_intercept_time = intercept_time
-            best_ball_z = ball_location.z
-            best_ball_location = ball_location
 
     if best_shot is None:
         return None
@@ -1647,8 +1504,9 @@ def get_slices(agent, cap_):
         if relative_time > max_time:
             break
 
-        # Match Noob Black's 60 Hz candidate scan across the horizon.
-        sample_interval = 1 / 60
+        sample_interval = (
+            0.05 if relative_time < 1.5 else 0.10
+        )
 
         if relative_time - last_sample < sample_interval:
             continue
