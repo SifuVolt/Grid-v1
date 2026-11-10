@@ -50,7 +50,7 @@ def acceleration_table(speed, boost):
     velocities = [max(0.0, speed)]
     for i in range(720):
         v = velocities[-1]
-        use_boost = (i / 120) < boost
+        use_boost = (i / 3.6) < boost
         if v <= 1400:
             next_v = v + (1600 - 1440 / 1400 * v + (2975 / 3 if use_boost else 0)) / 120
         elif v < 1410:
