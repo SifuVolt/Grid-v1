@@ -1144,15 +1144,13 @@ class Bot(VirxERLU):
         # pointing at the ball better than either teammate, let it challenge.
         # This is a narrow role-selection exception, not a global teamplay
         # priority override.
-        # Do not let the goalie leave its role through the 3D-facing-angle
-        # exception once the ball is a few car lengths into the opponent half.
-        # A small midfield crossing is not enough to release the net.
+        # The 3D-facing-angle exception is strictly defensive:
+        # it is available only while the ball remains in our half.
         ball_depth = ball.y * side
-        goalie_angle_release_limit = -300.0
 
         if (
             goalie.index != attacker.index
-            and ball_depth >= goalie_angle_release_limit
+            and ball_depth >= 0.0
         ):
             goalie_angle = self._car_ball_facing_angle(goalie)
             best_other_angle = min(
