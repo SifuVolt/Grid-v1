@@ -454,23 +454,11 @@ def unrealistic_goal_shot(agent, ball_location, target):
             return True
 
     return False
-def _near_own_goal(agent):
-    """True when the car is in the goal mouth, near a post, or on the goal line."""
+def _in_own_net(agent):
+    """True only when the car is inside the own goal opening, behind the goal line."""
     car_location = agent.me.location
-    own_goal = agent.friend_goal.location
-
-    if car_location.flat_dist(own_goal) <= 1400:
-        return True
-
-    for post in (
-        agent.friend_goal.left_post,
-        agent.friend_goal.right_post
-    ):
-        if car_location.flat_dist(post) <= 1100:
-            return True
-
     own_depth = car_location.y * side(agent.team)
-    return own_depth >= 4300 and abs(car_location.x) <= 1350
+    return own_depth >= 5120 and abs(car_location.x) <= 900
 
 
 def shot_candidate_score(agent, ball_slice, shot, time_remaining, target=None):
@@ -748,10 +736,9 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
     can_jump = is_on_ground and can_jump
     can_double_jump = is_on_ground and can_double_jump
 
-    # In/near our goal or beside either post, avoid single-jump shots.
-    # Keep double-jump candidates enabled because they give a stronger
-    # boost-free vertical save/challenge option.
-    if can_jump and _near_own_goal(agent):
+    # Only disable single-jump shots when the car is actually inside our net.
+    # Being near a post or elsewhere in the goal area is not enough.
+    if can_jump and _in_own_net(agent):
         can_jump = False
 
     if not can_ground and not can_jump and not can_double_jump and not can_aerial:
@@ -805,7 +792,32 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
         # Check if we can make a shot at this slice
 
         # This operation is very expensive, so we use C to improve run time
-        shot = virxrlcu.parse_slice_for_shot_with_target(can_ground, can_jump, can_double_jump, can_aerial and (min_aerial_height < ball_location[2] < max_aerial_height), time_remaining, *game_info, gravity, ball_info, me, targets)
+        # At zero boost, select the jump type from the predicted ball height:
+        # airborne ball -> double jump; grounded ball -> regular jump shot.
+        slice_can_jump = can_jump
+        slice_can_double_jump = can_double_jump
+        slice_can_aerial = can_aerial and (
+            min_aerial_height < ball_location[2] < max_aerial_height
+        )
+        if agent.boost_amount != "unlimited" and agent.me.boost <= 0:
+            if ball_location[2] > 105.0:
+                slice_can_jump = False
+                slice_can_aerial = False
+            else:
+                slice_can_double_jump = False
+
+        shot = virxrlcu.parse_slice_for_shot_with_target(
+            can_ground,
+            slice_can_jump,
+            slice_can_double_jump,
+            slice_can_aerial,
+            time_remaining,
+            *game_info,
+            gravity,
+            ball_info,
+            me,
+            targets
+        )
         if shot['found'] == 1:
             # At very low boost, a single-jump shot must leave enough time
             # for the jump and the follow-up dodge impulse. Reject slices
@@ -894,7 +906,11 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                 "targets": grid_candidate["targets"]
             }
 
-            if useful_non_aerial_shot(
+            if not (
+                agent.boost_amount != "unlimited"
+                and agent.me.boost <= 0
+                and grid_ball_location.z <= 105.0
+            ) and useful_non_aerial_shot(
                 agent,
                 grid_ball_tuple,
                 grid_slice.physics.velocity,
@@ -1106,9 +1122,8 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
     can_jump = is_on_ground and can_jump
     can_double_jump = is_on_ground and can_double_jump
 
-    # Keep single-jump shots out of the goal mouth and post area.
-    # Double-jump saves/challenges remain available.
-    if can_jump and _near_own_goal(agent):
+    # Only disable single-jump shots when the car is actually inside our net.
+    if can_jump and _in_own_net(agent):
         can_jump = False
 
     if not can_ground and not can_jump and not can_double_jump and not can_aerial:
@@ -1157,15 +1172,27 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
             )
         )
 
+        # At zero boost, airborne contacts must use a double jump;
+        # grounded contacts may use a regular jump shot instead.
+        slice_can_jump = can_jump
+        slice_can_double_jump = can_double_jump
+        slice_can_aerial = can_aerial and (
+            min_aerial_height
+            < ball_location[2]
+            < max_aerial_height
+        )
+        if agent.boost_amount != "unlimited" and agent.me.boost <= 0:
+            if ball_location[2] > 105.0:
+                slice_can_jump = False
+                slice_can_aerial = False
+            else:
+                slice_can_double_jump = False
+
         shot = virxrlcu.parse_slice_for_shot(
             can_ground,
-            can_jump,
-            can_double_jump,
-            can_aerial and (
-                min_aerial_height
-                < ball_location[2]
-                < max_aerial_height
-            ),
+            slice_can_jump,
+            slice_can_double_jump,
+            slice_can_aerial,
             time_remaining,
             *game_info,
             gravity,
@@ -1230,7 +1257,11 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
                 "targets": grid_candidate["targets"]
             }
 
-            if useful_non_aerial_shot(
+            if not (
+                agent.boost_amount != "unlimited"
+                and agent.me.boost <= 0
+                and grid_ball_location.z <= 105.0
+            ) and useful_non_aerial_shot(
                 agent,
                 grid_ball_tuple,
                 grid_slice.physics.velocity,
