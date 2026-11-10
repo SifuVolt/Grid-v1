@@ -1338,12 +1338,9 @@ class Aerial:
             agent.dbg_2d("Jumping")
 
             if not self.jumping:
-                # A very short aerial should preserve the second jump
-                # for the contact dodge instead of spending it on takeoff.
-                # A car attached to the same side wall as the predicted
-                # ball can use a fast double-jump launch to leave the wall
-                # and reach the aerial contact. Do not trigger this from the
-                # opposite wall or from a backboard/ceiling.
+                # Launch with the fast double-jump sequence. A car attached
+                # to the same side wall as the predicted ball can also use
+                # the launch to leave the wall and reach the contact point.
                 ball_wall_side = 1 if self.ball.x >= 0 else -1
                 car_wall_side = 1 if agent.me.location.x >= 0 else -1
                 wall_double_jump = (
@@ -1387,11 +1384,10 @@ class Aerial:
                 self.counter = 0
                 self.second_jump_commanded = False
                 self.second_jump_command_time = -1
-                self.second_jump_use = None
                 print(
                     f"[AERIAL JUMP PLAN] T={T:.2f} "
-                    f"fast_aerial={self.jump_type_fast} "
-                    f"save_dodge={not self.jump_type_fast}",
+                    f"fast_aerial=True "
+                    f"second_jump=required",
                     flush=True
                 )
 
@@ -1410,11 +1406,6 @@ class Aerial:
             xf += agent.me.up * jump_acc * tau * (T - 0.5 * tau)
 
             if self.jump_type_fast:
-                second_jump_delay = max(
-                    0.0,
-                    jump_max_duration + (2 / 120) - jump_elapsed
-                )
-
                 # Always spend the second jump as part of the fast aerial.
                 # Do not downgrade to a single jump or save it as a late dodge.
                 if jump_elapsed <= jump_max_duration:
