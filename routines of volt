@@ -1558,6 +1558,23 @@ class Aerial:
                 flush=True
             )
 
+        # Noob Black's target_func raises the intended goal-plane
+        # contact height with distance from goal. Keep that influence bounded
+        # to the goal mouth and blend it with Volt's existing aim height.
+        goal_distance = abs(self.ball.y - updated_goal_aim.y)
+        noob_black_height = (
+            goal_distance
+            * math.tan(
+                min(goal_distance / 5120, 1.0) * math.pi / 4
+            )
+        )
+        noob_black_height = cap(noob_black_height, 300, 560)
+        updated_goal_aim.z = cap(
+            updated_goal_aim.z * 0.75 + noob_black_height * 0.25,
+            120,
+            620
+        )
+
         if (
             self.goal_aim_point is None
             or self.goal_aim_point.dist(updated_goal_aim) > 25
@@ -1700,6 +1717,10 @@ class Aerial:
                 * (T - 0.5 * jump_tau_for_contact)
             )
 
+        new_contact_selection = (
+            self.selected_ball_contact_label is None
+            or self.hitbox_contact_label is None
+        )
         contact = self._aerial_contact_geometry(
             agent,
             self.ball,
@@ -1713,17 +1734,18 @@ class Aerial:
         self.car_contact_offset = contact["car_offset"]
         self.target = contact["car_target"]
 
-        print(
-            f"[AERIAL SELECTIVE CONTACT] "
-            f"ball={contact['ball_label']} "
-            f"car={contact['car_label']} "
-            f"score={contact['score']:.1f} "
-            f"ball_point=({self.contact_point.x:.0f},"
-            f"{self.contact_point.y:.0f},{self.contact_point.z:.0f}) "
-            f"car_target=({self.target.x:.0f},{self.target.y:.0f},"
-            f"{self.target.z:.0f})",
-            flush=True
-        )
+        if new_contact_selection:
+            print(
+                f"[AERIAL SELECTIVE CONTACT] "
+                f"ball={contact['ball_label']} "
+                f"car={contact['car_label']} "
+                f"score={contact['score']:.1f} "
+                f"ball_point=({self.contact_point.x:.0f},"
+                f"{self.contact_point.y:.0f},{self.contact_point.z:.0f}) "
+                f"car_target=({self.target.x:.0f},{self.target.y:.0f},"
+                f"{self.target.z:.0f})",
+                flush=True
+            )
 
         agent.sphere(self.ball, 92.75)
         agent.sphere(self.contact_point, 10)
