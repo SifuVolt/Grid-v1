@@ -1336,6 +1336,7 @@ class Aerial:
             return goal_direction
 
         return desired_direction.normalize()
+
     def _aerial_contact_geometry(
         self, agent, ball_location, shot_direction,
         predicted_car_location, inverted
@@ -1677,11 +1678,33 @@ class Aerial:
         # The target is the car's physics centre at contact, not the ball
         # centre: the selected nose/windshield/front-wheel region is offset
         # from that centre using the predicted contact orientation.
+        # Match the contact selector's predicted car centre to the same
+        # first-jump trajectory used by the aerial controller below.
+        contact_prediction = xf.copy()
+        if self.jumping or not agent.me.airborne:
+            jump_elapsed_for_contact = (
+                agent.time - self.jump_time if self.jumping else 0.0
+            )
+            jump_tau_for_contact = max(
+                0.0,
+                jump_max_duration - jump_elapsed_for_contact
+            )
+            if jump_elapsed_for_contact == 0:
+                contact_prediction += (
+                    agent.me.up * jump_speed * T
+                )
+            contact_prediction += (
+                agent.me.up
+                * jump_acc
+                * jump_tau_for_contact
+                * (T - 0.5 * jump_tau_for_contact)
+            )
+
         contact = self._aerial_contact_geometry(
             agent,
             self.ball,
             self.shot_vector,
-            xf,
+            contact_prediction,
             self.inverted
         )
 
