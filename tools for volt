@@ -454,6 +454,25 @@ def unrealistic_goal_shot(agent, ball_location, target):
             return True
 
     return False
+def _near_own_goal(agent):
+    """True when the car is in the goal mouth, near a post, or on the goal line."""
+    car_location = agent.me.location
+    own_goal = agent.friend_goal.location
+
+    if car_location.flat_dist(own_goal) <= 1400:
+        return True
+
+    for post in (
+        agent.friend_goal.left_post,
+        agent.friend_goal.right_post
+    ):
+        if car_location.flat_dist(post) <= 1100:
+            return True
+
+    own_depth = car_location.y * side(agent.team)
+    return own_depth >= 4300 and abs(car_location.x) <= 1350
+
+
 def shot_candidate_score(agent, ball_slice, shot, time_remaining, target=None):
     """Lower is better: favour useful shots and stronger likely contacts."""
     ball = ball_slice.physics.location
@@ -616,12 +635,22 @@ def shot_candidate_score(agent, ball_slice, shot, time_remaining, target=None):
                     best_friend_edge = max(best_friend_edge, edge)
             score += best_friend_edge
 
-    # Low boost makes complicated shots less attractive.
+    # Low boost reduces the appeal of boost-dependent aerials. With no
+    # boost at all, strongly prefer a double-jump touch over a single jump:
+    # the double jump supplies a second vertical impulse without boost.
     if agent.me.boost < 12:
-        if shot_type == 2:
-            score += 0.20
+        if shot_type == 1:
+            score += 0.18
+        elif shot_type == 2:
+            score += 0.08
         elif shot_type == 3:
             score += 0.10
+
+    if agent.me.boost <= 0:
+        if shot_type == 1:
+            score += 0.22
+        elif shot_type == 2:
+            score -= 0.12
 
     return score
 
@@ -718,6 +747,12 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
     can_ground = is_on_ground and can_ground
     can_jump = is_on_ground and can_jump
     can_double_jump = is_on_ground and can_double_jump
+
+    # In/near our goal or beside either post, avoid single-jump shots.
+    # Keep double-jump candidates enabled because they give a stronger
+    # boost-free vertical save/challenge option.
+    if can_jump and _near_own_goal(agent):
+        can_jump = False
 
     if not can_ground and not can_jump and not can_double_jump and not can_aerial:
         return
