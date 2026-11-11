@@ -997,502 +997,64 @@ class double_jump:
 class Aerial:
     def __init__(self, intercept_time, targets=None, fast_aerial=True):
         self.intercept_time = intercept_time
-        self.fast_aerial = True
+        self.fast_aerial = fast_aerial
         self.targets = targets
-        self.goal_aim_point = None
         self.shot_vector = None
         self.target = None
         self.ball = None
 
-        self.jump_type_fast = True
+        self.jump_type_fast = None
         self.jumping = False
         self.dodging = False
         self.ceiling = False
         self.jump_time = -1
         self.counter = 0
-        self.second_jump_commanded = False
-        self.second_jump_command_time = -1
-        self.inverted = None
-
-        # Preserve the contact selected by tools. Its surface normal chooses
-        # the approach side; the aerial itself aims the nose at the ball's
-        # lower-centre point.
-        self.tools_contact_point = None
-        self.tools_contact_normal = None
-        self.contact_label = None
-        self.contact_normal = None
-        self.contact_point = None
-
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
-        self.fast_aerial = True
+        self.fast_aerial = shot.fast_aerial
         self.targets = shot.targets
-        self.tools_contact_point = getattr(shot, "contact_point", None)
-        self.tools_contact_normal = getattr(shot, "contact_normal", None)
-        self.contact_label = getattr(shot, "contact_label", None)
-        self.contact_normal = None
-        self.contact_point = None
-    
-    @staticmethod
-    def _cross(a, b):
-        return Vector(
-            a.y * b.z - a.z * b.y,
-            a.z * b.x - a.x * b.z,
-            a.x * b.y - a.y * b.x
-        )
-
-    def party_cannon_shot_direction(
-        self, ball_location, ball_velocity,
-        car_location, shot_target, time_remaining,
-        car_forward=None, car_boost=0, gravity=None, car_velocity=None,
-        car_angular_velocity=None, car_right=None, car_up=None
-    ):
-        """
-        Predict the required outgoing ball direction while accounting
-        for the car's estimated contact velocity and existing ball motion.
-        """
-
-        max_speed = 2300.0
-
-        to_ball = ball_location - car_location
-        # Keep the complete 3D goal vector. Flattening here discarded the
-        # vertical component and made aerials aim as if the goal were level
-        # with the ball, even when the correct shot needed to rise or dip.
-        to_target = shot_target - ball_location
-
-        if to_target.magnitude() < 1:
-            return Vector(0, 1, 0)
-
-        goal_direction = to_target.normalize()
-
-        if time_remaining <= 0.001:
-            return goal_direction
-
-        # Estimate air turning from the car's current angular velocity and
-        # the game's pitch/yaw angular acceleration, then integrate boost
-        # along the nose direction as it rotates toward the ball.
-        current_velocity = car_velocity if car_velocity is not None else Vector()
-
-        if car_forward is None or car_forward.magnitude() < 0.01:
-            car_forward = to_ball.normalize()
-        else:
-            car_forward = car_forward.normalize()
-
-        desired_direction = to_ball.normalize()
-        heading_dot = cap(car_forward.dot(desired_direction), -1, 1)
-        heading_error = math.acos(heading_dot)
-
-        turn_axis = self._cross(car_forward, desired_direction)
-        if turn_axis.magnitude() < 0.001 and heading_error > 0.01:
-            turn_axis = (
-                car_right.normalize()
-                if car_right is not None and car_right.magnitude() > 0.01
-                else Vector(0, 0, 1)
-            )
-        elif turn_axis.magnitude() > 0.001:
-            turn_axis = turn_axis.normalize()
-
-        angular_velocity = (
-            car_angular_velocity
-            if car_angular_velocity is not None
-            else Vector()
-        )
-        initial_turn_rate = angular_velocity.dot(turn_axis)
-
-        # Pitch and yaw have different air-control acceleration. Resolve the
-        # required rotation axis against the car's current local axes.
-        yaw_weight = (
-            abs(turn_axis.dot(car_up))
-            if car_up is not None else 0.5
-        )
-        pitch_weight = (
-            abs(turn_axis.dot(car_right))
-            if car_right is not None else 0.5
-        )
-        angular_acceleration = math.sqrt(
-            (9.11 * yaw_weight) ** 2
-            + (12.46 * pitch_weight) ** 2
-        )
-        angular_acceleration = max(8.0, angular_acceleration)
-        max_turn_rate = 5.5
-
-        # Estimate time to rotate through the required angle, including
-        # any existing angular velocity that initially opposes the turn.
-        if initial_turn_rate < 0:
-            time_to_reverse = -initial_turn_rate / angular_acceleration
-            angle_at_reverse = (
-                initial_turn_rate * time_to_reverse
-                + 0.5 * angular_acceleration * time_to_reverse ** 2
-            )
-            angle_after_reverse = max(
-                0.0, heading_error - angle_at_reverse
-            )
-            time_to_max_from_reverse = (
-                max_turn_rate / angular_acceleration
-            )
-            angle_to_max_from_reverse = (
-                0.5 * angular_acceleration
-                * time_to_max_from_reverse ** 2
-            )
-            if angle_after_reverse <= angle_to_max_from_reverse:
-                turn_time = (
-                    time_to_reverse
-                    + math.sqrt(
-                        2 * angle_after_reverse / angular_acceleration
-                    )
-                )
-            else:
-                turn_time = (
-                    time_to_reverse
-                    + time_to_max_from_reverse
-                    + (
-                        angle_after_reverse - angle_to_max_from_reverse
-                    ) / max_turn_rate
-                )
-            time_to_max_rate = (
-                time_to_reverse + time_to_max_from_reverse
-            )
-            angle_at_max_rate = (
-                angle_at_reverse + angle_to_max_from_reverse
-            )
-        elif initial_turn_rate < max_turn_rate:
-            time_to_max_rate = (
-                max_turn_rate - initial_turn_rate
-            ) / angular_acceleration
-            angle_at_max_rate = (
-                initial_turn_rate * time_to_max_rate
-                + 0.5 * angular_acceleration * time_to_max_rate ** 2
-            )
-            if heading_error <= angle_at_max_rate:
-                turn_time = (
-                    -initial_turn_rate
-                    + math.sqrt(
-                        initial_turn_rate ** 2
-                        + 2 * angular_acceleration * heading_error
-                    )
-                ) / angular_acceleration
-            else:
-                turn_time = (
-                    time_to_max_rate
-                    + (heading_error - angle_at_max_rate) / max_turn_rate
-                )
-        else:
-            time_to_max_rate = 0.0
-            angle_at_max_rate = 0.0
-            turn_time = heading_error / max_turn_rate
-
-        turn_time = min(time_remaining, max(0.0, turn_time))
-
-        # Integrate boost in short steps so acceleration follows the
-        # rotating forward vector instead of being applied in one guessed
-        # direction after a fixed turn delay.
-        car_final_velocity = current_velocity.copy()
-        boost_acceleration = 1058.333 if car_boost > 0 else 0.0
-        boost_time_left = min(
-            time_remaining,
-            car_boost / boost_per_second
-        )
-        elapsed = 0.0
-        simulation_step = 0.05
-
-        while elapsed < time_remaining:
-            step = min(simulation_step, time_remaining - elapsed)
-            midpoint = elapsed + step * 0.5
-
-            if midpoint >= turn_time:
-                rotation_angle = heading_error
-            elif initial_turn_rate < 0:
-                if midpoint <= time_to_reverse:
-                    rotation_angle = (
-                        initial_turn_rate * midpoint
-                        + 0.5 * angular_acceleration * midpoint ** 2
-                    )
-                elif midpoint <= time_to_max_rate:
-                    after_reverse = midpoint - time_to_reverse
-                    rotation_angle = (
-                        angle_at_reverse
-                        + 0.5 * angular_acceleration * after_reverse ** 2
-                    )
-                else:
-                    rotation_angle = (
-                        angle_at_max_rate
-                        + max_turn_rate * (midpoint - time_to_max_rate)
-                    )
-            elif midpoint <= time_to_max_rate:
-                rotation_angle = (
-                    initial_turn_rate * midpoint
-                    + 0.5 * angular_acceleration * midpoint ** 2
-                )
-            else:
-                rotation_angle = (
-                    angle_at_max_rate
-                    + max_turn_rate * (midpoint - time_to_max_rate)
-                )
-
-            rotation_angle = cap(
-                rotation_angle, -heading_error, heading_error
-            )
-            cosine = math.cos(rotation_angle)
-            sine = math.sin(rotation_angle)
-            axis_cross_forward = self._cross(turn_axis, car_forward)
-            forward_midpoint = (
-                car_forward * cosine
-                + axis_cross_forward * sine
-                + turn_axis * (
-                    turn_axis.dot(car_forward) * (1.0 - cosine)
-                )
-            ).normalize()
-
-            boost_step = min(step, boost_time_left)
-            if boost_step > 0:
-                car_final_velocity += (
-                    forward_midpoint
-                    * boost_acceleration
-                    * boost_step
-                )
-                boost_time_left -= boost_step
-
-            elapsed += step
-
-        if gravity is not None:
-            car_final_velocity = (
-                car_final_velocity + gravity * time_remaining
-            )
-
-        if car_final_velocity.magnitude() > max_speed:
-            car_final_velocity = car_final_velocity.normalize() * max_speed
-
-        # Relative velocity determines how much power the contact has.
-        relative_velocity = car_final_velocity - ball_velocity
-        velocity_difference = relative_velocity.magnitude()
-
-        if velocity_difference <= 500:
-            power_modifier = 0.65
-        elif velocity_difference <= max_speed:
-            power_modifier = (
-                0.65 - 0.10 *
-                ((velocity_difference - 500) / 1800)
-            )
-        else:
-            power_modifier = (
-                0.55 - 0.25 *
-                cap(
-                    (velocity_difference - max_speed) / 2300,
-                    0,
-                    1
-                )
-            )
-
-        # Estimate the available outgoing speed.
-        forward_contact_speed = max(
-            0,
-            car_final_velocity.dot(goal_direction)
-        )
-
-        ball_forward_speed = ball_velocity.dot(goal_direction)
-
-        estimated_ball_speed = cap(
-            velocity_difference * power_modifier
-            + forward_contact_speed * 0.35
-            + ball_forward_speed * 0.65,
-            500,
-            max_speed
-        )
-
-        # Predict where the ball would travel without changing its
-        # direction, then calculate the direction needed to reach goal.
-        flat_distance = to_target.magnitude()
-        time_to_target = flat_distance / max(estimated_ball_speed, 1)
-
-        predicted_ball_position = (
-            ball_location + ball_velocity * time_to_target
-        )
-
-        # Blend the direct goal direction with a correction for
-        # existing ball momentum.
-        momentum_direction = (
-            shot_target - predicted_ball_position
-        )
-
-        if momentum_direction.magnitude() < 1:
-            return goal_direction
-
-        momentum_direction = momentum_direction.normalize()
-
-        # Keep the goal as the dominant influence. Existing ball
-        # momentum should refine the aim, not pull it away from goal.
-        correction_strength = cap(
-            velocity_difference / 1800,
-            0.15,
-            0.40
-        )
-
-        desired_direction = (
-            goal_direction * (1.0 - correction_strength)
-            + momentum_direction * correction_strength
-        )
-
-        if desired_direction.magnitude() < 1:
-            return goal_direction
-
-        return desired_direction.normalize()
 
     def run(self, agent: VirxERLU):
         if not agent.shooting:
             agent.shooting = True
 
-        
         T = self.intercept_time - agent.time
-
-        xf = (
-            agent.me.location
-            + agent.me.velocity * T
-            + 0.5 * agent.gravity * T * T
-        )
-
+        xf = agent.me.location + agent.me.velocity * T + 0.5 * agent.gravity * T * T
         vf = agent.me.velocity + agent.gravity * T
 
-        prediction = agent.ball_prediction_struct
-
-        if prediction is None or not prediction.slices:
-            return
-
-        # Find the prediction slice closest to the actual intercept time.
-        slice_n = min(
-            range(len(prediction.slices)),
-            key=lambda i: abs(
-                prediction.slices[i].game_seconds
-                - self.intercept_time
-            )
-        )
-
+        slice_n = math.ceil(T * 120) - 1
         agent.dbg_2d(f"Shot slice #: {slice_n}")
 
-        physics = prediction.slices[slice_n].physics
-
-        ball_velocity = Vector(
-            physics.velocity.x,
-            physics.velocity.y,
-            physics.velocity.z
-        )
-
         if T > 0.1 or self.ball is None:
-            ball = physics.location
+            ball = agent.ball_prediction_struct.slices[slice_n].physics.location
             self.ball = Vector(ball.x, ball.y, ball.z)
+            self.ceiling = agent.me.location.z > 2044 - agent.me.hitbox.height * 2 and not agent.me.jumped
 
-            self.ceiling = (
-                agent.me.location.z
-                > 2044 - agent.me.hitbox.height * 2
-                and not agent.me.jumped
+        
+        # Work out the intended direction of the ball after contact.
+        car_to_ball = (self.ball - agent.me.location).normalize()
+
+        if self.targets is None:
+            self.shot_vector = car_to_ball
+        else:
+            left_direction = (self.targets[0] - self.ball).normalize()
+            right_direction = (self.targets[1] - self.ball).normalize()
+
+            self.shot_vector = car_to_ball.clamp(
+                left_direction,
+                right_direction
             )
-
-        # Re-evaluate the goal target as the ball crosses midfield and
-        # the car changes between grounded and airborne states. The target
-        # is intentionally not frozen at aerial startup.
-        updated_goal_aim = _relative_goal_aim_point(agent, self.targets)
-
-        # Keep the goal centre as the default aerial aim. If the ball is
-        # already outside the mouth horizontally, bias the target across
-        # goal toward the opposite post so the shot is brought back inside.
-        left_post, right_post = agent.foe_goal_shot
-        if left_post.x > right_post.x:
-            left_post, right_post = right_post, left_post
-
-        aim_bias = None
-        if self.ball.x > right_post.x:
-            updated_goal_aim = (
-                updated_goal_aim + left_post
-            ) * 0.5
-            aim_bias = "left post"
-        elif self.ball.x < left_post.x:
-            updated_goal_aim = (
-                updated_goal_aim + right_post
-            ) * 0.5
-            aim_bias = "right post"
-
-        if aim_bias is not None:
-            updated_goal_aim.z = _relative_goal_aim_point(
-                agent, self.targets
-            ).z
-            print(
-                f"[AERIAL POST AIM] ball_x={self.ball.x:.0f} "
-                f"bias={aim_bias} "
-                f"target=({updated_goal_aim.x:.0f},"
-                f"{updated_goal_aim.y:.0f},{updated_goal_aim.z:.0f})",
-                flush=True
-            )
-
-        # Noob Black's target_func raises the intended goal-plane
-        # contact height with distance from goal. Keep that influence bounded
-        # to the goal mouth and blend it with Volt's existing aim height.
-        goal_distance = abs(self.ball.y - updated_goal_aim.y)
-        noob_black_height = (
-            goal_distance
-            * math.tan(
-                min(goal_distance / 5120, 1.0) * math.pi / 4
-            )
-        )
-        noob_black_height = cap(noob_black_height, 300, 560)
-        updated_goal_aim.z = cap(
-            updated_goal_aim.z * 0.75 + noob_black_height * 0.25,
-            120,
-            620
-        )
-
-        if (
-            self.goal_aim_point is None
-            or self.goal_aim_point.dist(updated_goal_aim) > 25
-        ):
-            if self.goal_aim_point is not None:
-                print(
-                    f"[AERIAL GOAL TARGET] updated "
-                    f"old=({self.goal_aim_point.x:.0f},"
-                    f"{self.goal_aim_point.y:.0f},"
-                    f"{self.goal_aim_point.z:.0f}) "
-                    f"new=({updated_goal_aim.x:.0f},"
-                    f"{updated_goal_aim.y:.0f},"
-                    f"{updated_goal_aim.z:.0f})",
-                    flush=True
-                )
-            self.goal_aim_point = updated_goal_aim
-
-        shot_target = self.goal_aim_point.copy()
-
-        # Party Cannon predicted post-contact shot direction.
-        self.shot_vector = self.party_cannon_shot_direction(
-            self.ball,
-            ball_velocity,
-            agent.me.location,
-            shot_target,
-            T,
-            car_forward=agent.me.forward,
-            car_boost=agent.me.boost,
-            gravity=agent.gravity,
-            car_velocity=agent.me.velocity,
-            car_angular_velocity=agent.me.angular_velocity,
-            car_right=agent.me.right,
-            car_up=agent.me.up
-        )
-
-        print(
-            f"[AERIAL PARTY CANNON] "
-            f"ball=({self.ball.x:.0f},{self.ball.y:.0f},"
-            f"{self.ball.z:.0f}) "
-            f"target=({shot_target.x:.0f},{shot_target.y:.0f},"
-            f"{shot_target.z:.0f}) "
-            f"direction=({self.shot_vector.x:.2f},"
-            f"{self.shot_vector.y:.2f},"
-            f"{self.shot_vector.z:.2f})",
-            flush=True
-        )
-
 
         
         # Detect a useful backboard rebound for an already-airborne car.
         left_post, right_post = agent.foe_goal_shot
 
-        goal_center = self.goal_aim_point.copy()
+        goal_center = Vector(
+            (left_post.x + right_post.x) / 2,
+            (left_post.y + right_post.y) / 2,
+            300
+        )
 
         # Read the predicted ball velocity at this aerial's intercept.
         prediction = agent.ball_prediction_struct
@@ -1546,173 +1108,24 @@ class Aerial:
                     flush=True
                 )
 
-        # Choose inverted orientation early enough that the contact
-        # geometry and the PD controller agree about the car's roof direction.
-        if self.inverted is None:
-            self.inverted = T >= 1.20 and not self.ceiling
-            print(
-                f"[AERIAL ORIENTATION] inverted={self.inverted} "
-                f"T={T:.2f}",
-                flush=True
-            )
-
-        # Capture the contact selected by tools before replacing the
-        # public contact_point with the actual aerial aim point.
-        if self.tools_contact_point is None:
-            supplied_point = getattr(self, "contact_point", None)
-            if supplied_point is not None:
-                self.tools_contact_point = supplied_point.copy()
-        if self.tools_contact_normal is None:
-            supplied_normal = getattr(self, "contact_normal", None)
-            if supplied_normal is not None:
-                self.tools_contact_normal = supplied_normal.copy()
-
-        # Select a real surface contact from the desired outgoing
-        # trajectory, while favouring a point the car can reach.
-        ball_radius = 92.75
-        shot_direction = self.shot_vector.copy()
-        if shot_direction.magnitude() < 0.001:
-            shot_direction = (agent.foe_goal.location - self.ball).normalize()
-        else:
-            shot_direction = shot_direction.normalize()
-
-        lateral = Vector(-shot_direction.y, shot_direction.x, 0)
-        lateral = lateral.normalize() if lateral.magnitude() > 0.001 else Vector(x=1)
-        car_from_ball = agent.me.location - self.ball
-        car_from_ball = car_from_ball.normalize() if car_from_ball.magnitude() > 0.001 else -shot_direction
-
-        candidates = (
-            ("centre", -shot_direction),
-            ("left", (-shot_direction + lateral * 0.35).normalize()),
-            ("right", (-shot_direction - lateral * 0.35).normalize()),
-            ("high", (-shot_direction + Vector(z=0.30)).normalize()),
-            ("low", (-shot_direction - Vector(z=0.30)).normalize()),
-        )
-        best_contact = None
-        best_contact_score = -999.0
-        for label, normal in candidates:
-            score = (
-                car_from_ball.dot(normal) * 0.35
-                + (-normal).dot(shot_direction) * 0.65
-            )
-            if label == self.contact_label:
-                score += 0.06
-            if score > best_contact_score:
-                best_contact_score = score
-                best_contact = (label, normal)
-
-        self.contact_label, contact_normal = best_contact
-        contact_normal = contact_normal.normalize()
-        desired_forward = -contact_normal
-        selected_contact_point = self.ball + contact_normal * ball_radius
-
-        # Aim the car's nose, not its physics origin, at the selected point.
-        desired_up = (
-            agent.me.up
-            - desired_forward * agent.me.up.dot(desired_forward)
-        )
-        if desired_up.magnitude() < 0.001:
-            desired_up = Vector(z=1) - desired_forward * desired_forward.z
-        if desired_up.magnitude() < 0.001:
-            desired_up = Vector(z=1)
-        desired_up = desired_up.normalize()
-
-        hitbox = agent.me.hitbox
-        nose_offset = float(hitbox.length) * 0.5 + float(hitbox.offset.x)
-        nose_world_offset = (
-            desired_forward * nose_offset
-            + desired_up * float(hitbox.offset.z)
+        self.target = self.ball - (
+            self.shot_vector * agent.best_shot_value
         )
 
-        self.contact_normal = contact_normal
-        self.contact_point = selected_contact_point
-        self.target = selected_contact_point - nose_world_offset
 
-        if self.tools_contact_point is not None:
-            agent.sphere(self.tools_contact_point, 5)
-        agent.sphere(self.ball, ball_radius)
-        agent.sphere(selected_contact_point, 10)
-        agent.line(self.ball, selected_contact_point, agent.renderer.blue)
-        agent.sphere(self.target, 12)
+        agent.sphere(self.ball, 92.75)
 
-        if not hasattr(self, "last_aerial_contact_debug") or (
-            agent.time - self.last_aerial_contact_debug >= 0.5
-        ):
-            self.last_aerial_contact_debug = agent.time
-            print(
-                f"[AERIAL CONTACT SELECT] type={self.contact_label} "
-                f"point=({selected_contact_point.x:.0f},"
-                f"{selected_contact_point.y:.0f},"
-                f"{selected_contact_point.z:.0f}) "
-                f"out=({shot_direction.x:.2f},"
-                f"{shot_direction.y:.2f},{shot_direction.z:.2f}) "
-                f"score={best_contact_score:.2f}",
-                flush=True
-            )
         if self.ceiling:
             self.target -= Vector(z=92)
 
-        on_side_wall = (
-            abs(agent.me.location.x) > 3500
-            and abs(agent.me.up.x) > 0.65
-            and agent.me.up.x * agent.me.location.x < 0
-        )
-        if self.jumping or not agent.me.airborne or on_side_wall:
+        if self.jumping or not agent.me.airborne:
             agent.dbg_2d("Jumping")
 
-            if not self.jumping:
-                # Launch with the fast double-jump sequence. A car attached
-                # to the same side wall as the predicted ball can also use
-                # the launch to leave the wall and reach the contact point.
-                ball_wall_side = 1 if self.ball.x >= 0 else -1
-                car_wall_side = 1 if agent.me.location.x >= 0 else -1
-                wall_double_jump = (
-                    on_side_wall
-                    and car_wall_side == ball_wall_side
-                    and not agent.me.doublejumped
-                    and T > 0.55
-                )
-
-                # This routine only performs a fast aerial. If there is
-                # not enough time to complete its double-jump launch, reject
-                # the aerial instead of silently falling back to one jump.
-                double_jump_window = jump_max_duration + (2 / 120)
-                minimum_launch_time = double_jump_window + 0.02
-
-                if T <= minimum_launch_time:
-                    print(
-                        f"[AERIAL ABORT] too little launch time T={T:.3f}",
-                        flush=True
-                    )
-                    agent.pop()
-                    agent.shooting = False
-                    agent.push(ball_recovery())
-                    return
-
-                self.jump_type_fast = True
+            if not self.jumping or not agent.me.airborne:
+                self.jump_type_fast = self.fast_aerial
                 self.jumping = True
-
-                if wall_double_jump:
-                    print(
-                        f"[AERIAL WALL DOUBLE JUMP] "
-                        f"side={car_wall_side} T={T:.2f} "
-                        f"ball=({self.ball.x:.0f},{self.ball.y:.0f},"
-                        f"{self.ball.z:.0f}) "
-                        f"car=({agent.me.location.x:.0f},"
-                        f"{agent.me.location.y:.0f},"
-                        f"{agent.me.location.z:.0f})",
-                        flush=True
-                    )
                 self.jump_time = agent.time
                 self.counter = 0
-                self.second_jump_commanded = False
-                self.second_jump_command_time = -1
-                print(
-                    f"[AERIAL JUMP PLAN] T={T:.2f} "
-                    f"fast_aerial=True "
-                    f"second_jump=required",
-                    flush=True
-                )
 
             jump_elapsed = agent.time - self.jump_time
 
@@ -1729,38 +1142,20 @@ class Aerial:
             xf += agent.me.up * jump_acc * tau * (T - 0.5 * tau)
 
             if self.jump_type_fast:
-                # Always spend the second jump as part of the fast aerial.
-                # Do not downgrade to a single jump or save it as a late dodge.
+                # impulse from the second jump
+                vf += agent.me.up * jump_speed
+                xf += agent.me.up * jump_speed * (T - tau)
+
                 if jump_elapsed <= jump_max_duration:
                     agent.controller.jump = True
-                elif (
-                    not self.second_jump_commanded
-                    and agent.time >= (
-                        self.jump_time + jump_max_duration + (2 / 120)
-                    )
-                ):
-                    if not agent.me.doublejumped:
-                        agent.controller.jump = True
-                        self.second_jump_commanded = True
-                        self.second_jump_command_time = agent.time
-                        self.dodging = True
-                        print(
-                            f"[AERIAL FAST SECOND JUMP] commanded "
-                            f"T={T:.2f}",
-                            flush=True
-                        )
-                    else:
-                        self.jumping = False
-                        self.dodging = False
-                elif self.second_jump_commanded:
-                    self.dodging = not agent.me.doublejumped
-                    if (
-                        agent.me.doublejumped
-                        or agent.time - self.second_jump_command_time > 0.08
-                    ):
-                        self.dodging = False
-                        self.jumping = False
+                elif self.counter < 4:
+                    self.counter += 1
 
+                if self.counter == 3:
+                    agent.controller.jump = True
+                    self.dodging = True
+                elif self.counter == 4:
+                    self.dodging = self.jumping = False
             elif jump_elapsed <= jump_max_duration:
                 agent.controller.jump = True
             else:
@@ -1780,96 +1175,57 @@ class Aerial:
 
         
         if not self.dodging:
-            # Bumblebee AerialStrike aims its nose at the live ball direction
-            # and biases the up vector downward. Use Volt's existing PD
-            # controller instead of importing RLUtilities' native Aerial.
-            to_contact = (
-                self.contact_point - agent.me.location
-                if self.contact_point is not None
-                else delta_x
-            )
-            if to_contact.magnitude() < 50:
-                to_contact = delta_x
-            local_target = agent.me.local(to_contact)
+            target = delta_x if delta_x.magnitude() > 50 else self.shot_vector
+            target = agent.me.local(target)
 
-            contact_direction = to_contact.normalize()
-            if agent.me.location.z > 200:
-                aerial_up = (
-                    Vector(z=-1)
-                    + Vector(contact_direction.x, contact_direction.y, 0)
+            if agent.controller.jump:
+                defaultPD(agent, target.flatten(), up=agent.me.up)
+
+            elif backboard_mode:
+                # If the ball is below the car, invert to expose the
+                # underside. If it is above the car, keep the roof facing it.
+                ball_below_car = (
+                    self.ball.z < agent.me.location.z - 80
                 )
+
+                defaultPD(
+                    agent,
+                    target,
+                    upside_down=ball_below_car
+                )
+
+            elif virxrlcu.find_landing_plane(
+                tuple(agent.me.location),
+                tuple(agent.me.velocity),
+                agent.gravity.z
+            ) == 4:
+                defaultPD(agent, target, upside_down=True)
+
             else:
-                aerial_up = Vector(z=-3) + contact_direction
-
-            if aerial_up.magnitude() < 0.001:
-                aerial_up = Vector(z=1)
-
-            defaultPD(
-                agent,
-                local_target,
-                up=aerial_up.normalize()
-            )
+                defaultPD(
+                    agent,
+                    target,
+                    upside_down=self.shot_vector.z < 0
+                )
 
 
-        # Reassess the remaining positional error every frame. This is a
-        # soft reachability estimate: it guides boost use but never cancels
-        # an aerial that has already committed.
-        required_acceleration = (
-            2.0 * delta_x.magnitude() / max(T * T, 0.01)
-            if T > 0 else float("inf")
-        )
-        available_acceleration = (
-            agent.boost_accel if agent.me.boost > 0
-            else throttle_accel
-        )
-
-        # Preserve the original 60-degree nose-alignment gate.
+        # only boost/throttle if we're facing the right direction
         if abs(agent.me.forward.dot(direction)) > 0.5 and T > 0:
-            # The remaining acceleration estimate can request boost when
-            # ordinary throttle is clearly insufficient, without changing
-            # the alignment requirement.
+            if T > 1 and not self.jumping: agent.controller.roll = 1 if self.shot_vector.z < 0 else -1
+            # the change in velocity the bot needs to put it on an intercept course with the target
             delta_v = delta_x.dot(agent.me.forward) / T
-            needs_extra_acceleration = (
-                required_acceleration > available_acceleration
-            )
-            if agent.me.boost > 0 and (
-                delta_v >= agent.boost_accel * min_boost_time
-                or needs_extra_acceleration
-            ):
+            if agent.me.boost > 0 and delta_v >= agent.boost_accel * min_boost_time:
                 agent.controller.boost = True
                 delta_v -= agent.boost_accel * min_boost_time
 
             if delta_v >= throttle_accel * min_boost_time:
-                agent.controller.throttle = cap(
-                    delta_v / (throttle_accel * min_boost_time),
-                    -1, 1
-                )
+                agent.controller.throttle = cap(delta_v / (throttle_accel * min_boost_time), -1, 1)
 
-        # Once the car has actually left the ground, do not let the
-        # conservative pre-launch viability test cancel an aerial mid-flight.
-        # Keep the expiry check as the hard stop after the contact window.
-        if T <= -0.4:
-            print(
-                f"[AERIAL CANCEL] intercept expired T={T:.3f} "
-                f"jumping={self.jumping} airborne={agent.me.airborne}",
-                flush=True
-            )
+        if T <= -0.4 or (not self.jumping and T > 1.5 and not virxrlcu.aerial_shot_is_viable(T, agent.boost_accel, tuple(agent.gravity), agent.me.get_raw(agent), tuple(self.target))):
             agent.pop()
             agent.shooting = False
             agent.push(ball_recovery())
-        elif (
-            self.ceiling
-            and self.target.dist(agent.me.location)
-            < 92 + agent.me.hitbox.length
-            and not agent.me.doublejumped
-            and agent.me.location.z < agent.ball.location.z + 92
-            and self.target.y * side(agent.team) > -4240
-        ) or (
-            not self.ceiling
-            and not agent.me.doublejumped
-            and T < 0.1
-            and delta_x.dot(agent.me.forward) > 0
-        ):
+        elif (self.ceiling and self.target.dist(agent.me.location) < 92 + agent.me.hitbox.length and not agent.me.doublejumped and agent.me.location.z < agent.ball.location.z + 92 and self.target.y * side(agent.team) > -4240) or (not self.ceiling and not agent.me.doublejumped and T < 0.1):
             agent.dbg_2d("Flipping")
             local_target = agent.me.local_location(self.target).flatten().normalize()
             agent.controller.pitch = -local_target.x
