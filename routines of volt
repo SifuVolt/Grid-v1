@@ -1210,7 +1210,7 @@ class Aerial:
                                 up=Vector(z=1)
                             )
 
-                            right_direction = agent.me.right
+                            right_direction = agent.me.up.cross(agent.me.forward)
                             if right_direction.magnitude() > 1:
                                 alignment = cap(
                                     ball_flat.normalize().dot(
