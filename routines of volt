@@ -1028,6 +1028,7 @@ class Aerial:
         self._rlu_ready = False
         self._rlu_started = False
         self._rlu_warned = False
+        self._rlu_disabled = False
         self._rlu_car = None
         self._rlu_aerial = None
         self._rlu_game = None
@@ -1356,11 +1357,15 @@ class Aerial:
         Bumblebee FastAerialStrike flight controller and reachability test.
         The native simulation does not deplete boost, so this adapter does.
         """
+        if self._rlu_disabled:
+            return False
+
         try:
             from rlutilities.linear_algebra import vec3, mat3, look_at, norm
             from rlutilities.mechanics import Aerial as RLUAerial
             from rlutilities.simulation import Car as RLUCar, Game as RLUGame
         except Exception as exc:
+            self._rlu_disabled = True
             if not self._rlu_warned:
                 self._rlu_warned = True
                 print(
@@ -1875,6 +1880,7 @@ class Aerial:
                 )
             self._rlu_ready = False
             self._rlu_started = False
+            self._rlu_disabled = True
 
         on_side_wall = (
             abs(agent.me.location.x) > 3500
