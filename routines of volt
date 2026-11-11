@@ -1382,12 +1382,16 @@ class Aerial:
         if not self._rlu_ready:
             RLUGame.set_mode("soccar")
             self._rlu_game = RLUGame()
+            gravity_vector = vec3(
+                agent.gravity.x, agent.gravity.y, agent.gravity.z
+            )
             try:
-                self._rlu_game.gravity = vec3(
-                    agent.gravity.x, agent.gravity.y, agent.gravity.z
-                )
+                RLUGame.gravity = gravity_vector
             except Exception:
-                pass
+                try:
+                    self._rlu_game.gravity = gravity_vector
+                except Exception:
+                    pass
             self._rlu_car = RLUCar()
             self._rlu_aerial = RLUAerial(self._rlu_car)
             self._rlu_aerial.angle_threshold = 0.8
