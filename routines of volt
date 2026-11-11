@@ -1694,32 +1694,35 @@ class Aerial:
 
         if elapsed < jump_time + 0.6:
             if self.dodge_input is None:
-                local_direction = car.local(
-                    self.shot_direction.flatten()
-                )
-                yaw_input = local_direction.y
-                pitch_input = -local_direction.x
+                # Match RedUtils Dodge's flattened-forward coordinate system.
+                # Using car.local() here is subtly wrong when the car is pitched.
+                flat_forward = car.forward.flatten().normalize()
+                dodge_direction = self.shot_direction.flatten()
+                local_yaw = -flat_forward.cross(
+                    Vector(z=1)
+                ).dot(dodge_direction)
+                local_pitch = -flat_forward.dot(dodge_direction)
 
                 forward_velocity = car.forward.dot(car.velocity)
                 speed_ratio = abs(forward_velocity) / self.MAX_SPEED
                 backwards_dodge = (
-                    yaw_input < 0
+                    local_yaw < 0
                     if abs(forward_velocity) < 100
-                    else ((yaw_input >= 0) != (forward_velocity > 0))
+                    else ((local_yaw >= 0) != (forward_velocity > 0))
                 )
 
                 if backwards_dodge:
-                    yaw_input /= (16 / 15) * (1 + 1.5 * speed_ratio)
-                pitch_input /= 1 + 0.9 * speed_ratio
+                    local_yaw /= (16 / 15) * (1 + 1.5 * speed_ratio)
+                local_pitch /= 1 + 0.9 * speed_ratio
 
                 input_length = math.sqrt(
-                    yaw_input * yaw_input + pitch_input * pitch_input
+                    local_yaw * local_yaw + local_pitch * local_pitch
                 )
                 if input_length > 0.001:
-                    yaw_input /= input_length
-                    pitch_input /= input_length
+                    local_yaw /= input_length
+                    local_pitch /= input_length
 
-                self.dodge_input = (yaw_input, pitch_input)
+                self.dodge_input = (local_yaw, local_pitch)
 
             agent.controller.yaw = self.dodge_input[0]
             agent.controller.pitch = self.dodge_input[1]
