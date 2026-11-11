@@ -1439,7 +1439,11 @@ class Aerial:
             normal = -self.shot_vector
         normal = normal.normalize()
         desired_forward = -normal
-        desired_up = (normal + Vector(z=0.5)).normalize()
+        # Bumblebee's AerialStrike uses the ground approach direction plus
+        # an upward bias for its roll reference; retain that stable attitude.
+        desired_up = (
+            Vector(normal.x, normal.y, 0) + Vector(z=0.5)
+        ).normalize()
         if desired_up.magnitude() < 0.001:
             desired_up = Vector(z=1)
 
