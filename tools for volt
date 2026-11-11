@@ -771,11 +771,51 @@ def _shot_post_launch_boost_reserve(agent, ball_location, time_remaining, shot_t
             jump_time = 0.0
 
         if jump_time is None or jump_time < 0:
-            jump_time = 0.0
+            if shot_type == 2:
+                # A double jump can reach heights for which the single-jump
+                # time solver has no solution. Use a bounded launch-window
+                # estimate rather than silently assuming zero boost demand.
+                jump_time = cap(height / 1000.0, 0.10, 0.65)
+            else:
+                jump_time = 0.0
 
         jump_time = cap(float(jump_time), 0.0, 0.65)
-        distance_factor = cap((flat_distance - 180.0) / 900.0, 0.0, 1.0)
+
+        # Estimate how much of the car-to-intercept distance can be closed
+        # before the jump begins. This avoids charging a long-horizon shot
+        # for distance the car has plenty of time to drive forward.
+        prelaunch_time = max(0.0, time_remaining - jump_time)
+        to_ball = (ball - agent.me.location).flatten()
+        approach_direction = to_ball.normalize()
+        forward_speed = max(
+            0.0,
+            agent.me.velocity.flatten().dot(approach_direction)
+        )
+        base_acceleration = 900.0
+        time_to_cap = max(
+            0.0,
+            (2300.0 - forward_speed) / base_acceleration
+        )
+        accelerating_time = min(prelaunch_time, time_to_cap)
+        drive_distance = (
+            forward_speed * accelerating_time
+            + 0.5 * base_acceleration * accelerating_time ** 2
+            + 2300.0 * max(0.0, prelaunch_time - accelerating_time)
+        )
+        launch_clearance = max(180.0, float(agent.best_shot_value))
+        remaining_gap = max(
+            0.0,
+            flat_distance - drive_distance - launch_clearance
+        )
+        distance_factor = cap(
+            (remaining_gap - 150.0) / 700.0,
+            0.0,
+            1.0
+        )
         height_factor = cap(height / 350.0, 0.0, 1.0)
+
+        if shot_type == 2:
+            jump_time *= 0.75
 
         # Single-jump shots tend to need more post-launch correction.
         # Double jumps contribute another vertical impulse, reducing that
