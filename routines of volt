@@ -707,197 +707,6 @@ class double_jump:
         if agent.me.airborne:
             agent.push(ball_recovery())
 
-    def _run_bumblebee_fast_aerial(self, agent, time_remaining):
-        """
-        Bumblebee FastAerialStrike flight controller and reachability test.
-        The native simulation does not deplete boost, so this adapter does.
-        """
-        try:
-            from rlutilities.linear_algebra import vec3, mat3, look_at, norm
-            from rlutilities.mechanics import Aerial as RLUAerial
-            from rlutilities.simulation import Car as RLUCar, Game as RLUGame
-        except Exception as exc:
-            if not self._rlu_warned:
-                self._rlu_warned = True
-                print(
-                    f"[BUMBLEBEE AERIAL UNAVAILABLE] {type(exc).__name__}: {exc}. "
-                    f"Copy RLBotPack/Botimus&Bumblebee/rlutilities into Volt's root.",
-                    flush=True
-                )
-            return False
-
-        if time_remaining <= -0.4 or time_remaining > 6.0:
-            agent.pop()
-            agent.shooting = False
-            agent.push(ball_recovery())
-            return True
-
-        car = agent.me
-        forward, right, up = car.forward, car.right, car.up
-
-        if not self._rlu_ready:
-            RLUGame.set_mode("soccar")
-            self._rlu_game = RLUGame()
-            try:
-                self._rlu_game.gravity = vec3(
-                    agent.gravity.x, agent.gravity.y, agent.gravity.z
-                )
-            except Exception:
-                pass
-            self._rlu_car = RLUCar()
-            self._rlu_aerial = RLUAerial(self._rlu_car)
-            self._rlu_aerial.angle_threshold = 0.8
-            self._rlu_aerial.double_jump = True
-            self._rlu_ready = True
-
-        native_car = self._rlu_car
-        native_car.position = vec3(car.location.x, car.location.y, car.location.z)
-        native_car.velocity = vec3(car.velocity.x, car.velocity.y, car.velocity.z)
-        native_car.orientation = mat3(
-            forward.x, right.x, up.x,
-            forward.y, right.y, up.y,
-            forward.z, right.z, up.z
-        )
-        native_car.angular_velocity = vec3(
-            car.angular_velocity.x, car.angular_velocity.y, car.angular_velocity.z
-        )
-        native_car.boost = int(car.boost)
-        native_car.time = float(agent.time)
-        native_car.id = int(agent.index)
-        native_car.team = int(agent.team)
-        native_car.on_ground = not car.airborne
-        native_car.jumped = bool(car.jumped or car.has_jumped)
-        native_car.double_jumped = bool(
-            car.doublejumped or car.has_double_jumped or car.has_dodged
-        )
-        native_car.demolished = bool(car.demolished)
-        native_car.supersonic = bool(car.supersonic)
-        native_car.hitbox_widths = vec3(
-            float(car.hitbox.length), float(car.hitbox.width), float(car.hitbox.height)
-        )
-        native_car.hitbox_offset = vec3(
-            float(car.hitbox.offset.x),
-            float(car.hitbox.offset.y),
-            float(car.hitbox.offset.z)
-        )
-
-        normal = self.contact_normal
-        if normal is None or normal.magnitude() < 0.001:
-            normal = -self.shot_vector
-        normal = normal.normalize()
-        desired_forward = -normal
-        desired_up = (normal + Vector(z=0.5)).normalize()
-        if desired_up.magnitude() < 0.001:
-            desired_up = Vector(z=1)
-
-        target_position = vec3(self.target.x, self.target.y, self.target.z)
-        native_aerial = self._rlu_aerial
-        native_aerial.target_position = target_position
-        native_aerial.arrival_time = float(self.intercept_time)
-        native_aerial.double_jump = True
-        native_aerial.angle_threshold = 0.8
-        native_aerial.up = vec3(desired_up.x, desired_up.y, desired_up.z)
-
-        # Bumblebee's FastAerialStrike simulates the whole flight before
-        # takeoff. Unlike stock Bumblebee, consume the real boost pool.
-        if not self._rlu_started and not car.airborne:
-            sim_car = RLUCar(native_car)
-            sim_aerial = RLUAerial(sim_car)
-            sim_aerial.target_position = target_position
-            sim_aerial.arrival_time = float(self.intercept_time)
-            sim_aerial.angle_threshold = 0.8
-            sim_aerial.up = vec3(desired_up.x, desired_up.y, desired_up.z)
-            sim_aerial.double_jump = True
-
-            boost_remaining = max(0.0, float(car.boost))
-            boost_per_second = 33.3333333333
-            sim_dt = 1.0 / 120.0
-            max_steps = min(720, max(1, int((time_remaining + 0.25) * 120)))
-            for _ in range(max_steps):
-                if sim_aerial.finished:
-                    break
-                sim_aerial.step(sim_dt)
-                sim_controls = sim_aerial.controls
-                sim_car.step(sim_controls, sim_dt)
-                if sim_controls.boost and boost_remaining > 0:
-                    boost_remaining = max(
-                        0.0, boost_remaining - boost_per_second * sim_dt
-                    )
-                    sim_car.boost = int(boost_remaining)
-                elif boost_remaining <= 0:
-                    sim_car.boost = 0
-
-            simulated_error = norm(sim_car.position - target_position)
-            if simulated_error < 50.0:
-                self._rlu_started = True
-                self.aerialing = True
-                print(
-                    f"[BUMBLEBEE FAST AERIAL] launch error={simulated_error:.1f} "
-                    f"boost={car.boost} reserve={self.post_launch_boost_reserve:.1f} "
-                    f"T={time_remaining:.2f}",
-                    flush=True
-                )
-            else:
-                # Bumblebee Arrive phase, using Volt's drive controller.
-                # Keep the reserved post-launch boost untouched.
-                flat_target = Vector(self.target.x, self.target.y, 0)
-                local_target = car.local_location(flat_target)
-                distance = car.location.flat_dist(flat_target)
-                target_speed = cap(
-                    distance / max(time_remaining, 0.05), 500, max_speed
-                )
-                defaultDrive(agent, target_speed, local_target)
-                if (
-                    agent.boost_amount != "unlimited"
-                    and car.boost <= self.post_launch_boost_reserve + 0.35
-                ):
-                    agent.controller.boost = False
-
-                if agent.time - self._rlu_last_debug >= 0.5:
-                    self._rlu_last_debug = agent.time
-                    print(
-                        f"[BUMBLEBEE AERIAL APPROACH] sim_error={simulated_error:.1f} "
-                        f"boost={car.boost} reserve={self.post_launch_boost_reserve:.1f} "
-                        f"speed={target_speed:.0f} T={time_remaining:.2f}",
-                        flush=True
-                    )
-                return True
-
-        elif car.airborne:
-            self._rlu_started = True
-            self.aerialing = True
-
-        # Follow Bumblebee's per-frame target-orientation update, adapted to
-        # Volt's selected ball-surface normal.
-        native_aerial.target_orientation = look_at(
-            vec3(desired_forward.x, desired_forward.y, desired_forward.z),
-            vec3(desired_up.x, desired_up.y, desired_up.z)
-        )
-        native_aerial.step(1.0 / 120.0)
-        controls = native_aerial.controls
-        agent.controller.throttle = controls.throttle
-        agent.controller.steer = controls.steer
-        agent.controller.boost = controls.boost
-        agent.controller.jump = controls.jump
-        agent.controller.pitch = controls.pitch
-        agent.controller.yaw = controls.yaw
-        agent.controller.roll = controls.roll
-        agent.controller.handbrake = controls.handbrake
-
-        if agent.time - self._rlu_last_debug >= 0.5:
-            self._rlu_last_debug = agent.time
-            print(
-                f"[BUMBLEBEE FAST AERIAL] flying boost={car.boost} "
-                f"T={time_remaining:.2f} finished={native_aerial.finished}",
-                flush=True
-            )
-
-        if native_aerial.finished and time_remaining < -0.3:
-            agent.pop()
-            agent.shooting = False
-            agent.push(ball_recovery())
-        return True
-
     def run(self, agent: VirxERLU):
         if not agent.shooting:
             agent.shooting = True
@@ -1541,6 +1350,197 @@ class Aerial:
             return goal_direction
 
         return desired_direction.normalize()
+
+    def _run_bumblebee_fast_aerial(self, agent, time_remaining):
+        """
+        Bumblebee FastAerialStrike flight controller and reachability test.
+        The native simulation does not deplete boost, so this adapter does.
+        """
+        try:
+            from rlutilities.linear_algebra import vec3, mat3, look_at, norm
+            from rlutilities.mechanics import Aerial as RLUAerial
+            from rlutilities.simulation import Car as RLUCar, Game as RLUGame
+        except Exception as exc:
+            if not self._rlu_warned:
+                self._rlu_warned = True
+                print(
+                    f"[BUMBLEBEE AERIAL UNAVAILABLE] {type(exc).__name__}: {exc}. "
+                    f"Copy RLBotPack/Botimus&Bumblebee/rlutilities into Volt's root.",
+                    flush=True
+                )
+            return False
+
+        if time_remaining <= -0.4 or time_remaining > 6.0:
+            agent.pop()
+            agent.shooting = False
+            agent.push(ball_recovery())
+            return True
+
+        car = agent.me
+        forward, right, up = car.forward, car.right, car.up
+
+        if not self._rlu_ready:
+            RLUGame.set_mode("soccar")
+            self._rlu_game = RLUGame()
+            try:
+                self._rlu_game.gravity = vec3(
+                    agent.gravity.x, agent.gravity.y, agent.gravity.z
+                )
+            except Exception:
+                pass
+            self._rlu_car = RLUCar()
+            self._rlu_aerial = RLUAerial(self._rlu_car)
+            self._rlu_aerial.angle_threshold = 0.8
+            self._rlu_aerial.double_jump = True
+            self._rlu_ready = True
+
+        native_car = self._rlu_car
+        native_car.position = vec3(car.location.x, car.location.y, car.location.z)
+        native_car.velocity = vec3(car.velocity.x, car.velocity.y, car.velocity.z)
+        native_car.orientation = mat3(
+            forward.x, right.x, up.x,
+            forward.y, right.y, up.y,
+            forward.z, right.z, up.z
+        )
+        native_car.angular_velocity = vec3(
+            car.angular_velocity.x, car.angular_velocity.y, car.angular_velocity.z
+        )
+        native_car.boost = int(car.boost)
+        native_car.time = float(agent.time)
+        native_car.id = int(agent.index)
+        native_car.team = int(agent.team)
+        native_car.on_ground = not car.airborne
+        native_car.jumped = bool(car.jumped or car.has_jumped)
+        native_car.double_jumped = bool(
+            car.doublejumped or car.has_double_jumped or car.has_dodged
+        )
+        native_car.demolished = bool(car.demolished)
+        native_car.supersonic = bool(car.supersonic)
+        native_car.hitbox_widths = vec3(
+            float(car.hitbox.length), float(car.hitbox.width), float(car.hitbox.height)
+        )
+        native_car.hitbox_offset = vec3(
+            float(car.hitbox.offset.x),
+            float(car.hitbox.offset.y),
+            float(car.hitbox.offset.z)
+        )
+
+        normal = self.contact_normal
+        if normal is None or normal.magnitude() < 0.001:
+            normal = -self.shot_vector
+        normal = normal.normalize()
+        desired_forward = -normal
+        desired_up = (normal + Vector(z=0.5)).normalize()
+        if desired_up.magnitude() < 0.001:
+            desired_up = Vector(z=1)
+
+        target_position = vec3(self.target.x, self.target.y, self.target.z)
+        native_aerial = self._rlu_aerial
+        native_aerial.target_position = target_position
+        native_aerial.arrival_time = float(self.intercept_time)
+        native_aerial.double_jump = True
+        native_aerial.angle_threshold = 0.8
+        native_aerial.up = vec3(desired_up.x, desired_up.y, desired_up.z)
+
+        # Bumblebee's FastAerialStrike simulates the whole flight before
+        # takeoff. Unlike stock Bumblebee, consume the real boost pool.
+        if not self._rlu_started and not car.airborne:
+            sim_car = RLUCar(native_car)
+            sim_aerial = RLUAerial(sim_car)
+            sim_aerial.target_position = target_position
+            sim_aerial.arrival_time = float(self.intercept_time)
+            sim_aerial.angle_threshold = 0.8
+            sim_aerial.up = vec3(desired_up.x, desired_up.y, desired_up.z)
+            sim_aerial.double_jump = True
+
+            boost_remaining = max(0.0, float(car.boost))
+            boost_per_second = 33.3333333333
+            sim_dt = 1.0 / 120.0
+            max_steps = min(720, max(1, int((time_remaining + 0.25) * 120)))
+            for _ in range(max_steps):
+                if sim_aerial.finished:
+                    break
+                sim_aerial.step(sim_dt)
+                sim_controls = sim_aerial.controls
+                sim_car.step(sim_controls, sim_dt)
+                if sim_controls.boost and boost_remaining > 0:
+                    boost_remaining = max(
+                        0.0, boost_remaining - boost_per_second * sim_dt
+                    )
+                    sim_car.boost = int(boost_remaining)
+                elif boost_remaining <= 0:
+                    sim_car.boost = 0
+
+            simulated_error = norm(sim_car.position - target_position)
+            if simulated_error < 50.0:
+                self._rlu_started = True
+                self.aerialing = True
+                print(
+                    f"[BUMBLEBEE FAST AERIAL] launch error={simulated_error:.1f} "
+                    f"boost={car.boost} reserve={self.post_launch_boost_reserve:.1f} "
+                    f"T={time_remaining:.2f}",
+                    flush=True
+                )
+            else:
+                # Bumblebee Arrive phase, using Volt's drive controller.
+                # Keep the reserved post-launch boost untouched.
+                flat_target = Vector(self.target.x, self.target.y, 0)
+                local_target = car.local_location(flat_target)
+                distance = car.location.flat_dist(flat_target)
+                target_speed = cap(
+                    distance / max(time_remaining, 0.05), 500, max_speed
+                )
+                defaultDrive(agent, target_speed, local_target)
+                if (
+                    agent.boost_amount != "unlimited"
+                    and car.boost <= self.post_launch_boost_reserve + 0.35
+                ):
+                    agent.controller.boost = False
+
+                if agent.time - self._rlu_last_debug >= 0.5:
+                    self._rlu_last_debug = agent.time
+                    print(
+                        f"[BUMBLEBEE AERIAL APPROACH] sim_error={simulated_error:.1f} "
+                        f"boost={car.boost} reserve={self.post_launch_boost_reserve:.1f} "
+                        f"speed={target_speed:.0f} T={time_remaining:.2f}",
+                        flush=True
+                    )
+                return True
+
+        elif car.airborne:
+            self._rlu_started = True
+            self.aerialing = True
+
+        # Follow Bumblebee's per-frame target-orientation update, adapted to
+        # Volt's selected ball-surface normal.
+        native_aerial.target_orientation = look_at(
+            vec3(desired_forward.x, desired_forward.y, desired_forward.z),
+            vec3(desired_up.x, desired_up.y, desired_up.z)
+        )
+        native_aerial.step(1.0 / 120.0)
+        controls = native_aerial.controls
+        agent.controller.throttle = controls.throttle
+        agent.controller.steer = controls.steer
+        agent.controller.boost = controls.boost
+        agent.controller.jump = controls.jump
+        agent.controller.pitch = controls.pitch
+        agent.controller.yaw = controls.yaw
+        agent.controller.roll = controls.roll
+        agent.controller.handbrake = controls.handbrake
+
+        if agent.time - self._rlu_last_debug >= 0.5:
+            self._rlu_last_debug = agent.time
+            print(
+                f"[BUMBLEBEE FAST AERIAL] flying boost={car.boost} "
+                f"T={time_remaining:.2f} finished={native_aerial.finished}",
+                flush=True
+            )
+
+        if native_aerial.finished and time_remaining < -0.3:
+            agent.pop()
+            agent.shooting = False
+            agent.push(ball_recovery())
+        return True
 
     def run(self, agent: VirxERLU):
         if not agent.shooting:
