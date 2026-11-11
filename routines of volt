@@ -1014,6 +1014,8 @@ class Aerial:
         self.jump_time = None
         self.started_airborne = False
         self.last_debug_time = -1
+        self.prev_rotation = None
+        self.prev_rotation_time = None
         self.last_target = None
         self.contact_point = None
         self.contact_normal = None
@@ -1124,13 +1126,44 @@ class Aerial:
             - abs(ad * math.sin(-found_angle) - ae)
         )
 
+    def _rotation_rates(self, agent, pitch, yaw, roll):
+        """
+        Noob Black's frame-to-frame Euler angular velocity calculation.
+        """
+        if self.prev_rotation is None or self.prev_rotation_time is None:
+            rates = (0.0, 0.0, 0.0)
+        else:
+            dt = max(agent.time - self.prev_rotation_time, 1 / 120)
+            previous_pitch, previous_yaw, previous_roll = self.prev_rotation
+
+            pitch_rate = (pitch - previous_pitch) / dt
+
+            yaw_delta = yaw - previous_yaw
+            if abs(yaw_delta) > math.pi:
+                yaw_delta += 2 * math.pi * self._sign(previous_yaw - yaw)
+            yaw_rate = yaw_delta / dt * math.cos(pitch)
+
+            roll_delta = roll - previous_roll
+            if abs(roll_delta) > math.pi / 2:
+                roll_delta += math.pi * self._sign(previous_roll - roll)
+            roll_rate = roll_delta / dt
+
+            rates = (pitch_rate, yaw_rate, roll_rate)
+
+        self.prev_rotation = (pitch, yaw, roll)
+        self.prev_rotation_time = agent.time
+        return rates
+
     def _point_toward(self, agent, desired_direction):
         """
-        Noob Black's aerial_control + point_toward, including its angular
-        velocity compensation, expressed through Volt's car basis vectors.
+        Noob Black's aerial_control + point_toward, including its original
+        frame-to-frame angular velocity compensation.
         """
         car = agent.me
         pitch, yaw, roll = self._rotation_from_car(car)
+        rot_pitch, rot_yaw, rot_roll = self._rotation_rates(
+            agent, pitch, yaw, roll
+        )
         desired_direction = desired_direction.normalize()
 
         to_attack = self._get_aerial_control(
@@ -1151,12 +1184,9 @@ class Aerial:
             p_y * math.cos(roll) - p_c * math.sin(roll)
         ) * scale
 
-        # Rocket League angular velocity is world-space. Project it onto
-        # the car's local axes to recover Noob Black's pitch/yaw/roll rates.
-        angular = car.angular_velocity
-        pitch_rate = angular.dot(car.right)
-        yaw_rate = angular.dot(car.up)
-        roll_rate = angular.dot(car.forward)
+        pitch_rate = rot_pitch
+        yaw_rate = rot_yaw
+        roll_rate = rot_roll
 
         roll_phase = roll - roll_rate / 120
         c_pitch = (
@@ -1310,7 +1340,7 @@ class Aerial:
             self._point_toward(agent, offset)
 
             steer_error = (
-                abs(angles[1]) if angles is not None and len(angles) > 1
+                angles[1] if angles is not None and len(angles) > 1
                 else 1.0
             )
             if steer_error <= 0.2:
