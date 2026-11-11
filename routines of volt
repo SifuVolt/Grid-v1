@@ -1164,7 +1164,16 @@ class Aerial:
         # Volt supplies the two goal-window points, so perform that same
         # projection directly against their Y plane.
         ball = self.slice_location
-        velocity = (self.slice_velocity * 1.0)
+        time_remaining = max(0.001, self.slice_time - agent.time)
+        car_final_velocity = (
+            (ball - agent.me.location) / time_remaining
+        )
+        speed = car_final_velocity.magnitude()
+        if speed > self.MAX_SPEED:
+            car_final_velocity = car_final_velocity.normalize() * self.MAX_SPEED
+        velocity = (
+            car_final_velocity * 6 + self.slice_velocity
+        ) / 7
         dy = center.y - ball.y
         time_to_plane = dy / velocity.y if abs(velocity.y) > 100 else -1
 
@@ -1293,7 +1302,7 @@ class Aerial:
         car = agent.me
         local_target = car.local(target_location - car.location)
         if backwards:
-            local_target *= -1
+            local_target = local_target * -1
 
         safe_up = up if up is not None and up.magnitude() > 0 else Vector(z=1)
         local_up = car.local(safe_up.normalize())
