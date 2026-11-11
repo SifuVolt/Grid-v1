@@ -1897,17 +1897,45 @@ class Bot(VirxERLU):
             _, goalie_index, _ = self.get_grid_team_roles()
             goalie_holding_net = self.should_hold_cover_role()
 
+        # Remember when this car last held goalie; role release can happen
+        # before an incoming ball has left our half.
+        if goalie_holding_net:
+            self._last_goalie_role_time = self.time
+
+        last_goalie_role_time = getattr(self, "_last_goalie_role_time", None)
+        recently_released_goalie_under_threat = (
+            not defensive_boost_lock
+            and last_goalie_role_time is not None
+            and 0.0 <= self.time - last_goalie_role_time <= 5.0
+            and ball_depth > 0
+            and self.ball.velocity.y * side > 150
+        )
+
         cover_player_deep_defending = (
             bool(self.friends)
             and self.should_hold_cover_role()
             and ball_depth > 2048
         )
 
-        # Neither the designated goalie nor a deep cover player should
-        # abandon the defensive lane for a boost detour.
-        if (goalie_holding_net or cover_player_deep_defending) and not self.is_clear():
-            current_name = self.stack[0].__class__.__name__
+        defensive_boost_lock = (
+            goalie_holding_net
+            or cover_player_deep_defending
+            or recently_released_goalie_under_threat
+        )
+        if recently_released_goalie_under_threat and (
+            self.time - getattr(self, "_last_goalie_boost_lock_debug", -999.0) >= 0.75
+        ):
+            self._last_goalie_boost_lock_debug = self.time
+            print(
+                f"[GOALIE BOOST LOCK] active ball_depth={ball_depth:.0f} "
+                f"toward_goal={self.ball.velocity.y * side:.0f} "
+                f"release_age={self.time - last_goalie_role_time:.2f}s",
+                flush=True
+            )
 
+        # A goalie or deep cover player must not abandon the defensive lane.
+        if defensive_boost_lock and not self.is_clear():
+            current_name = self.stack[0].__class__.__name__
             if current_name == "goto_boost":
                 self.clear()
 
@@ -1918,7 +1946,7 @@ class Bot(VirxERLU):
         if (
             self.is_clear()
             and self.me.boost < 70
-            and not goalie_holding_net
+            and not defensive_boost_lock
             and not self.defensive_emergency()
             and not (
                 len(self.friends) >= 2
@@ -1944,7 +1972,7 @@ class Bot(VirxERLU):
         # Normal boost collection when we aren't prioritising the ball.
 
         if len(self.friends) == 1:
-            if self.me.boost < 23 and not goalie_holding_net and not self.should_prioritize_ball() and not cover_player_deep_defending:
+            if self.me.boost < 23 and not defensive_boost_lock and not self.should_prioritize_ball() and not cover_player_deep_defending:
                 # If the stack is clear
                 if self.is_clear():
                     # Get a list of all of the large, active boosts
@@ -1961,7 +1989,7 @@ class Bot(VirxERLU):
                 if not self.is_clear():
                     return
         elif len(self.friends) > 1:
-            if self.me.boost < 30 and not goalie_holding_net and not self.should_prioritize_ball() and not cover_player_deep_defending:
+            if self.me.boost < 30 and not defensive_boost_lock and not self.should_prioritize_ball() and not cover_player_deep_defending:
                 # If the stack is clear
                 if self.is_clear():
                     # Get a list of all of the large, active boosts
@@ -1978,7 +2006,7 @@ class Bot(VirxERLU):
                 if not self.is_clear():
                     return
         else:
-            if self.me.boost < 18 and not goalie_holding_net and not self.should_prioritize_ball():
+            if self.me.boost < 18 and not defensive_boost_lock and not self.should_prioritize_ball():
                 # If the stack is clear
                 if self.is_clear():
                     # Get a list of all of the large, active boosts
