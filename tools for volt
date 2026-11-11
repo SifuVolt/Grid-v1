@@ -504,8 +504,7 @@ def shot_candidate_score(agent, ball_slice, shot, time_remaining, target=None):
     elif shot_type == 2:     # Double jump
         score += 0.25
     elif shot_type == 3:     # Aerial
-        # Reachability is validated separately; keep viable aerials competitive.
-        score += 0.00
+        score += 0.35
 
     # Grid's double-jump candidate is evaluated separately from the C parser.
     # Give it the same preference during an opponent-back-wall rebound.
@@ -974,7 +973,7 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
     gravity = tuple(agent.gravity)
 
     max_aerial_height = 1200 if len(agent.friends) == 0 and len(agent.foes) == 1 else math.inf
-    min_aerial_height = 551 if max_aerial_height > 1200 and agent.me.location.z >= 2044 - agent.me.hitbox.height * 1.1 else 150
+    min_aerial_height = 551 if max_aerial_height > 1200 and agent.me.location.z >= 2044 - agent.me.hitbox.height * 1.1 else (150 if agent.boost_amount == 'unlimited' or agent.me.airborne else 450)
 
     is_on_ground = not agent.me.airborne
     can_ground = is_on_ground and can_ground
@@ -1217,13 +1216,6 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
     if best_shot is None:
         return None
     time_to_intercept = best_intercept_time - agent.time
-    if best_shot.get("shot_type") == 3:
-        print(
-            f"[SHOT SELECT] aerial T={time_to_intercept:.2f} "
-            f"height={best_ball_z:.0f} boost={agent.me.boost:.0f} "
-            f"score={best_score:.3f}",
-            flush=True
-        )
     best_targets = (
         tuple(best_shot["targets"][0]),
         tuple(best_shot["targets"][1])
@@ -1388,7 +1380,11 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
         551
         if max_aerial_height > 1200
         and agent.me.location.z >= 2044 - agent.me.hitbox.height * 1.1
-        else 150
+        else (
+            150
+            if agent.boost_amount == 'unlimited' or agent.me.airborne
+            else 450
+        )
     )
 
     is_on_ground = not agent.me.airborne
@@ -1593,13 +1589,6 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
     if best_shot is None:
         return None
     time_to_intercept = best_intercept_time - agent.time
-    if best_shot.get("shot_type") == 3:
-        print(
-            f"[SHOT SELECT] untargeted aerial T={time_to_intercept:.2f} "
-            f"height={best_ball_z:.0f} boost={agent.me.boost:.0f} "
-            f"score={best_score:.3f}",
-            flush=True
-        )
     if best_shot['shot_type'] == 3:
         routine = Aerial(
             best_intercept_time,
