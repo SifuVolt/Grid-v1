@@ -1497,8 +1497,11 @@ class Aerial:
                 local_target = car.local_location(flat_target)
                 distance = car.location.flat_dist(flat_target)
                 target_speed = cap(
-                    distance / max(time_remaining, 0.05), 500, max_speed
+                    distance / max(time_remaining, 0.000001), 0, max_speed
                 )
+                angle_to_target = abs(Vector(x=1).angle2D(local_target))
+                if target_speed < 800 and distance > 1000 and angle_to_target < 0.1:
+                    target_speed = 0
                 defaultDrive(agent, target_speed, local_target)
                 if (
                     agent.boost_amount != "unlimited"
