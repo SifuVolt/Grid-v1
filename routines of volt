@@ -1157,12 +1157,10 @@ class Aerial:
 
         center = (left + right) * 0.5
         half_width = (right - left).flatten().magnitude() * 0.5
-        usable_width = max(0.0, half_width - 100.0)
+        usable_width = max(0.0, half_width - 92.75)
 
-        # RedUtils Target.Clamp projects the expected post-hit ball path onto
-        # the goal target surface, then clamps it inside the usable opening.
-        # Volt supplies the two goal-window points, so perform that same
-        # projection directly against their Y plane.
+        # Match RedUtils DefaultShotCheck's estimate of the ball velocity
+        # before Target.Clamp projects it onto the goal target surface.
         ball = self.slice_location
         time_remaining = max(0.001, self.slice_time - agent.time)
         car_final_velocity = (
@@ -1171,9 +1169,12 @@ class Aerial:
         speed = car_final_velocity.magnitude()
         if speed > self.MAX_SPEED:
             car_final_velocity = car_final_velocity.normalize() * self.MAX_SPEED
-        velocity = (
-            car_final_velocity * 6 + self.slice_velocity
-        ) / 7
+        car_direction = car_final_velocity.normalize()
+        slice_velocity_flat = (
+            self.slice_velocity
+            - car_direction * self.slice_velocity.dot(car_direction)
+        )
+        velocity = car_final_velocity + slice_velocity_flat * 0.8
         dy = center.y - ball.y
         time_to_plane = dy / velocity.y if abs(velocity.y) > 100 else -1
 
@@ -1334,10 +1335,15 @@ class Aerial:
         self._set_target_location(agent)
 
         car = agent.me
-        to_target = (self.target_location - car.location).flatten()
-        flat_velocity = car.velocity.flatten()
+        to_target = self.target_location - car.location
+        flat_velocity = (
+            car.velocity - car.up * car.velocity.dot(car.up)
+        )
+        flat_target = (
+            to_target - car.up * to_target.dot(car.up)
+        )
         self.jump_immediately = (
-            self._angle(flat_velocity, to_target) < 0.6
+            self._angle(flat_velocity, flat_target) < 0.6
             or flat_velocity.magnitude() < 500
             or car.airborne
         )
