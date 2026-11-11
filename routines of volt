@@ -1591,8 +1591,8 @@ class Aerial:
         best_contact_score = -999.0
         for label, normal in candidates:
             score = (
-                car_from_ball.dot(normal) * 0.55
-                + (-normal).dot(shot_direction) * 0.45
+                car_from_ball.dot(normal) * 0.35
+                + (-normal).dot(shot_direction) * 0.65
             )
             if label == self.contact_label:
                 score += 0.06
