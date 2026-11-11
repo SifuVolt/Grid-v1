@@ -2085,8 +2085,8 @@ class Bot(VirxERLU):
                 flush=True
             )
 
-        # RedUtils AerialShot becomes uninterruptible as soon as its launch
-        # controller takes over. Keep that behaviour in Volt's strategy too.
+        # Keep a launched Virx aerial committed so the strategy does not
+        # replace it midway through its jump/flight controller.
         committed_aerial = False
         if not self.is_clear():
             active_routine = self.stack[0]
@@ -2108,7 +2108,7 @@ class Bot(VirxERLU):
         # Shot routines are usually active, so requiring a clear stack made
         # this opportunity almost unreachable. Aerial can also be replaced
         # while the car is still grounded (it has not launched yet); once
-        # airborne, keep the aerial protected and do not interrupt it.
+        # airborne, keep the launched aerial protected and do not interrupt it.
         current_routine_name = (
             self.stack[0].__class__.__name__
             if not self.is_clear()
