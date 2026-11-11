@@ -895,7 +895,7 @@ def _parse_shot_with_boost_budget(
             return shot
 
         approach_budget = original_boost - reserve
-        if approach_budget < 0.5:
+        if approach_budget < -0.01:
             if agent.time - getattr(
                 agent, "_last_boost_budget_debug", -999.0
             ) >= 0.5:
@@ -1173,7 +1173,7 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             )
             grid_approach_budget_ok = (
                 agent.boost_amount == "unlimited"
-                or agent.me.boost - grid_boost_reserve >= 0.5
+                or agent.me.boost - grid_boost_reserve >= 0.0
             )
 
             if grid_approach_budget_ok and not (
@@ -1550,7 +1550,7 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
             )
             grid_approach_budget_ok = (
                 agent.boost_amount == "unlimited"
-                or agent.me.boost - grid_boost_reserve >= 0.5
+                or agent.me.boost - grid_boost_reserve >= 0.0
             )
 
             if grid_approach_budget_ok and not (
