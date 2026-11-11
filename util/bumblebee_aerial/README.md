@@ -16,7 +16,13 @@ from your local RLBotPack checkout into Volt's project root, so the result is:
 
 The CPython 3.11 Windows x64 binary matches Volt's Python 3.11.9 environment. Do not copy the CPython 3.7 binary.
 
-The native package includes the compiled extension and mesh/model assets. The Python aerial adapter imports it lazily; if it is missing, Volt logs `[BUMBLEBEE AERIAL UNAVAILABLE]` and falls back to its previous aerial controller instead of crashing.
+You can run the repository-root installer from CMD, passing the Botimus & Bumblebee folder:
+
+```bat
+install_bumblebee_rlutilities.bat "C:\path\to\RLBotPack\RLBotPack\Botimus&Bumblebee"
+```
+
+The native package includes the compiled extension and mesh/model assets. The installer copies the complete package. The Python aerial adapter imports it lazily; if it is missing, Volt logs `[BUMBLEBEE AERIAL UNAVAILABLE]` and falls back to its previous aerial controller instead of crashing.
 
 ## Boost handling
 
