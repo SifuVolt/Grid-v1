@@ -1283,8 +1283,8 @@ class Aerial:
         local_forward = car.local(desired_forward)
         local_up = car.local(desired_up)
 
-        pitch_angle = math.atan2(local_forward.z, max(0.001, local_forward.x))
-        yaw_angle = math.atan2(local_forward.y, max(0.001, local_forward.x))
+        pitch_angle = math.atan2(local_forward.z, local_forward.x)
+        yaw_angle = math.atan2(local_forward.y, local_forward.x)
         roll_angle = math.atan2(local_up.y, local_up.z)
 
         angular = car.angular_velocity
