@@ -2058,6 +2058,33 @@ class Bot(VirxERLU):
             return
 
     
+        # Once a jump shot has launched, don't replace it merely because
+        # an opponent is close enough to contest the ball. The rolling-ball
+        # emergency check above still runs first and can override this.
+        committed_jump_under_pressure = False
+        if not self.is_clear():
+            active_routine = self.stack[0]
+            if (
+                active_routine.__class__.__name__ == "jump_shot"
+                and getattr(active_routine, "jumping", False)
+                and self.foes
+            ):
+                committed_jump_under_pressure = any(
+                    foe.location.dist(self.ball.location) <= 1200
+                    or foe.location.dist(self.me.location) <= 1000
+                    for foe in self.foes
+                )
+
+        if committed_jump_under_pressure and (
+            self.time - getattr(self, "_last_jump_pressure_debug", -999.0) >= 0.75
+        ):
+            self._last_jump_pressure_debug = self.time
+            print(
+                "[JUMP SHOT PRESSURE LOCK] keeping launched jump shot "
+                f"ball_enemy_dist={min(foe.location.dist(self.ball.location) for foe in self.foes):.0f}",
+                flush=True
+            )
+
         # Wall-shot attempt: only start from a clear stack so we don't
         # interrupt kickoff, recovery, defence, or an existing shot.
 
@@ -2133,14 +2160,15 @@ class Bot(VirxERLU):
                         "wall_approach"
                     }
 
-                    if current_name in ordinary_shots:
+                    if current_name in ordinary_shots and not committed_jump_under_pressure:
                         self.clear()
 
                     # Yield to the teammate's better opportunity.
                     # Continue to the existing fallback behaviour.
                 else:
                     if (
-                        shot.__class__.__name__ != "wall_approach"
+                        not committed_jump_under_pressure
+                        and shot.__class__.__name__ != "wall_approach"
                         and routines.half_flip_manager.request_for_shot(self, shot)
                     ):
                         return
@@ -2180,6 +2208,8 @@ class Bot(VirxERLU):
                                 ):
                                     return
 
+                            if committed_jump_under_pressure:
+                                return
                             self.clear()
                             self.push(shot)
                     return
@@ -2264,7 +2294,10 @@ class Bot(VirxERLU):
             # If we found a shot
             if shot is not None:
 
-                if routines.half_flip_manager.request_for_shot(self, shot):
+                if (
+                    not committed_jump_under_pressure
+                    and routines.half_flip_manager.request_for_shot(self, shot)
+                ):
                     return
 
                 
@@ -2304,6 +2337,8 @@ class Bot(VirxERLU):
                             ):
                                 return
 
+                        if committed_jump_under_pressure:
+                            return
                         self.clear()
                         self.push(shot)
                 return
