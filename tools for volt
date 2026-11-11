@@ -1128,7 +1128,18 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                 "targets": grid_candidate["targets"]
             }
 
-            if not (
+            grid_boost_reserve = _shot_post_launch_boost_reserve(
+                agent,
+                grid_ball_tuple,
+                grid_time_remaining,
+                2
+            )
+            grid_approach_budget_ok = (
+                agent.boost_amount == "unlimited"
+                or agent.me.boost - grid_boost_reserve >= 0.5
+            )
+
+            if grid_approach_budget_ok and not (
                 agent.boost_amount != "unlimited"
                 and agent.me.boost <= 0
                 and grid_ball_location.z <= 105.0
@@ -1494,7 +1505,18 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
                 "targets": grid_candidate["targets"]
             }
 
-            if not (
+            grid_boost_reserve = _shot_post_launch_boost_reserve(
+                agent,
+                grid_ball_tuple,
+                grid_time_remaining,
+                2
+            )
+            grid_approach_budget_ok = (
+                agent.boost_amount == "unlimited"
+                or agent.me.boost - grid_boost_reserve >= 0.5
+            )
+
+            if grid_approach_budget_ok and not (
                 agent.boost_amount != "unlimited"
                 and agent.me.boost <= 0
                 and grid_ball_location.z <= 105.0
