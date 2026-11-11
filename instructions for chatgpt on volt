@@ -2085,6 +2085,19 @@ class Bot(VirxERLU):
                 flush=True
             )
 
+        # RedUtils AerialShot becomes uninterruptible as soon as its launch
+        # controller takes over. Keep that behaviour in Volt's strategy too.
+        committed_aerial = False
+        if not self.is_clear():
+            active_routine = self.stack[0]
+            committed_aerial = (
+                active_routine.__class__.__name__ == "Aerial"
+                and getattr(active_routine, "aerialing", False)
+            )
+        committed_routine_lock = (
+            committed_jump_under_pressure or committed_aerial
+        )
+
         # Wall-shot attempt: only start from a clear stack so we don't
         # interrupt kickoff, recovery, defence, or an existing shot.
 
@@ -2160,14 +2173,14 @@ class Bot(VirxERLU):
                         "wall_approach"
                     }
 
-                    if current_name in ordinary_shots and not committed_jump_under_pressure:
+                    if current_name in ordinary_shots and not committed_routine_lock:
                         self.clear()
 
                     # Yield to the teammate's better opportunity.
                     # Continue to the existing fallback behaviour.
                 else:
                     if (
-                        not committed_jump_under_pressure
+                        not committed_routine_lock
                         and shot.__class__.__name__ != "wall_approach"
                         and routines.half_flip_manager.request_for_shot(self, shot)
                     ):
@@ -2208,7 +2221,7 @@ class Bot(VirxERLU):
                                 ):
                                     return
 
-                            if committed_jump_under_pressure:
+                            if committed_routine_lock:
                                 return
                             self.clear()
                             self.push(shot)
@@ -2295,7 +2308,7 @@ class Bot(VirxERLU):
             if shot is not None:
 
                 if (
-                    not committed_jump_under_pressure
+                    not committed_routine_lock
                     and routines.half_flip_manager.request_for_shot(self, shot)
                 ):
                     return
@@ -2337,7 +2350,7 @@ class Bot(VirxERLU):
                             ):
                                 return
 
-                        if committed_jump_under_pressure:
+                        if committed_routine_lock:
                             return
                         self.clear()
                         self.push(shot)
