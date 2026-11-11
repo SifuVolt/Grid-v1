@@ -1871,28 +1871,53 @@ class Aerial:
             agent.controller.pitch = 0
             agent.controller.roll = 0
 
-        if (
-            time_remaining <= 0
-            or (
-                self.jumped
-                and offset_length > 50
-                and time_remaining > 0.5
-                and required_accel * 0.8 > self.AIR_THROTTLE_ACCEL
-                and (
-                    agent.me.boost <= 0
-                    or required_accel * 0.8
-                    > (
-                        getattr(agent, "boost_accel", 991.667)
-                        + self.AIR_THROTTLE_ACCEL
-                    )
+        prediction_valid = self._shot_valid(agent)
+        unreachable = (
+            self.jumped
+            and offset_length > 50
+            and time_remaining > 0.5
+            and required_accel * 0.8 > self.AIR_THROTTLE_ACCEL
+            and (
+                agent.me.boost <= 0
+                or required_accel * 0.8
+                > (
+                    getattr(agent, "boost_accel", 991.667)
+                    + self.AIR_THROTTLE_ACCEL
                 )
             )
-            or (
-                not self._shot_valid(agent)
-                and time_remaining > 0.5
-            )
-            or (not agent.me.airborne and self.jumped)
+        )
+        contact_passed = time_remaining <= 0
+        prediction_invalid = not prediction_valid and time_remaining > 0.5
+        unexpectedly_landed = not agent.me.airborne and self.jumped
+
+        if (
+            contact_passed
+            or unreachable
+            or prediction_invalid
+            or unexpectedly_landed
         ):
+            reasons = []
+            if contact_passed:
+                reasons.append("contact-time")
+            if unreachable:
+                reasons.append("unreachable")
+            if prediction_invalid:
+                reasons.append("prediction-invalid")
+            if unexpectedly_landed:
+                reasons.append("landed")
+
+            print(
+                "[REDUTILS AERIAL] ABORT "
+                f"reason={'+'.join(reasons)} "
+                f"T={time_remaining:.3f} "
+                f"offset={offset_length:.1f} "
+                f"required_accel={required_accel:.1f} "
+                f"boost={agent.me.boost:.1f} "
+                f"airborne={agent.me.airborne} "
+                f"jumped={self.jumped} "
+                f"prediction_valid={prediction_valid}",
+                flush=True
+            )
             self._finish(agent, "contact passed, unreachable, or invalid")
             return
 
