@@ -740,6 +740,174 @@ def elevated_dodge_reachable(agent, ball_location, time_to_intercept):
 
     return distance <= reachable_distance
 
+def _shot_post_launch_boost_reserve(agent, ball_location, time_remaining, shot_type):
+    """
+    Boost which must remain available after the C reachability simulation.
+
+    The C finder already budgets boost for its drive-to-approach phase.
+    Jump routines can then spend more boost after takeoff, so reserve a
+    distance/height-dependent part of that launch window before asking C
+    whether the approach is reachable.
+    """
+    if agent.boost_amount == "unlimited" or shot_type == 0:
+        return 0.0
+
+    available = max(0.0, float(agent.me.boost))
+    if available <= 0:
+        return 0.0
+
+    ball = Vector(*ball_location)
+    flat_distance = agent.me.location.flat_dist(ball)
+    height = max(0.0, ball.z - 92.75 - agent.me.location.z)
+
+    if shot_type in (1, 2):
+        # The jump routine starts its launch close to contact. Estimate the
+        # powered portion of that short flight window, not the whole search
+        # horizon. Nearby/low contacts naturally need little or no reserve.
+        try:
+            jump_time = virxrlcu.get_jump_time(
+                height,
+                agent.me.velocity.z,
+                agent.gravity.z
+            )
+        except (TypeError, ValueError, OverflowError):
+            jump_time = 0.0
+
+        if jump_time is None or jump_time < 0:
+            jump_time = 0.0
+
+        jump_time = cap(float(jump_time), 0.0, 0.65)
+        distance_factor = cap((flat_distance - 180.0) / 900.0, 0.0, 1.0)
+        height_factor = cap(height / 350.0, 0.0, 1.0)
+
+        # Single-jump shots tend to need more post-launch correction.
+        # Double jumps contribute another vertical impulse, reducing that
+        # expected boost demand.
+        launch_usage = 0.60 if shot_type == 1 else 0.42
+        return min(
+            available,
+            33.3333333333
+            * jump_time
+            * launch_usage
+            * distance_factor
+            * height_factor
+        )
+
+    if shot_type == 3:
+        # The C aerial test already estimates flight boost and keeps its own
+        # safety margin. Add a second, dynamic margin for the difference
+        # between its simplified target and Volt's nose-to-contact target.
+        distance_3d = agent.me.location.dist(ball)
+        distance_factor = cap((distance_3d - 250.0) / 1000.0, 0.0, 1.0)
+        height_factor = cap(height / 700.0, 0.0, 1.0)
+        return min(
+            available,
+            15.0,
+            available * 0.18 * distance_factor * height_factor
+        )
+
+    return 0.0
+
+
+def _parse_shot_with_boost_budget(
+    agent, parser, shot_flags, time_remaining, game_info,
+    gravity, ball_info, me, targets=None
+):
+    """
+    Run the normal C finder, then rerun it with post-launch boost reserved.
+
+    Raw VirxERLU car data is a tuple; boost is element 9. Reducing that value
+    makes the C drive/aerial reachability test use only the boost actually
+    available for the approach phase.
+    """
+    def run_parser(car_data):
+        args = (
+            *shot_flags,
+            time_remaining,
+            *game_info,
+            gravity,
+            ball_info,
+            car_data
+        )
+        if targets is not None:
+            return parser(*args, targets)
+        return parser(*args)
+
+    shot = run_parser(me)
+    if shot.get("found") != 1 or agent.boost_amount == "unlimited":
+        return shot
+
+    original_boost = max(0.0, float(agent.me.boost))
+    seen_types = set()
+
+    # A reduced budget can cause the parser to choose a different jump type.
+    # Recalculate the reserve for that type, always from the original boost.
+    for _ in range(3):
+        shot_type = int(shot.get("shot_type", 0))
+        if shot_type in seen_types:
+            return {"found": 0}
+        seen_types.add(shot_type)
+
+        reserve = _shot_post_launch_boost_reserve(
+            agent,
+            ball_info[0],
+            time_remaining,
+            shot_type
+        )
+        if reserve <= 0.25:
+            return shot
+
+        approach_budget = original_boost - reserve
+        if approach_budget < 0.5:
+            if agent.time - getattr(
+                agent, "_last_boost_budget_debug", -999.0
+            ) >= 0.5:
+                agent._last_boost_budget_debug = agent.time
+                print(
+                    f"[BOOST REACHABILITY REJECT] type={shot_type} "
+                    f"boost={original_boost:.1f} reserve={reserve:.1f} "
+                    f"reason=post_launch_reserve",
+                    flush=True
+                )
+            return {"found": 0}
+
+        budgeted_me = list(me)
+        budgeted_me[9] = int(approach_budget)
+        next_shot = run_parser(tuple(budgeted_me))
+
+        if next_shot.get("found") != 1:
+            if agent.time - getattr(
+                agent, "_last_boost_budget_debug", -999.0
+            ) >= 0.5:
+                agent._last_boost_budget_debug = agent.time
+                print(
+                    f"[BOOST REACHABILITY REJECT] type={shot_type} "
+                    f"boost={original_boost:.1f} reserve={reserve:.1f} "
+                    f"approach_budget={approach_budget:.1f}",
+                    flush=True
+                )
+            return next_shot
+
+        if int(next_shot.get("shot_type", 0)) == shot_type:
+            if agent.time - getattr(
+                agent, "_last_boost_budget_debug", -999.0
+            ) >= 0.5:
+                agent._last_boost_budget_debug = agent.time
+                print(
+                    f"[BOOST REACHABILITY] type={shot_type} "
+                    f"boost={original_boost:.1f} "
+                    f"post_launch_reserve={reserve:.1f} "
+                    f"approach_budget={approach_budget:.1f} "
+                    f"T={time_remaining:.2f}",
+                    flush=True
+                )
+            return next_shot
+
+        shot = next_shot
+
+    return {"found": 0}
+
+
 def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_jump=True, can_ground=True):
     if not can_aerial and not can_double_jump and not can_jump and not can_ground:
         agent.print("WARNING: All shots were disabled when find_shot was ran")
@@ -856,13 +1024,17 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             else:
                 slice_can_double_jump = False
 
-        shot = virxrlcu.parse_slice_for_shot_with_target(
-            slice_can_ground,
-            slice_can_jump,
-            slice_can_double_jump,
-            slice_can_aerial,
+        shot = _parse_shot_with_boost_budget(
+            agent,
+            virxrlcu.parse_slice_for_shot_with_target,
+            (
+                slice_can_ground,
+                slice_can_jump,
+                slice_can_double_jump,
+                slice_can_aerial
+            ),
             time_remaining,
-            *game_info,
+            game_info,
             gravity,
             ball_info,
             me,
@@ -1249,13 +1421,17 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
             else:
                 slice_can_double_jump = False
 
-        shot = virxrlcu.parse_slice_for_shot(
-            slice_can_ground,
-            slice_can_jump,
-            slice_can_double_jump,
-            slice_can_aerial,
+        shot = _parse_shot_with_boost_budget(
+            agent,
+            virxrlcu.parse_slice_for_shot,
+            (
+                slice_can_ground,
+                slice_can_jump,
+                slice_can_double_jump,
+                slice_can_aerial
+            ),
             time_remaining,
-            *game_info,
+            game_info,
             gravity,
             ball_info,
             me
