@@ -1024,6 +1024,7 @@ class Aerial:
         self.launch_time = -1.0
         self.launch_up = Vector(z=1)
         self.first_jump_sent = False
+        self.first_jump_started = False
         self.second_jump_sent = False
         self.jump_released = False
         self.jump_phase = "idle"
@@ -1194,39 +1195,47 @@ class Aerial:
             self.started = True
             self.launch_time = agent.time
             self.launch_up = car.up.copy() if grounded else Vector(z=1)
-            self.jump_phase = "first"
+            self.first_jump_started = not has_jumped
+            self.jump_phase = "first" if self.first_jump_started else "flight"
             self.first_jump_sent = False
 
         elapsed = max(0.0, agent.time - self.launch_time)
 
-        if grounded and not has_jumped:
+        # If this routine initiates the jump, hold the first jump for the full
+        # 0.20 s even after wheel contact is lost. This is what creates the
+        # variable-height jump impulse; only checking grounded would release
+        # it as soon as the car left the floor.
+        if self.first_jump_started and not has_second and elapsed <= self.JUMP_HOLD:
+            agent.controller.jump = True
+            self.first_jump_sent = True
             self.jump_phase = "first"
-            if elapsed <= self.JUMP_HOLD:
-                agent.controller.jump = True
-                self.first_jump_sent = True
-            else:
-                agent.controller.jump = False
-                self.jump_phase = "release"
             return elapsed
 
-        # Fast aerial sequence: release the first jump, then send a distinct
-        # one-frame second press. Never continuously hold through the release.
-        if (
-            self.fast_aerial
-            and has_jumped
+        # A distinct release frame is mandatory before the second press.
+        if self.first_jump_started and elapsed > self.JUMP_HOLD and not self.jump_released:
+            agent.controller.jump = False
+            self.jump_released = True
+            self.jump_phase = "release"
+            return elapsed
+
+        # If Volt entered the routine already airborne after its first jump,
+        # do not accidentally hold jump and consume the remaining dodge.
+        # A fast aerial may still spend that second press once, after release.
+        can_second_jump = (
+            has_jumped
             and not has_second
             and not self.second_jump_sent
-            and elapsed >= self.JUMP_HOLD
-        ):
-            if not self.jump_released:
-                agent.controller.jump = False
-                self.jump_released = True
-                self.jump_phase = "release"
-            else:
-                agent.controller.jump = True
-                self.second_jump_sent = True
-                self.jump_phase = "second"
-                return elapsed
+            and self.fast_aerial
+            and (
+                self.jump_released
+                or not self.first_jump_started
+            )
+        )
+        if can_second_jump:
+            agent.controller.jump = True
+            self.second_jump_sent = True
+            self.jump_phase = "second"
+            return elapsed
 
         if self.second_jump_sent:
             agent.controller.jump = False
