@@ -1444,7 +1444,6 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
             if ball_location[2] > 105.0:
                 slice_can_ground = False
                 slice_can_jump = False
-                slice_can_aerial = False
             else:
                 slice_can_double_jump = False
 
