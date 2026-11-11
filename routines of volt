@@ -1402,7 +1402,7 @@ class Aerial:
             local_angular_velocity = (
                 car.local(angular_velocity)
                 if angular_velocity is not None
-                else Vector()
+                else Vector(0, 0, 0)
             )
         elif not isinstance(local_angular_velocity, Vector):
             local_angular_velocity = Vector(*local_angular_velocity)
