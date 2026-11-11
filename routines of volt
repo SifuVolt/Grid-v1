@@ -1207,14 +1207,14 @@ class Aerial:
                             defaultPD(
                                 agent,
                                 vertical_target,
-                                up=agent.me.up
+                                up=Vector(z=1)
                             )
 
-                            right_flat = agent.me.right.flatten()
-                            if right_flat.magnitude() > 1:
+                            right_direction = agent.me.right
+                            if right_direction.magnitude() > 1:
                                 alignment = cap(
                                     ball_flat.normalize().dot(
-                                        right_flat.normalize()
+                                        right_direction.normalize()
                                     ),
                                     -1,
                                     1
@@ -1229,7 +1229,7 @@ class Aerial:
                             defaultPD(
                                 agent,
                                 agent.me.local(ball_flat),
-                                up=agent.me.up
+                                up=Vector(z=1)
                             )
                     else:
                         defaultPD(agent, target)
