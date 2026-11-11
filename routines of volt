@@ -1119,7 +1119,10 @@ class Aerial:
             shot_direction = reach_direction
 
         time_blend = cap((T - 0.12) / 0.58, 0.0, 1.0)
-        self.last_orientation_weight = 0.12 + 0.88 * time_blend
+        path_alignment = cap(reach_direction.dot(shot_direction), 0.0, 1.0)
+        self.last_orientation_weight = (
+            0.12 + 0.88 * time_blend * path_alignment
+        )
 
         # Blend vectors, not Euler angles. This avoids large pitch/yaw snaps
         # when the shot direction and the reachable intercept direction differ.
