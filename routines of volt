@@ -1566,26 +1566,46 @@ class Aerial:
             if supplied_normal is not None:
                 self.tools_contact_normal = supplied_normal.copy()
 
-        # Tools selects the useful side of the ball. Reuse that surface
-        # point's normal to approach from the selected side, but aim the
-        # car's nose at the midpoint between the ball centre and bottom.
+        # Select a real surface contact from the desired outgoing
+        # trajectory, while favouring a point the car can reach.
         ball_radius = 92.75
-        ball_midpoint = self.ball - Vector(z=ball_radius * 0.5)
+        shot_direction = self.shot_vector.copy()
+        if shot_direction.magnitude() < 0.001:
+            shot_direction = (agent.foe_goal.location - self.ball).normalize()
+        else:
+            shot_direction = shot_direction.normalize()
 
-        contact_normal = self.tools_contact_normal
-        if contact_normal is None or contact_normal.magnitude() < 0.001:
-            if self.tools_contact_point is not None:
-                contact_normal = (
-                    self.tools_contact_point - self.ball
-                ).normalize()
-            else:
-                contact_normal = -self.shot_vector
+        lateral = Vector(-shot_direction.y, shot_direction.x, 0)
+        lateral = lateral.normalize() if lateral.magnitude() > 0.001 else Vector(x=1)
+        car_from_ball = agent.me.location - self.ball
+        car_from_ball = car_from_ball.normalize() if car_from_ball.magnitude() > 0.001 else -shot_direction
 
+        candidates = (
+            ("centre", -shot_direction),
+            ("left", (-shot_direction + lateral * 0.35).normalize()),
+            ("right", (-shot_direction - lateral * 0.35).normalize()),
+            ("high", (-shot_direction + Vector(z=0.30)).normalize()),
+            ("low", (-shot_direction - Vector(z=0.30)).normalize()),
+        )
+        best_contact = None
+        best_contact_score = -999.0
+        for label, normal in candidates:
+            score = (
+                car_from_ball.dot(normal) * 0.55
+                + (-normal).dot(shot_direction) * 0.45
+            )
+            if label == self.contact_label:
+                score += 0.06
+            if score > best_contact_score:
+                best_contact_score = score
+                best_contact = (label, normal)
+
+        self.contact_label, contact_normal = best_contact
         contact_normal = contact_normal.normalize()
         desired_forward = -contact_normal
+        selected_contact_point = self.ball + contact_normal * ball_radius
 
-        # Account for the front-centre hitbox offset so the nose, rather
-        # than the car's physics origin, reaches the ball midpoint.
+        # Aim the car's nose, not its physics origin, at the selected point.
         desired_up = (
             agent.me.up
             - desired_forward * agent.me.up.dot(desired_forward)
@@ -1604,30 +1624,28 @@ class Aerial:
         )
 
         self.contact_normal = contact_normal
-        self.contact_point = ball_midpoint
-        self.target = ball_midpoint - nose_world_offset
+        self.contact_point = selected_contact_point
+        self.target = selected_contact_point - nose_world_offset
 
         if self.tools_contact_point is not None:
-            agent.sphere(self.tools_contact_point, 6)
-            agent.line(self.ball, self.tools_contact_point, agent.renderer.blue)
+            agent.sphere(self.tools_contact_point, 5)
         agent.sphere(self.ball, ball_radius)
-        agent.sphere(ball_midpoint, 10)
+        agent.sphere(selected_contact_point, 10)
+        agent.line(self.ball, selected_contact_point, agent.renderer.blue)
         agent.sphere(self.target, 12)
 
-        if not hasattr(self, "last_midpoint_debug") or (
-            agent.time - self.last_midpoint_debug >= 0.5
+        if not hasattr(self, "last_aerial_contact_debug") or (
+            agent.time - self.last_aerial_contact_debug >= 0.5
         ):
-            self.last_midpoint_debug = agent.time
+            self.last_aerial_contact_debug = agent.time
             print(
-                f"[AERIAL MIDPOINT CONTACT] "
-                f"tools={self.contact_label or 'fallback'} "
-                f"normal=({contact_normal.x:.2f},"
-                f"{contact_normal.y:.2f},{contact_normal.z:.2f}) "
-                f"ball_mid=({ball_midpoint.x:.0f},"
-                f"{ball_midpoint.y:.0f},{ball_midpoint.z:.0f}) "
-                f"car_centre_target=({self.target.x:.0f},"
-                f"{self.target.y:.0f},{self.target.z:.0f}) "
-                f"fast_aerial=True",
+                f"[AERIAL CONTACT SELECT] type={self.contact_label} "
+                f"point=({selected_contact_point.x:.0f},"
+                f"{selected_contact_point.y:.0f},"
+                f"{selected_contact_point.z:.0f}) "
+                f"out=({shot_direction.x:.2f},"
+                f"{shot_direction.y:.2f},{shot_direction.z:.2f}) "
+                f"score={best_contact_score:.2f}",
                 flush=True
             )
         if self.ceiling:
