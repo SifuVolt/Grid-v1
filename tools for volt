@@ -1388,10 +1388,7 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
         551
         if max_aerial_height > 1200
         and agent.me.location.z >= 2044 - agent.me.hitbox.height * 1.1
-        else (
-            150
-            else 150
-        )
+        else 150
     )
 
     is_on_ground = not agent.me.airborne
