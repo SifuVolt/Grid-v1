@@ -1233,9 +1233,6 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             best_targets,
             best_shot["fast"]
         )
-        routine.post_launch_boost_reserve = _shot_post_launch_boost_reserve(
-            agent, best_ball_location, time_to_intercept, 3
-        )
     elif best_shot["shot_type"] in (0, 1) and can_jump:
         # A side shot is a goal-line correction, not a half-field choice.
         # Project the rolling ball to the opponent goal line and only use
@@ -1596,9 +1593,6 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
         routine = Aerial(
             best_intercept_time,
             fast_aerial=best_shot['fast']
-        )
-        routine.post_launch_boost_reserve = _shot_post_launch_boost_reserve(
-            agent, best_ball_location, time_to_intercept, 3
         )
         contact = select_ball_contact(
             agent,
