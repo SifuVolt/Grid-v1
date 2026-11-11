@@ -1249,6 +1249,75 @@ class Aerial:
             self.slice_location - self.shot_direction * self.CONTACT_OFFSET
         )
 
+        # RedUtils adjusts the contact direction when the car's target
+        # position is too close to a field surface. Use the standard arena
+        # planes here; the goal mouth is excluded from the back-wall plane.
+        x_clearance = 4096.0 - abs(self.target_location.x)
+        y_clearance = 5120.0 - abs(self.target_location.y)
+        in_goal_mouth = (
+            abs(self.target_location.x) < 900
+            and self.target_location.z < 642
+        )
+        surfaces = [
+            (self.target_location.z, Vector(z=1)),
+            (2044.0 - self.target_location.z, Vector(z=-1)),
+            (x_clearance, Vector(-sign(self.target_location.x), 0, 0)),
+        ]
+        if not in_goal_mouth:
+            surfaces.append((
+                y_clearance,
+                Vector(0, -sign(self.target_location.y), 0)
+            ))
+
+        surface_distance, surface_normal = min(
+            surfaces, key=lambda item: item[0]
+        )
+        if surface_distance < 50:
+            tangent = (
+                self.shot_direction
+                - surface_normal * self.shot_direction.dot(surface_normal)
+            ).normalize()
+            if tangent.magnitude() > 0.001:
+                angle = math.asin(cap(
+                    (surface_distance - 50) / self.CONTACT_OFFSET,
+                    -1,
+                    1
+                ))
+                self.shot_direction = (
+                    tangent * math.cos(angle)
+                    + surface_normal * math.sin(angle)
+                ).normalize()
+                self.target_location = (
+                    self.slice_location
+                    - self.shot_direction * self.CONTACT_OFFSET
+                )
+
+    @staticmethod
+    def _turn_radius(speed):
+        speed = cap(speed, 0.01, Aerial.MAX_SPEED)
+        if speed <= 500:
+            return lerp(speed / 500, 145, 251)
+        if speed <= 1000:
+            return lerp((speed - 500) / 500, 251, 425)
+        if speed <= 1500:
+            return lerp((speed - 1000) / 500, 425, 727)
+        if speed <= 1750:
+            return lerp((speed - 1500) / 250, 727, 909)
+        return lerp((speed - 1750) / 550, 909, 1136)
+
+    @staticmethod
+    def _speed_from_turn_radius(radius):
+        radius = cap(radius, 145, 1136)
+        if radius <= 251:
+            return lerp((radius - 145) / 106, 0, 500)
+        if radius <= 425:
+            return lerp((radius - 251) / 174, 500, 1000)
+        if radius <= 727:
+            return lerp((radius - 425) / 302, 1000, 1500)
+        if radius <= 909:
+            return lerp((radius - 727) / 182, 1500, 1750)
+        return lerp((radius - 909) / 227, 1750, Aerial.MAX_SPEED)
+
     def _drive_eta(self, agent, target):
         car = agent.me
         local_target = car.local(target - car.location)
@@ -1346,23 +1415,60 @@ class Aerial:
 
     def _drive_to_launch(self, agent, time_remaining):
         car = agent.me
+        delta = self.drive_location - car.location
         distance = car.location.dist(self.drive_location)
-        target_speed = distance / max(time_remaining, 0.01)
-
-        # RedUtils Drive's throttle controller.
-        local_velocity = car.local(car.velocity)
-        car_speed = local_velocity.x
-        speed_difference = target_speed - car_speed
-        throttle = cap(
-            speed_difference * abs(speed_difference) / 1000,
-            -1,
-            1
-        )
-
+        local_target = car.local(delta)
         target_angles = self._aim_at(
             agent,
             self.drive_location,
             up=Vector(z=1)
+        )
+
+        local_velocity = car.local(car.velocity)
+        car_speed = local_velocity.x
+        speed_difference = (
+            distance / max(time_remaining, 0.01)
+        ) - car_speed
+        target_speed = distance / max(time_remaining, 0.01)
+
+        grounded = not car.airborne
+        if grounded:
+            surface_right = (
+                car.right - car.up * car.right.dot(car.up)
+            ).normalize()
+            surface_delta = (
+                delta - car.up * delta.dot(car.up)
+            )
+            surface_direction = surface_delta.normalize()
+            forward_speed = car.velocity.dot(car.forward)
+            turn_radius = self._turn_radius(abs(forward_speed))
+            turn_sign = sign(surface_right.dot(surface_delta))
+            turn_center = (
+                car.location + surface_right * turn_sign * turn_radius
+            )
+            inside_turn = (
+                turn_center.dist(self.drive_location) < turn_radius - 40
+            )
+
+            if inside_turn:
+                denominator = max(
+                    abs(surface_right.dot(surface_direction)),
+                    0.001
+                )
+                target_turn_radius = (
+                    surface_delta.magnitude() / 2
+                ) / denominator
+                target_speed = max(
+                    self._speed_from_turn_radius(target_turn_radius),
+                    400
+                )
+                speed_difference = target_speed - car_speed
+
+        # RedUtils Drive's throttle controller.
+        throttle = cap(
+            speed_difference * abs(speed_difference) / 1000,
+            -1,
+            1
         )
         agent.controller.throttle = throttle
 
@@ -1370,15 +1476,22 @@ class Aerial:
         # deliberately saves boost for the aerial itself.
         agent.controller.boost = False
 
-        grounded = not car.airborne
         moving_forward = (
             car.velocity.magnitude() > 0
             and car.velocity.normalize().dot(car.forward) > 0.9
         )
+        tight_turn = False
+        if grounded and inside_turn:
+            tight_turn = self._speed_from_turn_radius(
+                target_turn_radius
+            ) < 400
         agent.controller.handbrake = (
-            abs(target_angles[0]) > 2
-            and grounded
+            grounded
             and moving_forward
+            and (
+                abs(target_angles[0]) > 2
+                or tight_turn
+            )
         )
 
     def _jump_position(self, agent, time_remaining, elapsed, double_jump):
