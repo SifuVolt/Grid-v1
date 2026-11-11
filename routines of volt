@@ -1862,8 +1862,19 @@ class Aerial:
 
         # Bumblebee FastAerialStrike replaces Volt's legacy aerial flight
         # controller once the selected contact target has been calculated.
-        if self._run_bumblebee_fast_aerial(agent, T):
-            return
+        try:
+            if self._run_bumblebee_fast_aerial(agent, T):
+                return
+        except Exception as exc:
+            if not self._rlu_warned:
+                self._rlu_warned = True
+                print(
+                    f"[BUMBLEBEE AERIAL ERROR] {type(exc).__name__}: {exc}; "
+                    f"falling back to Volt's legacy aerial for this shot.",
+                    flush=True
+                )
+            self._rlu_ready = False
+            self._rlu_started = False
 
         on_side_wall = (
             abs(agent.me.location.x) > 3500
