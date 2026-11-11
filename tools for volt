@@ -504,7 +504,7 @@ def shot_candidate_score(agent, ball_slice, shot, time_remaining, target=None):
     elif shot_type == 2:     # Double jump
         score += 0.25
     elif shot_type == 3:     # Aerial
-        score += 0.35
+        score += 0.00
 
     # Grid's double-jump candidate is evaluated separately from the C parser.
     # Give it the same preference during an opponent-back-wall rebound.
@@ -670,8 +670,6 @@ def shot_candidate_score(agent, ball_slice, shot, time_remaining, target=None):
             score += 0.18
         elif shot_type == 2:
             score += 0.08
-        elif shot_type == 3:
-            score += 0.10
 
     if agent.me.boost <= 0:
         if shot_type == 1:
