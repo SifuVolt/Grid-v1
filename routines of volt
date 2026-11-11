@@ -1233,6 +1233,10 @@ class Aerial:
         self.contact_label = getattr(shot, "contact_label", None)
         self.contact_normal = None
         self.contact_point = None
+        self.post_launch_boost_reserve = getattr(
+            shot, "post_launch_boost_reserve",
+            self.post_launch_boost_reserve
+        )
     
     @staticmethod
     def _cross(a, b):
