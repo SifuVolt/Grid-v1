@@ -753,9 +753,6 @@ def _shot_post_launch_boost_reserve(agent, ball_location, time_remaining, shot_t
         return 0.0
 
     available = max(0.0, float(agent.me.boost))
-    if available <= 0:
-        return 0.0
-
     ball = Vector(*ball_location)
     flat_distance = agent.me.location.flat_dist(ball)
     height = max(0.0, ball.z - 92.75 - agent.me.location.z)
@@ -784,8 +781,7 @@ def _shot_post_launch_boost_reserve(agent, ball_location, time_remaining, shot_t
         # Double jumps contribute another vertical impulse, reducing that
         # expected boost demand.
         launch_usage = 0.60 if shot_type == 1 else 0.42
-        return min(
-            available,
+        return (
             33.3333333333
             * jump_time
             * launch_usage
@@ -801,9 +797,10 @@ def _shot_post_launch_boost_reserve(agent, ball_location, time_remaining, shot_t
         distance_factor = cap((distance_3d - 250.0) / 1000.0, 0.0, 1.0)
         height_factor = cap(height / 700.0, 0.0, 1.0)
         return min(
-            available,
             15.0,
-            available * 0.18 * distance_factor * height_factor
+            max(2.0, available * 0.18)
+            * distance_factor
+            * height_factor
         )
 
     return 0.0
