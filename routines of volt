@@ -1016,6 +1016,135 @@ class Aerial:
         self.fast_aerial = shot.fast_aerial
         self.targets = shot.targets
 
+    @staticmethod
+    def _party_cannon_shot_power_modifier(speed):
+        speed = cap(speed, 0, 4600)
+        if speed <= 500:
+            return 0.65
+        if speed <= max_speed:
+            return lerp((speed - 500) / 1800, 0.65, 0.55)
+        return lerp((speed - max_speed) / 2300, 0.55, 0.3)
+
+    def _party_cannon_shot_direction(self, agent, ball, ball_velocity, time_remaining):
+        # Port of Party Cannon's SetTargetLocation shot prediction.
+        shot_target = _relative_goal_aim_point(agent, self.targets)
+        safe_time = max(time_remaining, dt)
+        car_final_velocity = (
+            (ball - agent.me.location) / safe_time
+        ).cap(0, max_speed)
+
+        velocity_for_power = (
+            car_final_velocity * 6 + ball_velocity
+        ) / 7
+        direction_to_score = (
+            shot_target - ball
+        ).flatten().normalize()
+        velocity_difference = (
+            car_final_velocity - ball_velocity
+        ).magnitude()
+
+        score_speed = (
+            velocity_difference
+            * self._party_cannon_shot_power_modifier(velocity_difference)
+            + velocity_for_power.dot(direction_to_score)
+        )
+        time_to_score = (
+            ball.flatten().dist(shot_target.flatten())
+            / cap(score_speed, 500, 6000)
+        )
+
+        predicted_after_hit_velocity = (
+            car_final_velocity + ball_velocity * 2
+        ) / 3
+        predicted_ball_location = (
+            ball
+            + predicted_after_hit_velocity * time_to_score
+            + agent.gravity * (0.5 * time_to_score * time_to_score)
+        )
+        shot_direction = (
+            shot_target - predicted_ball_location
+        ).normalize()
+
+        if shot_direction.magnitude() < 0.001:
+            return direction_to_score
+        return shot_direction
+
+    def _party_cannon_hitbox_target(self, agent, ball, shot_direction):
+        # Party Cannon's 155-unit standoff is approximately ball radius +
+        # half the Octane hitbox length. Use Volt's actual hitbox dimensions.
+        hitbox = agent.me.hitbox
+        half_length = float(getattr(hitbox, "length", 118.01)) * 0.5
+        ball_radius = 92.75
+
+        # RLBot exposes the hitbox offset separately on some packet wrappers.
+        # If Volt's wrapper provides it, convert its local offset to world space.
+        local_offset = getattr(agent.me, "hitbox_offset", None)
+        if local_offset is None:
+            local_offset = getattr(hitbox, "offset", None)
+
+        world_offset = Vector()
+        if local_offset is not None:
+            offset_x = float(getattr(local_offset, "x", 0.0))
+            offset_y = float(getattr(local_offset, "y", 0.0))
+            offset_z = float(getattr(local_offset, "z", 0.0))
+            world_offset = (
+                agent.me.forward * offset_x
+                + agent.me.right * offset_y
+                + agent.me.up * offset_z
+            )
+
+        return (
+            ball
+            - shot_direction * (ball_radius + half_length)
+            - world_offset
+        )
+
+    def _party_cannon_boost_estimate(
+        self, agent, target, time_remaining, final_position, final_velocity
+    ):
+        # Port of Party Cannon's GetBoostEstimate, using Volt's already
+        # calculated jump prediction and VirxERLU acceleration constants.
+        if time_remaining <= dt:
+            return 0.0
+
+        offset = target - final_position
+        distance = offset.magnitude()
+        if distance <= 1:
+            return 0.0
+
+        direction = offset / distance
+        angle = math.acos(cap(direction.dot(agent.me.forward), -1, 1))
+        angle = max(0.0001, angle)
+        turn_time = 0.6 * (2 * math.sqrt(angle / 9))
+        turn_time = min(turn_time, max(0.0, time_remaining - dt))
+        tau1 = turn_time * cap(1 - 0.4 / angle, 0, 1)
+
+        usable_time = max(dt, time_remaining - tau1)
+        required_acceleration = 2 * distance / (usable_time * usable_time)
+        total_acceleration = agent.boost_accel + throttle_accel
+        ratio = required_acceleration / max(1.0, total_acceleration)
+
+        if abs(ratio) >= 0.9:
+            return None
+
+        tau2 = time_remaining - (
+            (time_remaining - tau1)
+            * math.sqrt(1 - cap(ratio, 0, 1))
+        )
+        boost_time = max(0.0, tau2 - tau1)
+        boost_estimate = boost_time * boost_per_second
+        velocity_estimate = (
+            final_velocity + direction * total_acceleration * boost_time
+        )
+
+        if (
+            velocity_estimate.magnitude() >= max_speed * 0.9
+            or boost_estimate >= max(0.0, float(agent.me.boost)) * 0.9
+        ):
+            return None
+
+        return boost_estimate
+
     def run(self, agent: VirxERLU):
         if not agent.shooting:
             agent.shooting = True
@@ -1033,19 +1162,17 @@ class Aerial:
             self.ceiling = agent.me.location.z > 2044 - agent.me.hitbox.height * 2 and not agent.me.jumped
 
         
-        # Work out the intended direction of the ball after contact.
-        car_to_ball = (self.ball - agent.me.location).normalize()
-
-        if self.targets is None:
-            self.shot_vector = car_to_ball
-        else:
-            left_direction = (self.targets[0] - self.ball).normalize()
-            right_direction = (self.targets[1] - self.ball).normalize()
-
-            self.shot_vector = car_to_ball.clamp(
-                left_direction,
-                right_direction
-            )
+        # Use the predicted ball velocity and Party Cannon's post-hit
+        # trajectory model to choose the outgoing shot direction.
+        aerial_physics = agent.ball_prediction_struct.slices[slice_n].physics
+        aerial_ball_velocity = Vector(
+            aerial_physics.velocity.x,
+            aerial_physics.velocity.y,
+            aerial_physics.velocity.z
+        )
+        self.shot_vector = self._party_cannon_shot_direction(
+            agent, self.ball, aerial_ball_velocity, T
+        )
 
         
         # Detect a useful backboard rebound for an already-airborne car.
@@ -1091,26 +1218,24 @@ class Aerial:
                 and 0.15 < T < 2.0
             )
 
-        if backboard_mode:
-            self.shot_vector = goal_direction
+        if backboard_mode and (
+            not hasattr(self, "last_backboard_debug")
+            or agent.time - self.last_backboard_debug >= 0.5
+        ):
+            self.last_backboard_debug = agent.time
+            print(
+                f"[AERIAL BACKBOARD] Party Cannon trajectory | "
+                f"ball=({self.ball.x:.0f}, {self.ball.y:.0f}, "
+                f"{self.ball.z:.0f}) | car_z={agent.me.location.z:.0f} | "
+                f"shot_dir=({self.shot_vector.x:.2f}, "
+                f"{self.shot_vector.y:.2f}, {self.shot_vector.z:.2f})",
+                flush=True
+            )
 
-            if (
-                not hasattr(self, "last_backboard_debug")
-                or agent.time - self.last_backboard_debug >= 0.5
-            ):
-                self.last_backboard_debug = agent.time
-                print(
-                    f"[AERIAL BACKBOARD] Rebound follow-up | "
-                    f"ball=({self.ball.x:.0f}, {self.ball.y:.0f}, "
-                    f"{self.ball.z:.0f}) | "
-                    f"car_z={agent.me.location.z:.0f} | "
-                    f"goal_dir=({goal_direction.x:.2f}, "
-                    f"{goal_direction.y:.2f}, {goal_direction.z:.2f})",
-                    flush=True
-                )
-
-        self.target = self.ball - (
-            self.shot_vector * agent.best_shot_value
+        # Find the car reference position that places the front of its
+        # actual hitbox against the ball's rear surface along ShotDirection.
+        self.target = self._party_cannon_hitbox_target(
+            agent, self.ball, self.shot_vector
         )
 
 
@@ -1169,11 +1294,6 @@ class Aerial:
 
         delta_x = self.target - xf
         direction = delta_x.normalize() if not self.jumping else delta_x.flatten().normalize()
-
-        # Party Cannon flight target is kept separate from Volt's existing
-        # target, shot vector, prediction and jump calculations.
-        party_cannon_target = self.ball - self.shot_vector * 155
-        party_cannon_offset = party_cannon_target - xf
 
         agent.line(agent.me.location, agent.me.location + (direction * 250), agent.renderer.black)
         c_vf = vf + agent.me.location
@@ -1269,64 +1389,51 @@ class Aerial:
                     upside_down=self.shot_vector.z < 0
                 )
 
-        # Keep Volt's original correction and velocity calculations intact.
-        if abs(agent.me.forward.dot(direction)) > 0.5 and T > 0:
-            if T > 1 and not self.jumping: agent.controller.roll = 1 if self.shot_vector.z < 0 else -1
-            delta_v = delta_x.dot(agent.me.forward) / T
-            if agent.me.boost > 0 and delta_v >= agent.boost_accel * min_boost_time:
-                agent.controller.boost = True
-                delta_v -= agent.boost_accel * min_boost_time
-
-            if delta_v >= throttle_accel * min_boost_time:
-                agent.controller.throttle = cap(delta_v / (throttle_accel * min_boost_time), -1, 1)
-
-        # Party Cannon-style flight correction. Use its independent standoff
-        # offset and the already-calculated predicted car position (xf).
-        # Do not replace or mutate Volt's delta_x, target, shot_vector, xf or vf.
-        if agent.me.airborne and not self.jumping and not self.dodging and T > 0:
-            party_cannon_distance = party_cannon_offset.magnitude()
-            if party_cannon_distance > 50:
-                party_cannon_aim = party_cannon_offset
-            else:
-                party_cannon_aim = self.shot_vector
-
-            party_cannon_local_aim = agent.me.local(party_cannon_aim)
-            party_cannon_roof_target = self.ball - agent.me.location
-
-            if not self.ceiling and not backboard_mode:
-                defaultPD(
-                    agent,
-                    party_cannon_local_aim,
-                    up=party_cannon_roof_target
-                )
-
-            party_cannon_forward_alignment = (
-                agent.me.forward.dot(party_cannon_offset.normalize())
-                if party_cannon_distance > 1 else 1.0
+        # Check the remaining flight against Party Cannon's boost budget.
+        # The position/velocity supplied here are Volt's existing predicted
+        # values, including the current jump model above.
+        if (
+            T > 0.25
+            and agent.boost_amount != "unlimited"
+            and not self.dodging
+        ):
+            party_cannon_boost_estimate = self._party_cannon_boost_estimate(
+                agent, self.target, T, xf, vf
             )
-            party_cannon_forward_need = (
-                party_cannon_offset.dot(agent.me.forward) / T
+            if party_cannon_boost_estimate is None:
+                if not getattr(self, "_boost_reject_logged", False):
+                    self._boost_reject_logged = True
+                    print(
+                        f"[AERIAL BOOST REJECT] insufficient flight budget "
+                        f"boost={agent.me.boost:.1f} T={T:.2f} "
+                        f"distance={delta_x.magnitude():.0f}",
+                        flush=True
+                    )
+                agent.pop()
+                agent.shooting = False
+                agent.push(ball_recovery())
+                return
+
+        # Party Cannon's forward-projection boost and air-throttle control.
+        if T > 0 and not self.dodging:
+            party_cannon_forward_need = delta_x.dot(agent.me.forward) / T
+            party_cannon_forward_angle = (
+                math.acos(cap(
+                    agent.me.forward.dot(direction),
+                    -1,
+                    1
+                ))
             )
-
-            # Party Cannon only spends boost when the required correction
-            # is in front of the car and within 0.4 radians of its nose.
-            party_cannon_boost_window = max(dt, 13.0 / 120.0)
-            party_cannon_throttle_window = max(dt, 1.0 / 120.0)
-
-            party_cannon_can_boost = (
-                party_cannon_forward_alignment > math.cos(0.4)
-                and party_cannon_forward_need
+            agent.controller.boost = (
+                party_cannon_forward_need
                 >= (agent.boost_accel + throttle_accel)
-                * party_cannon_boost_window
+                * max(dt, 13.0 / 120.0)
+                and party_cannon_forward_angle < 0.4
                 and agent.me.boost > 0
             )
-            agent.controller.boost = party_cannon_can_boost
-
-            # Party Cannon's air-throttle projection, using Volt's existing
-            # throttle acceleration value rather than introducing a new one.
             agent.controller.throttle = cap(
                 party_cannon_forward_need
-                / (throttle_accel * party_cannon_throttle_window),
+                / (throttle_accel * max(dt, 1.0 / 120.0)),
                 -1,
                 1
             )
