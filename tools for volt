@@ -198,15 +198,33 @@ def find_wall_drive(agent, cap_=4.0):
             normal_distance = abs(wall_entry.y - car.location.y)
             tangent_distance = abs(wall_entry.x - car.location.x)
 
+        # Low wall balls use a short up-and-down route to create a
+        # better side-on contact, but never climb high above a ground ball.
+        runup_height = (
+            min(720.0, max(420.0, loc.z + 180.0))
+            if loc.z < 500.0 else loc.z
+        )
         if attached_wall is not None:
-            distance = car.location.dist(target)
+            tangent_distance = math.hypot(
+                target.x - car.location.x,
+                target.y - car.location.y
+            )
+            route_distance = (
+                tangent_distance
+                + abs(runup_height - car.location.z)
+                + abs(runup_height - target.z)
+            )
             eta = _wall_drive_eta(
-                distance, car, target - car.location, on_wall=True
+                route_distance, car, target - car.location, on_wall=True
             )
         else:
-            # First reach the wall at floor height, then climb to the ball.
+            # First reach the wall at floor height, climb only to the
+            # controlled run-up height, then descend to the contact point.
             ground_distance = normal_distance + tangent_distance
-            climb_distance = abs(target.z - car.location.z)
+            climb_distance = (
+                abs(runup_height - car.location.z)
+                + abs(runup_height - target.z)
+            )
             ground_eta = _wall_drive_eta(
                 ground_distance, car, wall_entry - car.location
             )
