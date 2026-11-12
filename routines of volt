@@ -1816,6 +1816,7 @@ class goto:
         self.wall_dash_tick = 0
         self.wall_dash_lost_contact_time = -1
         self.allow_wall_dash = True
+        self.speedflip_used = False
     def on_side_wall(self, agent):
         car = agent.me
 
@@ -1860,6 +1861,43 @@ class goto:
         angle_to_target = abs(Vector(x=1).angle2D(local_target))
         angle_to_target = abs(Vector(x=1).angle2D(local_target))
         agent.dbg_2d(f"Angle to target: {round(angle_to_target, 1)}")
+
+        # Use one speedflip on a long, forward-aligned navigation run.
+        # Do not trigger during manual steering (shadow/defence), braking,
+        # close approaches, or while already moving near supersonic speed.
+        forward_speed = agent.me.local_velocity().x
+        if (
+            not manual
+            and not self.brake
+            and not self.speedflip_used
+            and not agent.me.airborne
+            and local_target.x > 0
+            and angle_to_target < 0.14
+            and distance_remaining > 3000
+            and 600 < forward_speed < 1600
+            and agent.me.boost >= 20
+            and not half_flip_manager.active(agent)
+        ):
+            right_handed = (
+                agent.me.location.x * -side(agent.team) > 0
+            )
+            self.speedflip_used = True
+            print(
+                f"[SPEEDFLIP] navigation "
+                f"distance={distance_remaining:.0f} "
+                f"speed={forward_speed:.0f} "
+                f"angle={angle_to_target:.3f} "
+                f"boost={agent.me.boost:.0f}",
+                flush=True
+            )
+            agent.push(
+                speed_flip(
+                    right_handed=right_handed,
+                    use_boost=True
+                )
+            )
+            return
+
         # Wall dash only when already driving on a side wall.
         
         # Start wall-dashing only when we're stably on a side wall,
