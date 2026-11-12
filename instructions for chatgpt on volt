@@ -2207,7 +2207,7 @@ class Bot(VirxERLU):
                 else:
                     if (
                         not committed_routine_lock
-                        and shot.__class__.__name__ != "wall_approach"
+                        and shot.__class__.__name__ not in {"wall_approach", "flip_reset"}
                         and routines.half_flip_manager.request_for_shot(self, shot)
                     ):
                         return
@@ -2337,6 +2337,7 @@ class Bot(VirxERLU):
 
                 if (
                     not committed_routine_lock
+                    and shot.__class__.__name__ != "flip_reset"
                     and routines.half_flip_manager.request_for_shot(self, shot)
                 ):
                     return
