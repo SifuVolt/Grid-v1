@@ -680,7 +680,6 @@ class car_object:
         self.angular_velocity = Vector()
         self.demolished = False
         self.airborne = False
-        self.land_time = -1.0
         self.supersonic = False
         self.jumped = False
         self.doublejumped = False
@@ -761,7 +760,6 @@ class car_object:
     def update(self, packet: GamePacket):
         car = packet.players[self.index]
         car_phy = car.physics
-        was_airborne = self.airborne
 
         self.location = Vector(
             car_phy.location.x,
@@ -793,8 +791,6 @@ class car_object:
 
         self.air_state = car.air_state
         self.airborne = car.air_state != AirState.OnGround
-        if was_airborne and not self.airborne:
-            self.land_time = packet.match_info.seconds_elapsed
         self.supersonic = car.is_supersonic
 
         # Keep the old transient AirState flags unchanged for compatibility.
