@@ -504,7 +504,7 @@ def shot_candidate_score(agent, ball_slice, shot, time_remaining, target=None):
     elif shot_type == 2:     # Double jump
         score += 0.25
     elif shot_type == 3:     # Aerial
-        score += 0.00
+        score += 0.35
 
     # Grid's double-jump candidate is evaluated separately from the C parser.
     # Give it the same preference during an opponent-back-wall rebound.
@@ -670,6 +670,8 @@ def shot_candidate_score(agent, ball_slice, shot, time_remaining, target=None):
             score += 0.18
         elif shot_type == 2:
             score += 0.08
+        elif shot_type == 3:
+            score += 0.10
 
     if agent.me.boost <= 0:
         if shot_type == 1:
@@ -970,13 +972,13 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
 
     gravity = tuple(agent.gravity)
 
+    max_aerial_height = 1200 if len(agent.friends) == 0 and len(agent.foes) == 1 else math.inf
+    min_aerial_height = 551 if max_aerial_height > 1200 and agent.me.location.z >= 2044 - agent.me.hitbox.height * 1.1 else (150 if agent.boost_amount == 'unlimited' or agent.me.airborne else 450)
+
     is_on_ground = not agent.me.airborne
     can_ground = is_on_ground and can_ground
     can_jump = is_on_ground and can_jump
     can_double_jump = is_on_ground and can_double_jump
-    can_aerial = (
-        not is_on_ground or agent.time - agent.me.land_time > 0.5
-    ) and can_aerial
 
     # Only disable single-jump shots when the car is actually inside our net.
     # Being near a post or elsewhere in the goal area is not enough.
@@ -1039,7 +1041,9 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
         slice_can_ground = can_ground
         slice_can_jump = can_jump
         slice_can_double_jump = can_double_jump
-        slice_can_aerial = can_aerial
+        slice_can_aerial = can_aerial and (
+            min_aerial_height < ball_location[2] < max_aerial_height
+        )
 
         # When the ball is rebounding from the opponent's back wall,
         # prefer a double-jump option over a single-jump option.
@@ -1053,6 +1057,7 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             if ball_location[2] > 105.0:
                 slice_can_ground = False
                 slice_can_jump = False
+                slice_can_aerial = False
             else:
                 slice_can_double_jump = False
 
@@ -1365,13 +1370,27 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
 
     gravity = tuple(agent.gravity)
 
+    max_aerial_height = (
+        1200
+        if len(agent.friends) == 0 and len(agent.foes) == 1
+        else math.inf
+    )
+
+    min_aerial_height = (
+        551
+        if max_aerial_height > 1200
+        and agent.me.location.z >= 2044 - agent.me.hitbox.height * 1.1
+        else (
+            150
+            if agent.boost_amount == 'unlimited' or agent.me.airborne
+            else 450
+        )
+    )
+
     is_on_ground = not agent.me.airborne
     can_ground = is_on_ground and can_ground
     can_jump = is_on_ground and can_jump
     can_double_jump = is_on_ground and can_double_jump
-    can_aerial = (
-        not is_on_ground or agent.time - agent.me.land_time > 0.5
-    ) and can_aerial
 
     # Only disable single-jump shots when the car is actually inside our net.
     if can_jump and _in_own_net(agent):
@@ -1428,7 +1447,11 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
         slice_can_ground = can_ground
         slice_can_jump = can_jump
         slice_can_double_jump = can_double_jump
-        slice_can_aerial = can_aerial
+        slice_can_aerial = can_aerial and (
+            min_aerial_height
+            < ball_location[2]
+            < max_aerial_height
+        )
 
         # Match find_shot: favour a double jump for an airborne back-wall
         # rebound, but leave ground contacts available.
@@ -1442,6 +1465,7 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
             if ball_location[2] > 105.0:
                 slice_can_ground = False
                 slice_can_jump = False
+                slice_can_aerial = False
             else:
                 slice_can_double_jump = False
 
