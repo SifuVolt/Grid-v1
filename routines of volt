@@ -224,7 +224,7 @@ class wall_approach:
         self.intercept_time = shot.intercept_time
         self.targets = getattr(shot, "targets", self.targets)
 
-    def wall_surface_for_ball(self, ball):
+    def wall_surface_for_ball(self, ball, team=None):
         radius = 92.75
         candidates = [
             ("x", 1 if ball.x >= 0 else -1, 4096.0 - abs(ball.x) - radius),
@@ -234,13 +234,16 @@ class wall_approach:
         for axis, wall_side, gap in candidates:
             if gap < -5 or gap > self.MAX_WALL_GAP:
                 continue
+            # Our own back wall is reserved for normal defensive play.
+            if axis == "y" and team is not None and wall_side == side(team):
+                continue
             # The low central back-wall opening is the goal interior.
             if axis == "y" and abs(ball.x) < 900 and ball.z < 700:
                 continue
             return axis, wall_side, max(0.0, gap)
         return None
 
-    def car_wall_surface(self, car):
+    def car_wall_surface(self, car, team=None):
         if (
             abs(car.location.x) > 3500
             and abs(car.up.x) > 0.65
@@ -252,7 +255,10 @@ class wall_approach:
             and abs(car.up.y) > 0.65
             and car.up.y * car.location.y < 0
         ):
-            return "y", (1 if car.location.y >= 0 else -1)
+            wall_side = 1 if car.location.y >= 0 else -1
+            if team is not None and wall_side == side(team):
+                return None
+            return "y", wall_side
         return None
 
     def give_up(self, agent, reason):
@@ -261,12 +267,12 @@ class wall_approach:
         self.gave_up = True
         agent.cover_role_released = False
         agent.teamplay_shot = None
-        print(f"[WALL DRIVE] GIVING UP: {reason}; announcing DEFEND", flush=True)
+        print(f"[WALL DRIVE] GIVING UP: {reason}; announcing SHOT_ABANDONED", flush=True)
         if getattr(agent, "friends", None):
-            # A handoff must not be lost behind the normal comm rate limit.
+            # Force the release through even if a shot claim was just sent.
             agent.last_comms_signature = None
             agent.last_comms_send_time = -999.0
-            agent.send_teamplay_comm("DEFEND", 100.0, 10.0)
+            agent.send_teamplay_comm("SHOT_ABANDONED", 0.0, 10.0)
 
     def run(self, agent: VirxERLU, manual=False):
         if self.start_time < 0:
@@ -305,7 +311,7 @@ class wall_approach:
             agent.shooting = False
             return
 
-        surface = self.wall_surface_for_ball(ball)
+        surface = self.wall_surface_for_ball(ball, agent.team)
         if (
             surface is None
             or ball.z < self.MIN_BALL_HEIGHT
@@ -348,7 +354,7 @@ class wall_approach:
                 max(110, ball.z - goal_direction.z * 185)
             )
 
-        attached_wall = self.car_wall_surface(car)
+        attached_wall = self.car_wall_surface(car, agent.team)
         if attached_wall is not None and attached_wall != (axis, wall_side):
             self.give_up(
                 agent,
@@ -1280,15 +1286,28 @@ class Aerial:
         xf = agent.me.location + agent.me.velocity * T + 0.5 * agent.gravity * T * T
         vf = agent.me.velocity + agent.gravity * T
 
-        slice_n = math.ceil(T * 120) - 1
+        prediction = agent.ball_prediction_struct
+        slices = prediction.slices
+        # Select by the prediction's actual timestamp, not a stale cached
+        # location or an assumed offset from the current frame.
+        slice_n = min(
+            range(len(slices)),
+            key=lambda i: abs(
+                slices[i].game_seconds - self.intercept_time
+            )
+        )
         agent.dbg_2d(f"Shot slice #: {slice_n}")
 
-        if T > 0.1 or self.ball is None:
-            ball = agent.ball_prediction_struct.slices[slice_n].physics.location
-            self.ball = Vector(ball.x, ball.y, ball.z)
-            self.ceiling = agent.me.location.z > 2044 - agent.me.hitbox.height * 2 and not agent.me.jumped
+        # Refresh both position and velocity from the same prediction slice
+        # all the way to contact. This also follows intercept-time updates.
+        physics = slices[slice_n].physics
+        ball = physics.location
+        self.ball = Vector(ball.x, ball.y, ball.z)
+        self.ceiling = (
+            agent.me.location.z > 2044 - agent.me.hitbox.height * 2
+            and not agent.me.jumped
+        )
 
-        
         # Use the predicted ball velocity and Party Cannon's post-hit
         # trajectory model to choose the outgoing shot direction.
         aerial_physics = agent.ball_prediction_struct.slices[slice_n].physics
