@@ -1066,7 +1066,7 @@ class Aerial:
             # The car's physics origin must sit farther back by the actual
             # front hitbox extent so the nose, not the car centre, makes contact.
             self.ball_contact_point = (
-                self.ball_location - self.shot_vector * agent.ball_radius
+                self.ball_location - self.shot_vector * agent.best_shot_value
             )
 
             hitbox = agent.me.hitbox
@@ -1174,7 +1174,7 @@ class Aerial:
                 ).normalize()
                 final_target += car_to_offset_perp * agent.me.hitbox.width * 0.5
 
-        agent.sphere(self.ball_location, agent.ball_radius)
+        agent.sphere(self.ball_location, agent.best_shot_value)
 
         # Original Virx ballistic prediction: gravity + the car's current
         # velocity, then add the jump impulse/hold terms below.
