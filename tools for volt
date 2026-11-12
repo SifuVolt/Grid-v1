@@ -160,7 +160,7 @@ def find_wall_drive(agent, cap_=4.0):
         physics = ball_slice.physics
         loc = physics.location
         vel = physics.velocity
-        surface = wall_surface_for_ball(loc, 650.0)
+        surface = wall_surface_for_ball(loc, 1800.0)
         if surface is None:
             reject_wall_window += 1
             continue
@@ -181,30 +181,38 @@ def find_wall_drive(agent, cap_=4.0):
 
         # The ball should be on the wall or still travelling toward it.
         wall_velocity = vel.x if axis == "x" else vel.y
-        if wall_gap > 180 and wall_velocity * wall_side < 100:
+        # Start the approach before the ball reaches the wall. At larger
+        # gaps it must be moving decisively toward that wall.
+        if wall_gap > 260 and wall_velocity * wall_side < 260:
             reject_wall_window += 1
             continue
 
         if axis == "x":
-            target = Vector(wall_side * 4050, loc.y, max(100.0, loc.z))
-            normal_distance = abs(target.x - car.location.x)
-            tangent_distance = abs(target.y - car.location.y)
+            wall_entry = Vector(wall_side * 3900, loc.y, max(100.0, car.location.z))
+            target = Vector(wall_side * 3900, loc.y, max(100.0, loc.z))
+            normal_distance = abs(wall_entry.x - car.location.x)
+            tangent_distance = abs(wall_entry.y - car.location.y)
         else:
-            target = Vector(loc.x, wall_side * 5070, max(100.0, loc.z))
-            normal_distance = abs(target.y - car.location.y)
-            tangent_distance = abs(target.x - car.location.x)
+            wall_entry = Vector(loc.x, wall_side * 4900, max(100.0, car.location.z))
+            target = Vector(loc.x, wall_side * 4900, max(100.0, loc.z))
+            normal_distance = abs(wall_entry.y - car.location.y)
+            tangent_distance = abs(wall_entry.x - car.location.x)
 
-        vertical_distance = abs(target.z - car.location.z)
         if attached_wall is not None:
             distance = car.location.dist(target)
+            eta = _wall_drive_eta(
+                distance, car, target - car.location, on_wall=True
+            )
         else:
-            # From the floor, reach the wall first, then travel along it
-            # and climb. This avoids the old optimistic straight-line ETA.
-            distance = normal_distance + tangent_distance + vertical_distance
-
-        eta = _wall_drive_eta(
-            distance, car, target - car.location, on_wall=attached_wall is not None
-        )
+            # First reach the wall at floor height, then climb to the ball.
+            ground_distance = normal_distance + tangent_distance
+            climb_distance = abs(target.z - car.location.z)
+            ground_eta = _wall_drive_eta(
+                ground_distance, car, wall_entry - car.location
+            )
+            climb_speed = max(700.0, min(1500.0, car.velocity.flatten().magnitude() + 500.0))
+            climb_eta = climb_distance / climb_speed
+            eta = ground_eta + climb_eta
         if eta > intercept_in - 0.08:
             reject_unreachable += 1
             continue
