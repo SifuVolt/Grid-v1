@@ -295,8 +295,11 @@ def useful_non_aerial_shot(agent, ball_location, ball_velocity, shot, intercept_
         ) else 0.0
         enemy_time = max(0.0, turn_time + drive_time + jump_adjustment)
 
-    # Don't accept a shot where the opponent is likely to arrive first.
-    if enemy_time + 0.35 < time_remaining:
+    # Jump shots need a larger safety margin because they commit Volt
+    # to the jump-and-dodge sequence. Keep the existing margin for every
+    # other non-aerial shot type.
+    enemy_safety_margin = 0.5 if shot.get('shot_type') == 1 else 0.35
+    if enemy_time + enemy_safety_margin < time_remaining:
         return False
 
     return True
