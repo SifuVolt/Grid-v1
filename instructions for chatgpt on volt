@@ -2178,11 +2178,6 @@ class Bot(VirxERLU):
 
                     if current_name in ordinary_shots and not committed_routine_lock:
                         self.clear()
-                        self.cover_role_released = False
-                        self.teamplay_shot = None
-                        self.last_comms_signature = None
-                        self.last_comms_send_time = -999.0
-                        self.send_teamplay_comm("SHOT_ABANDONED", 0.0, 10.0)
 
                     # Yield to the teammate's better opportunity.
                     # Continue to the existing fallback behaviour.
@@ -2454,7 +2449,6 @@ class Bot(VirxERLU):
                 "ANY_SHOT_FOUND",
                 "LOW_BOOST",
                 "NO_SHOT",
-                "SHOT_ABANDONED",
                 "DEFEND",
                 "SHADOW"
             }:
