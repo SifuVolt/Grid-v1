@@ -1170,6 +1170,11 @@ class Aerial:
         delta_x = self.target - xf
         direction = delta_x.normalize() if not self.jumping else delta_x.flatten().normalize()
 
+        # Party Cannon flight target is kept separate from Volt's existing
+        # target, shot vector, prediction and jump calculations.
+        party_cannon_target = self.ball - self.shot_vector * 155
+        party_cannon_offset = party_cannon_target - xf
+
         agent.line(agent.me.location, agent.me.location + (direction * 250), agent.renderer.black)
         c_vf = vf + agent.me.location
         agent.line(c_vf - Vector(z=100), c_vf + Vector(z=100), agent.renderer.blue)
@@ -1264,10 +1269,9 @@ class Aerial:
                     upside_down=self.shot_vector.z < 0
                 )
 
-        # only boost/throttle if we're facing the right direction
+        # Keep Volt's original correction and velocity calculations intact.
         if abs(agent.me.forward.dot(direction)) > 0.5 and T > 0:
             if T > 1 and not self.jumping: agent.controller.roll = 1 if self.shot_vector.z < 0 else -1
-            # the change in velocity the bot needs to put it on an intercept course with the target
             delta_v = delta_x.dot(agent.me.forward) / T
             if agent.me.boost > 0 and delta_v >= agent.boost_accel * min_boost_time:
                 agent.controller.boost = True
@@ -1275,6 +1279,52 @@ class Aerial:
 
             if delta_v >= throttle_accel * min_boost_time:
                 agent.controller.throttle = cap(delta_v / (throttle_accel * min_boost_time), -1, 1)
+
+        # Party Cannon-style flight correction. Use its independent standoff
+        # offset and the already-calculated predicted car position (xf).
+        # Do not replace or mutate Volt's delta_x, target, shot_vector, xf or vf.
+        if agent.me.airborne and not self.jumping and not self.dodging and T > 0:
+            party_cannon_distance = party_cannon_offset.magnitude()
+            if party_cannon_distance > 50:
+                party_cannon_aim = party_cannon_offset
+            else:
+                party_cannon_aim = self.shot_vector
+
+            party_cannon_local_aim = agent.me.local(party_cannon_aim)
+            party_cannon_roof_target = self.ball - agent.me.location
+
+            if not self.ceiling and not backboard_mode:
+                defaultPD(
+                    agent,
+                    party_cannon_local_aim,
+                    up=party_cannon_roof_target
+                )
+
+            party_cannon_forward_alignment = (
+                agent.me.forward.dot(party_cannon_offset.normalize())
+                if party_cannon_distance > 1 else 1.0
+            )
+            party_cannon_forward_need = (
+                party_cannon_offset.dot(agent.me.forward) / T
+            )
+
+            # Party Cannon only spends boost when the required correction
+            # is in front of the car and within 0.4 radians of its nose.
+            party_cannon_can_boost = (
+                party_cannon_forward_alignment > math.cos(0.4)
+                and party_cannon_forward_need
+                >= agent.boost_accel * min_boost_time
+                and agent.me.boost > 0
+            )
+            agent.controller.boost = party_cannon_can_boost
+
+            # Retain Volt's existing air-throttle acceleration constant.
+            agent.controller.throttle = cap(
+                party_cannon_forward_need
+                / (throttle_accel * min_boost_time),
+                -1,
+                1
+            )
 
         if T <= -0.4 or (not self.jumping and T > 1.5 and not virxrlcu.aerial_shot_is_viable(T, agent.boost_accel, tuple(agent.gravity), agent.me.get_raw(agent), tuple(self.target))):
             agent.pop()
