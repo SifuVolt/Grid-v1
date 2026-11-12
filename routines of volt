@@ -1310,18 +1310,23 @@ class Aerial:
 
             # Party Cannon only spends boost when the required correction
             # is in front of the car and within 0.4 radians of its nose.
+            party_cannon_boost_window = max(dt, 13.0 / 120.0)
+            party_cannon_throttle_window = max(dt, 1.0 / 120.0)
+
             party_cannon_can_boost = (
                 party_cannon_forward_alignment > math.cos(0.4)
                 and party_cannon_forward_need
-                >= agent.boost_accel * min_boost_time
+                >= (agent.boost_accel + throttle_accel)
+                * party_cannon_boost_window
                 and agent.me.boost > 0
             )
             agent.controller.boost = party_cannon_can_boost
 
-            # Retain Volt's existing air-throttle acceleration constant.
+            # Party Cannon's air-throttle projection, using Volt's existing
+            # throttle acceleration value rather than introducing a new one.
             agent.controller.throttle = cap(
                 party_cannon_forward_need
-                / (throttle_accel * min_boost_time),
+                / (throttle_accel * party_cannon_throttle_window),
                 -1,
                 1
             )
