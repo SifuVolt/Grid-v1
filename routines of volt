@@ -346,7 +346,7 @@ class wall_approach:
             return
 
         on_wall = attached_wall == (axis, wall_side)
-        if self.reset_setup and on_wall and car.location.dist(ball) < 260:
+        if self.reset_setup and on_wall and car.location.dist(ball) < 190:
             print(
                 f"[FLIP RESET] wall contact reached "
                 f"distance={car.location.dist(ball):.0f} T={T:.2f}",
