@@ -2101,7 +2101,6 @@ class Bot(VirxERLU):
         if not self.is_clear():
             committed_flip_reset = any(
                 routine.__class__.__name__ == "flip_reset"
-                and getattr(routine, "phase", 0) >= 1
                 for routine in self.stack
             )
         committed_routine_lock = (
