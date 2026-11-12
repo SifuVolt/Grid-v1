@@ -153,6 +153,10 @@ def find_flip_reset(agent, cap_=3.5):
         wall_velocity = vel.x if axis == "x" else vel.y
         if wall_gap > 260 and wall_velocity * wall_side < 100:
             continue
+        # A useful wall setup is rising up the side wall, or already settled
+        # against it; reject a ball simply falling away from the wall.
+        if wall_gap > 180 and vel.z < 80:
+            continue
         if vel.z < -260 and wall_gap > 150:
             continue
 
