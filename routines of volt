@@ -325,13 +325,13 @@ class wall_approach:
             contact_target = Vector(
                 wall_side * self.WALL_X,
                 ball.y - goal_direction.y * 185,
-                max(110, ball.z - goal_direction.z * 185)
+                max(110, ball.z - (150 if self.reset_setup else goal_direction.z * 185))
             )
         else:
             contact_target = Vector(
                 ball.x - goal_direction.x * 185,
                 wall_side * self.WALL_Y,
-                max(110, ball.z - goal_direction.z * 185)
+                max(110, ball.z - (150 if self.reset_setup else goal_direction.z * 185))
             )
 
         attached_wall = self.car_wall_surface(car, agent.team)
@@ -397,7 +397,14 @@ class wall_approach:
         # Slow down before sharp turns instead of asking for full speed
         # while the nose is pointed away from the wall route.
         local_angle = abs(math.atan2(local_target.y, local_target.x))
+        # Wall steering has less grip and is less predictable than ground
+        # steering. Use materially lower turn speeds on the wall, especially
+        # for large heading errors, rather than carrying ground speed limits.
         turn_speed_cap = (
+            700 if on_wall and local_angle > 1.65 else
+            900 if on_wall and local_angle > 1.20 else
+            1150 if on_wall and local_angle > 0.75 else
+            1450 if on_wall else
             950 if local_angle > 1.65 else
             1250 if local_angle > 1.20 else
             1650 if local_angle > 0.75 else
@@ -445,7 +452,7 @@ class wall_approach:
             car.boost > 0
             and distance > 550
             and speed_required > speed + 140
-            and yaw_error < 0.85
+            and yaw_error < (0.62 if on_wall else 0.85)
             and not agent.controller.handbrake
         )
         if needs_boost:
@@ -480,6 +487,7 @@ class flip_reset:
         self.phase_start = -1.0
         self.wall_setup = None
         self.flip_spent = False
+        self.boost_detour_attempted = False
         self.last_debug_time = -1.0
 
     def update(self, shot):
@@ -517,6 +525,44 @@ class flip_reset:
         agent.pop()
         agent.push(Aerial(intercept_time, agent.foe_goal_shot, fast_aerial=False))
         agent.shooting = True
+
+    def _try_nearby_big_boost(self, agent):
+        # Take one nearby full pad before committing to the wall sequence.
+        # The child routine returns here after the pad is collected or expires.
+        if self.boost_detour_attempted or agent.me.boost >= 75:
+            return False
+
+        pads = [
+            pad for pad in agent.boosts
+            if pad.active and pad.large
+        ]
+        if not pads:
+            return False
+
+        pad = min(
+            pads,
+            key=lambda item: item.location.dist(agent.me.location)
+        )
+        distance = pad.location.dist(agent.me.location)
+        time_available = self.intercept_time - agent.time
+        estimated_pad_time = distance / max(
+            1050.0,
+            min(1800.0, agent.me.velocity.flatten().magnitude() + 650.0)
+        )
+
+        # Only divert for a genuinely nearby pad and only if there is room
+        # before the predicted wall touch.
+        if distance > 1650 or time_available < estimated_pad_time + 0.75:
+            return False
+
+        self.boost_detour_attempted = True
+        print(
+            f"[FLIP RESET] BIG BOOST detour distance={distance:.0f} "
+            f"boost={agent.me.boost:.0f} time_left={time_available:.2f}s",
+            flush=True
+        )
+        agent.push(goto_boost(pad))
+        return True
 
     def _start_wall_setup(self, agent, intercept_time):
         self.wall_setup = wall_approach(
@@ -599,6 +645,8 @@ class flip_reset:
         agent.shooting = True
 
         if self.phase == 0:
+            if self._try_nearby_big_boost(agent):
+                return
             if self.mode == "dribble":
                 self._dribble_to_wall(agent)
                 return
@@ -609,6 +657,8 @@ class flip_reset:
         if self.phase == 1:
             car = agent.me
             distance = car.location.dist(agent.ball.location)
+            ball = agent.ball.location
+            height_above_car = ball.z - car.location.z
             if distance > 760 or (
                 not self._side_wall_contact(car)
                 and not car.airborne
@@ -618,14 +668,30 @@ class flip_reset:
                     f"distance={distance:.0f} airborne={car.airborne}",
                     flush=True
                 )
-                self._handoff_to_aerial(agent, False)
+                agent.pop()
+                agent.shooting = False
+                return
+
+            # The wall touch must send the ball clearly above the car.
+            # If the ball is level with/below the car, a double jump cannot
+            # reliably reach its underside; abandon instead of faking a reset.
+            if height_above_car < 135 or agent.ball.velocity.z < 120:
+                print(
+                    f"[FLIP RESET] wall pop too low "
+                    f"ball_above_car={height_above_car:.0f} "
+                    f"ball_vz={agent.ball.velocity.z:.0f}; abort",
+                    flush=True
+                )
+                agent.pop()
+                agent.shooting = False
                 return
 
             self.phase = 2
             self.phase_start = agent.time
             print(
-                f"[FLIP RESET] WALL POP distance={distance:.0f} "
-                f"speed={car.velocity.magnitude():.0f}",
+                f"[FLIP RESET] WALL POP height={height_above_car:.0f} "
+                f"ball_vz={agent.ball.velocity.z:.0f} "
+                f"distance={distance:.0f} speed={car.velocity.magnitude():.0f}",
                 flush=True
             )
 
