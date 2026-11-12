@@ -1014,6 +1014,7 @@ class Aerial:
         self.jump_frames = 0
         self.prev_jump = False
         self.second_jump_sent = False
+        self.first_jump_sent = False
         self.required_jump_time = 0.0
 
     def update(self, shot):
@@ -1136,6 +1137,7 @@ class Aerial:
                 self.jump_frames = 0
                 self.prev_jump = False
                 self.second_jump_sent = False
+                self.first_jump_sent = False
 
                 # Grid's jump solver chooses whether this contact needs one
                 # jump or the full double-jump launch.
@@ -1178,15 +1180,15 @@ class Aerial:
             # jump is already in the car's velocity after takeoff; account
             # for its initial impulse on the launch tick and for the Grid
             # 292 uu/s second-jump impulse until the packet reports it.
-            if self.jump_frames == 0:
+            if not self.first_jump_sent:
                 first_jump_impulse = 564.9931640625
                 vf += agent.me.up * first_jump_impulse
                 xf += agent.me.up * (first_jump_impulse * max(0.0, T))
+                self.first_jump_sent = True
 
             if (
                 self.jump_amount >= 2
                 and not agent.me.doublejumped
-                and not self.second_jump_sent
             ):
                 second_jump_delay = max(0.0, 25 / 120 - jump_elapsed)
                 second_jump_flight = max(0.0, T - second_jump_delay)
