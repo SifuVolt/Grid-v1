@@ -217,6 +217,8 @@ class wall_approach:
         self.last_debug_time = -1
         self.wall_axis = None
         self.wall_side = 0
+        self.wall_runup_complete = False
+        self.gave_up = False
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -253,6 +255,16 @@ class wall_approach:
             return "y", (1 if car.location.y >= 0 else -1)
         return None
 
+    def give_up(self, agent, reason):
+        if self.gave_up:
+            return
+        self.gave_up = True
+        agent.cover_role_released = False
+        agent.teamplay_shot = None
+        print(f"[WALL DRIVE] GIVING UP: {reason}; announcing DEFEND", flush=True)
+        if getattr(agent, "friends", None):
+            agent.send_teamplay_comm("DEFEND", 100.0, 10.0)
+
     def run(self, agent: VirxERLU, manual=False):
         if self.start_time < 0:
             self.start_time = agent.time
@@ -262,7 +274,7 @@ class wall_approach:
         T = self.intercept_time - agent.time
         prediction = agent.ball_prediction_struct
         if prediction is None or not prediction.slices:
-            print("[WALL DRIVE] STOP: no prediction", flush=True)
+            self.give_up(agent, "no prediction")
             agent.pop()
             agent.shooting = False
             return
@@ -285,7 +297,7 @@ class wall_approach:
         car = agent.me
 
         if T <= -0.25:
-            print("[WALL DRIVE] STOP: contact window passed", flush=True)
+            self.give_up(agent, "contact window passed")
             agent.pop()
             agent.shooting = False
             return
@@ -296,10 +308,9 @@ class wall_approach:
             or ball.z < self.MIN_BALL_HEIGHT
             or ball.z > self.MAX_BALL_HEIGHT
         ):
-            print(
-                f"[WALL DRIVE] STOP: left wall window "
-                f"ball=({ball.x:.0f},{ball.y:.0f},{ball.z:.0f})",
-                flush=True
+            self.give_up(
+                agent,
+                f"left wall window ball=({ball.x:.0f},{ball.y:.0f},{ball.z:.0f})"
             )
             agent.pop()
             agent.shooting = False
@@ -310,7 +321,7 @@ class wall_approach:
             ball_velocity.x if axis == "x" else ball_velocity.y
         )
         if wall_gap > 260 and wall_velocity * wall_side < 260:
-            print("[WALL DRIVE] STOP: ball not approaching wall", flush=True)
+            self.give_up(agent, "ball not approaching wall")
             agent.pop()
             agent.shooting = False
             return
@@ -336,17 +347,38 @@ class wall_approach:
 
         attached_wall = self.car_wall_surface(car)
         if attached_wall is not None and attached_wall != (axis, wall_side):
-            print(
-                f"[WALL DRIVE] STOP: different wall "
-                f"car_wall={attached_wall} ball_wall={(axis, wall_side)}",
-                flush=True
+            self.give_up(
+                agent,
+                f"different wall car_wall={attached_wall} ball_wall={(axis, wall_side)}"
             )
             agent.pop()
             agent.shooting = False
             return
 
         on_wall = attached_wall == (axis, wall_side)
-        if on_wall:
+        low_ball_runup = ball.z < 500.0
+        runup_height = (
+            min(720.0, max(420.0, ball.z + 180.0))
+            if low_ball_runup else ball.z
+        )
+
+        if on_wall and low_ball_runup:
+            # Climb to a modest point above the ball first, then descend
+            # toward the contact point for a different wall-shot angle.
+            if (
+                not self.wall_runup_complete
+                and car.location.z < runup_height - 90.0
+            ):
+                drive_target = Vector(
+                    contact_target.x, contact_target.y, runup_height
+                )
+                drive_phase = "WALL RUN-UP"
+            else:
+                self.wall_runup_complete = True
+                drive_target = contact_target
+                drive_phase = "WALL DESCENT"
+        elif on_wall:
+            self.wall_runup_complete = True
             drive_target = contact_target
             drive_phase = "WALL CLIMB"
         else:
@@ -368,17 +400,21 @@ class wall_approach:
 
         if on_wall:
             distance = car.location.dist(drive_target)
+            if low_ball_runup and drive_phase == "WALL RUN-UP":
+                distance += abs(runup_height - contact_target.z)
         elif axis == "x":
             distance = (
                 abs(drive_target.x - car.location.x)
                 + abs(drive_target.y - car.location.y)
-                + abs(contact_target.z - car.location.z)
+                + abs(runup_height - car.location.z)
+                + abs(runup_height - contact_target.z)
             )
         else:
             distance = (
                 abs(drive_target.y - car.location.y)
                 + abs(drive_target.x - car.location.x)
-                + abs(contact_target.z - car.location.z)
+                + abs(runup_height - car.location.z)
+                + abs(runup_height - contact_target.z)
             )
 
         local_target = car.local_location(drive_target)
@@ -396,17 +432,6 @@ class wall_approach:
         )
         speed_required = min(speed_required, turn_speed_cap)
         speed = car.velocity.magnitude()
-        if self.last_debug_time < 0 or agent.time - self.last_debug_time >= 0.35:
-            self.last_debug_time = agent.time
-            print(
-                f"[WALL DRIVE] {drive_phase} surface={axis}{wall_side:+d} "
-                f"target=({drive_target.x:.0f},{drive_target.y:.0f},{drive_target.z:.0f}) "
-                f"distance={distance:.0f} T={T:.2f} speed={speed_required:.0f} "
-                f"boost={car.boost:.0f} controller={controller_mode} "
-                f"steer={agent.controller.steer:.2f} yaw={agent.controller.yaw:.2f} "
-                f"throttle={agent.controller.throttle:.2f}",
-                flush=True
-            )
 
         if on_wall:
             # On a vertical wall, world-up is wrong: it rolls the car away
@@ -427,22 +452,36 @@ class wall_approach:
         else:
             defaultDrive(agent, speed_required, local_target)
             controller_mode = "GROUND PD"
+            target_angles = (0.0, local_angle, 0.0)
 
-        # Keep VirxERLU's speed controller, but add a wall-shot urgency
-        # override when there is a genuine acceleration deficit.
+        # Spend boost during either phase when the route has a real
+        # acceleration deficit and the car is sufficiently aligned.
         yaw_error = abs(target_angles[1]) if on_wall else local_angle
         needs_boost = (
             car.boost > 0
-            and distance > 550
-            and speed_required > speed + 140
-            and yaw_error < 0.85
+            and distance > 350
+            and speed_required > speed + 90
+            and yaw_error < 0.95
             and not agent.controller.handbrake
         )
         if needs_boost:
             agent.controller.throttle = 1
             agent.controller.boost = True
-        elif yaw_error > 1.15 or agent.controller.handbrake:
+        elif yaw_error > 0.95 or agent.controller.handbrake:
             agent.controller.boost = False
+
+        if self.last_debug_time < 0 or agent.time - self.last_debug_time >= 0.35:
+            self.last_debug_time = agent.time
+            print(
+                f"[WALL DRIVE] {drive_phase} surface={axis}{wall_side:+d} "
+                f"target=({drive_target.x:.0f},{drive_target.y:.0f},{drive_target.z:.0f}) "
+                f"distance={distance:.0f} T={T:.2f} speed={speed_required:.0f} "
+                f"boost={car.boost:.0f} controller={controller_mode} "
+                f"steer={agent.controller.steer:.2f} yaw={agent.controller.yaw:.2f} "
+                f"throttle={agent.controller.throttle:.2f} "
+                f"boosting={agent.controller.boost}",
+                flush=True
+            )
 
         if on_wall and car.location.dist(ball) < 190:
             print(
