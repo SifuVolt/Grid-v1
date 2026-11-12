@@ -75,6 +75,18 @@ def _wall_drive_eta(distance, car, direction):
         forward_speed * boost_time
         + 0.5 * boost_acceleration * boost_time * boost_time
     )
+    if boosted_distance >= distance and boost_time > 0:
+        discriminant = max(
+            0.0,
+            forward_speed * forward_speed
+            + 2.0 * boost_acceleration * distance
+        )
+        actual_boost_time = min(
+            boost_time,
+            (math.sqrt(discriminant) - forward_speed) / boost_acceleration
+        )
+        return turn_time + actual_boost_time + 0.10
+
     remaining = max(0.0, distance - boosted_distance)
     speed_after_boost = min(
         max_speed, forward_speed + boost_acceleration * boost_time
