@@ -4,10 +4,10 @@ from util.grid_double_jump import find_double_jump as grid_find_double_jump
 
 
 
-def wall_surface_for_ball(loc, max_gap=650.0, team=None):
+def wall_surface_for_ball(loc, max_gap=650.0):
     """
-    Return (axis, side, gap) for a ball close to a permitted vertical wall.
-    The ceiling, own back wall, and goal interiors are not wall-shot surfaces.
+    Return (axis, side, gap) for a ball close to a vertical arena wall.
+    The ceiling and the goal interiors are deliberately not wall surfaces.
     """
     radius = 92.75
     candidates = [
@@ -19,9 +19,6 @@ def wall_surface_for_ball(loc, max_gap=650.0, team=None):
     for axis, wall_side, gap in candidates:
         if gap < -5 or gap > max_gap:
             continue
-        # Never use our own back wall for a wall-drive shot.
-        if axis == "y" and team is not None and wall_side == side(team):
-            continue
         # The back-wall opening is the goal, not a driveable wall.
         if axis == "y" and abs(loc.x) < 900 and loc.z < 700:
             continue
@@ -29,7 +26,7 @@ def wall_surface_for_ball(loc, max_gap=650.0, team=None):
     return None
 
 
-def car_wall_surface(car, team=None):
+def car_wall_surface(car):
     """Return the vertical wall the car is attached to, or None."""
     if (
         abs(car.location.x) > 3500
@@ -42,10 +39,7 @@ def car_wall_surface(car, team=None):
         and abs(car.up.y) > 0.65
         and car.up.y * car.location.y < 0
     ):
-        wall_side = 1 if car.location.y >= 0 else -1
-        if team is not None and wall_side == side(team):
-            return None
-        return "y", wall_side
+        return "y", (1 if car.location.y >= 0 else -1)
     return None
 
 
@@ -121,7 +115,7 @@ def _wall_drive_eta(distance, car, direction, on_wall=False):
 
 
 def find_wall_drive(agent, cap_=4.0):
-    """Find a reachable touch on a side wall or the opponent back wall."""
+    """Find a reachable touch on either side wall or either back wall."""
     car = agent.me
     debug_now = agent.time
     debug_due = (
@@ -131,7 +125,7 @@ def find_wall_drive(agent, cap_=4.0):
     if debug_due:
         agent._last_wall_drive_scan_debug = debug_now
 
-    attached_wall = car_wall_surface(car, agent.team)
+    attached_wall = car_wall_surface(car)
     if debug_due:
         print(
             f"[WALL DRIVE SCAN] airborne={car.airborne} "
@@ -166,13 +160,13 @@ def find_wall_drive(agent, cap_=4.0):
         physics = ball_slice.physics
         loc = physics.location
         vel = physics.velocity
-        surface = wall_surface_for_ball(loc, 1800.0, agent.team)
+        surface = wall_surface_for_ball(loc, 1800.0)
         if surface is None:
             reject_wall_window += 1
             continue
 
         # Exclude ceiling-height touches; this is a vertical-wall routine.
-        if not 90 <= loc.z <= 2200 or loc.z < car.location.z + 60:
+        if not 180 <= loc.z <= 2200 or loc.z < car.location.z + 60:
             reject_height += 1
             continue
 
@@ -204,33 +198,15 @@ def find_wall_drive(agent, cap_=4.0):
             normal_distance = abs(wall_entry.y - car.location.y)
             tangent_distance = abs(wall_entry.x - car.location.x)
 
-        # Low wall balls use a short up-and-down route to create a
-        # better side-on contact, but never climb high above a ground ball.
-        runup_height = (
-            min(720.0, max(420.0, loc.z + 180.0))
-            if loc.z < 500.0 else loc.z
-        )
         if attached_wall is not None:
-            tangent_distance = math.hypot(
-                target.x - car.location.x,
-                target.y - car.location.y
-            )
-            route_distance = (
-                tangent_distance
-                + abs(runup_height - car.location.z)
-                + abs(runup_height - target.z)
-            )
+            distance = car.location.dist(target)
             eta = _wall_drive_eta(
-                route_distance, car, target - car.location, on_wall=True
+                distance, car, target - car.location, on_wall=True
             )
         else:
-            # First reach the wall at floor height, climb only to the
-            # controlled run-up height, then descend to the contact point.
+            # First reach the wall at floor height, then climb to the ball.
             ground_distance = normal_distance + tangent_distance
-            climb_distance = (
-                abs(runup_height - car.location.z)
-                + abs(runup_height - target.z)
-            )
+            climb_distance = abs(target.z - car.location.z)
             ground_eta = _wall_drive_eta(
                 ground_distance, car, wall_entry - car.location
             )
