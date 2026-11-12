@@ -205,7 +205,7 @@ class wave_dash:
 class wall_approach:
     WALL_X = 4050
     WALL_Y = 5070
-    MIN_BALL_HEIGHT = 190
+    MIN_BALL_HEIGHT = 90
     MAX_BALL_HEIGHT = 2200
     MAX_WALL_GAP = 1800
 
@@ -263,6 +263,9 @@ class wall_approach:
         agent.teamplay_shot = None
         print(f"[WALL DRIVE] GIVING UP: {reason}; announcing DEFEND", flush=True)
         if getattr(agent, "friends", None):
+            # A handoff must not be lost behind the normal comm rate limit.
+            agent.last_comms_signature = None
+            agent.last_comms_send_time = -999.0
             agent.send_teamplay_comm("DEFEND", 100.0, 10.0)
 
     def run(self, agent: VirxERLU, manual=False):
@@ -357,6 +360,8 @@ class wall_approach:
 
         on_wall = attached_wall == (axis, wall_side)
         low_ball_runup = ball.z < 500.0
+        if not low_ball_runup:
+            self.wall_runup_complete = False
         runup_height = (
             min(720.0, max(420.0, ball.z + 180.0))
             if low_ball_runup else ball.z
