@@ -1,7 +1,6 @@
 from util.routines import Aerial, double_jump, ground_shot, jump_shot, side_shot, virxrlcu, wall_approach
 from util.utils import Vector, math, side, cap
 from util.grid_double_jump import find_double_jump as grid_find_double_jump
-from util.grid_double_jump import find_aerial_launch as grid_find_aerial_launch
 
 
 
@@ -1008,19 +1007,11 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             flush=True
         )
 
-    # Grid owns both the grounded double-jump and boosted-aerial search.
+    # Calculate Grid's double-jump candidate ONCE per search.
     grid_candidate = None
-    grid_aerial_candidate = None
 
     if can_double_jump and not agent.me.airborne:
         grid_candidate = grid_find_double_jump(
-            agent,
-            targets=(Vector(*targets[0]), Vector(*targets[1])),
-            horizon=cap_
-        )
-
-    if can_aerial:
-        grid_aerial_candidate = grid_find_aerial_launch(
             agent,
             targets=(Vector(*targets[0]), Vector(*targets[1])),
             horizon=cap_
@@ -1050,8 +1041,9 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
         slice_can_ground = can_ground
         slice_can_jump = can_jump
         slice_can_double_jump = can_double_jump
-        # Aerial reachability is evaluated by Grid's launch/boost model.
-        slice_can_aerial = False
+        slice_can_aerial = can_aerial and (
+            min_aerial_height < ball_location[2] < max_aerial_height
+        )
 
         # When the ball is rebounding from the opponent's back wall,
         # prefer a double-jump option over a single-jump option.
@@ -1220,54 +1212,6 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                         f"height={grid_ball_location.z:.0f}",
                         flush=True
                     )
-    if grid_aerial_candidate is not None:
-        grid_aerial_time = grid_aerial_candidate["time"]
-        grid_aerial_remaining = grid_aerial_time - agent.time - (1 / 120)
-        grid_aerial_ball = Vector(*grid_aerial_candidate["ball_location"])
-        if (
-            grid_aerial_remaining > 0
-            and min_aerial_height < grid_aerial_ball.z < max_aerial_height
-        ):
-            grid_aerial_slice = min(
-                slices,
-                key=lambda s: abs(s.game_seconds - grid_aerial_time)
-            )
-            grid_aerial_shot = {
-                "found": 1,
-                "shot_type": 3,
-                "fast": True,
-                "targets": grid_aerial_candidate["targets"],
-                "grid_launch": grid_aerial_candidate
-            }
-            if useful_non_aerial_shot(
-                agent,
-                grid_aerial_candidate["ball_location"],
-                grid_aerial_slice.physics.velocity,
-                grid_aerial_shot,
-                grid_aerial_time
-            ):
-                grid_aerial_score = shot_candidate_score(
-                    agent,
-                    grid_aerial_slice,
-                    grid_aerial_shot,
-                    grid_aerial_remaining,
-                    target
-                )
-                if grid_aerial_score < best_score:
-                    best_score = grid_aerial_score
-                    best_shot = grid_aerial_shot
-                    best_intercept_time = grid_aerial_time
-                    best_ball_z = grid_aerial_ball.z
-                    best_ball_location = grid_aerial_ball
-                    print(
-                        f"[GRID AERIAL] Selected | "
-                        f"T={grid_aerial_remaining:.2f} "
-                        f"jump={grid_aerial_candidate['jump_amount']} "
-                        f"boost={agent.me.boost:.0f} "
-                        f"height={grid_aerial_ball.z:.0f}",
-                        flush=True
-                    )
-
     # The loop has ended; construct the best nearby feasible shot.
     if best_shot is None:
         return None
@@ -1287,8 +1231,7 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
         routine = Aerial(
             best_intercept_time,
             best_targets,
-            best_shot["fast"],
-            launch_data=best_shot.get("grid_launch")
+            best_shot["fast"]
         )
     elif best_shot["shot_type"] in (0, 1) and can_jump:
         # A side shot is a goal-line correction, not a half-field choice.
@@ -1465,17 +1408,9 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
     best_score = float("inf")
     best_ball_location = None
     grid_candidate = None
-    grid_aerial_candidate = None
 
     if can_double_jump and not agent.me.airborne:
         grid_candidate = grid_find_double_jump(
-            agent,
-            targets=None,
-            horizon=cap_
-        )
-
-    if can_aerial:
-        grid_aerial_candidate = grid_find_aerial_launch(
             agent,
             targets=None,
             horizon=cap_
@@ -1512,8 +1447,11 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
         slice_can_ground = can_ground
         slice_can_jump = can_jump
         slice_can_double_jump = can_double_jump
-        # Grid's aerial finder owns aerial reachability.
-        slice_can_aerial = False
+        slice_can_aerial = can_aerial and (
+            min_aerial_height
+            < ball_location[2]
+            < max_aerial_height
+        )
 
         # Match find_shot: favour a double jump for an airborne back-wall
         # rebound, but leave ground contacts available.
@@ -1575,53 +1513,6 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
             best_intercept_time = intercept_time
             best_ball_z = ball_location[2]
             best_ball_location = Vector(*ball_location)
-    if grid_aerial_candidate is not None:
-        grid_aerial_time = grid_aerial_candidate["time"]
-        grid_aerial_remaining = grid_aerial_time - agent.time - (1 / 120)
-        grid_aerial_ball = Vector(*grid_aerial_candidate["ball_location"])
-        if (
-            grid_aerial_remaining > 0
-            and min_aerial_height < grid_aerial_ball.z < max_aerial_height
-        ):
-            grid_aerial_slice = min(
-                slices,
-                key=lambda s: abs(s.game_seconds - grid_aerial_time)
-            )
-            grid_aerial_shot = {
-                "found": 1,
-                "shot_type": 3,
-                "fast": True,
-                "targets": grid_aerial_candidate["targets"],
-                "grid_launch": grid_aerial_candidate
-            }
-            if useful_non_aerial_shot(
-                agent,
-                grid_aerial_candidate["ball_location"],
-                grid_aerial_slice.physics.velocity,
-                grid_aerial_shot,
-                grid_aerial_time
-            ):
-                grid_aerial_score = shot_candidate_score(
-                    agent,
-                    grid_aerial_slice,
-                    grid_aerial_shot,
-                    grid_aerial_remaining,
-                    target=None
-                )
-                if grid_aerial_score < best_score:
-                    best_score = grid_aerial_score
-                    best_shot = grid_aerial_shot
-                    best_intercept_time = grid_aerial_time
-                    best_ball_z = grid_aerial_ball.z
-                    best_ball_location = grid_aerial_ball
-                    print(
-                        f"[GRID AERIAL] Any-shot selected | "
-                        f"T={grid_aerial_remaining:.2f} "
-                        f"jump={grid_aerial_candidate['jump_amount']} "
-                        f"boost={agent.me.boost:.0f}",
-                        flush=True
-                    )
-
     if grid_candidate is not None:
         grid_time = grid_candidate["time"]
         grid_time_remaining = grid_time - agent.time - (1 / 120)
@@ -1701,8 +1592,7 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
     if best_shot['shot_type'] == 3:
         routine = Aerial(
             best_intercept_time,
-            fast_aerial=best_shot['fast'],
-            launch_data=best_shot.get("grid_launch")
+            fast_aerial=best_shot['fast']
         )
         contact = select_ball_contact(
             agent,
