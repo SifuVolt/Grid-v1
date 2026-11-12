@@ -1525,13 +1525,9 @@ class Bot(VirxERLU):
             # look for an aerial intercept. The aerial routine owns the
             # double-jump launch from the wall; otherwise keep wall driving.
             car = self.me
-            on_side_wall = (
-                abs(car.location.x) > 3500
-                and abs(car.up.x) > 0.65
-                and car.up.x * car.location.x < 0
-            )
+            attached_wall = tools.car_wall_surface(car)
             if (
-                on_side_wall
+                attached_wall is not None
                 and not car.doublejumped
                 and self.odd_tick == 0
             ):
@@ -1549,17 +1545,24 @@ class Bot(VirxERLU):
                                 item.game_seconds - aerial.intercept_time
                             )
                         )
-                        ball_x = aerial_slice.physics.location.x
-                        same_wall = ball_x * car.location.x > 0
-                        wall_gap = max(0.0, 4096.0 - abs(ball_x) - 92.75)
+                        ball_location = aerial_slice.physics.location
+                        ball_surface = tools.wall_surface_for_ball(
+                            ball_location, max_gap=650.0
+                        )
+                        same_wall = (
+                            ball_surface is not None
+                            and ball_surface[:2] == attached_wall
+                        )
+                        wall_gap = (
+                            ball_surface[2]
+                            if same_wall else 0.0
+                        )
                     else:
                         same_wall = False
                         wall_gap = 0.0
 
-                    # If the ball is more than 100 units off the wall,
-                    # do not try to drive through the gap: launch the aerial
-                    # from the wall instead. Direct wall contact is reserved
-                    # for a ball that is actually tight to the surface.
+                    # Launch from the wall when the predicted ball is not
+                    # close enough for a direct wall-drive touch.
                     if same_wall and wall_gap > 100:
                         print(
                             f"[WALL DRIVE] wall aerial launch "
