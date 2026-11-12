@@ -10,9 +10,10 @@ def wall_surface_for_ball(loc, max_gap=650.0, team=None):
     The ceiling and the goal interiors are deliberately not wall surfaces.
     """
     radius = 92.75
+    # Wall routes are side-wall-only. Neither team's back wall is
+    # treated as a driveable wall target.
     candidates = [
         ("x", 1 if loc.x >= 0 else -1, 4096.0 - abs(loc.x) - radius),
-        ("y", 1 if loc.y >= 0 else -1, 5120.0 - abs(loc.y) - radius),
     ]
     candidates.sort(key=lambda item: item[2])
 
@@ -38,14 +39,8 @@ def car_wall_surface(car, team=None):
         and car.up.x * car.location.x < 0
     ):
         return "x", (1 if car.location.x >= 0 else -1)
-    if (
-        abs(car.location.y) > 4500
-        and abs(car.up.y) > 0.65
-        and car.up.y * car.location.y < 0
-    ):
-        wall_side = 1 if car.location.y >= 0 else -1
-        if team is None or wall_side != side(team):
-            return "y", wall_side
+    # Back walls are never valid wall-drive surfaces, including
+    # the opponent's back wall.
     return None
 
 
