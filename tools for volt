@@ -4,10 +4,10 @@ from util.grid_double_jump import find_double_jump as grid_find_double_jump
 
 
 
-def wall_surface_for_ball(loc, max_gap=650.0):
+def wall_surface_for_ball(loc, max_gap=650.0, team=None):
     """
-    Return (axis, side, gap) for a ball close to a vertical arena wall.
-    The ceiling and the goal interiors are deliberately not wall surfaces.
+    Return (axis, side, gap) for a ball close to a permitted vertical wall.
+    The ceiling, own back wall, and goal interiors are not wall-shot surfaces.
     """
     radius = 92.75
     candidates = [
@@ -19,6 +19,9 @@ def wall_surface_for_ball(loc, max_gap=650.0):
     for axis, wall_side, gap in candidates:
         if gap < -5 or gap > max_gap:
             continue
+        # Never use our own back wall for a wall-drive shot.
+        if axis == "y" and team is not None and wall_side == side(team):
+            continue
         # The back-wall opening is the goal, not a driveable wall.
         if axis == "y" and abs(loc.x) < 900 and loc.z < 700:
             continue
@@ -26,7 +29,7 @@ def wall_surface_for_ball(loc, max_gap=650.0):
     return None
 
 
-def car_wall_surface(car):
+def car_wall_surface(car, team=None):
     """Return the vertical wall the car is attached to, or None."""
     if (
         abs(car.location.x) > 3500
@@ -39,7 +42,10 @@ def car_wall_surface(car):
         and abs(car.up.y) > 0.65
         and car.up.y * car.location.y < 0
     ):
-        return "y", (1 if car.location.y >= 0 else -1)
+        wall_side = 1 if car.location.y >= 0 else -1
+        if team is not None and wall_side == side(team):
+            return None
+        return "y", wall_side
     return None
 
 
@@ -115,7 +121,7 @@ def _wall_drive_eta(distance, car, direction, on_wall=False):
 
 
 def find_wall_drive(agent, cap_=4.0):
-    """Find a reachable touch on either side wall or either back wall."""
+    """Find a reachable touch on a side wall or the opponent back wall."""
     car = agent.me
     debug_now = agent.time
     debug_due = (
@@ -125,7 +131,7 @@ def find_wall_drive(agent, cap_=4.0):
     if debug_due:
         agent._last_wall_drive_scan_debug = debug_now
 
-    attached_wall = car_wall_surface(car)
+    attached_wall = car_wall_surface(car, agent.team)
     if debug_due:
         print(
             f"[WALL DRIVE SCAN] airborne={car.airborne} "
@@ -160,7 +166,7 @@ def find_wall_drive(agent, cap_=4.0):
         physics = ball_slice.physics
         loc = physics.location
         vel = physics.velocity
-        surface = wall_surface_for_ball(loc, 1800.0)
+        surface = wall_surface_for_ball(loc, 1800.0, agent.team)
         if surface is None:
             reject_wall_window += 1
             continue
