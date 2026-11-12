@@ -207,7 +207,7 @@ class wall_approach:
     WALL_Y = 5070
     MIN_BALL_HEIGHT = 190
     MAX_BALL_HEIGHT = 2200
-    MAX_WALL_GAP = 450
+    MAX_WALL_GAP = 650
 
     def __init__(self, intercept_time, targets=None):
         self.intercept_time = intercept_time
