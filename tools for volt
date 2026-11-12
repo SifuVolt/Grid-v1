@@ -43,25 +43,24 @@ def car_wall_surface(car):
     return None
 
 
-def _wall_drive_eta(distance, car, direction):
+def _wall_drive_eta(distance, car, direction, on_wall=False):
     """Estimate travel time with the car's available boost and speed cap."""
     if distance <= 1:
         return 0.0
 
-    flat_direction = direction.flatten()
-    forward = car.forward.flatten()
+    travel_direction = direction.normalize() if on_wall else direction.flatten().normalize()
+    forward = car.forward if on_wall else car.forward.flatten()
+    velocity = car.velocity if on_wall else car.velocity.flatten()
     facing = 0.0
-    if flat_direction.magnitude() > 1 and forward.magnitude() > 1:
+    if travel_direction.magnitude() > 1 and forward.magnitude() > 1:
         facing = cap(
-            forward.normalize().dot(flat_direction.normalize()), -1, 1
+            forward.normalize().dot(travel_direction), -1, 1
         )
     heading_error = math.acos(cap(facing, -1, 1))
-    speed = car.velocity.flatten().magnitude()
+    speed = velocity.magnitude()
     turn_rate = 2.0 if speed > 1400 else 3.5
     turn_time = heading_error / turn_rate
 
-    velocity = car.velocity.flatten()
-    travel_direction = flat_direction.normalize()
     forward_speed = max(0.0, velocity.dot(travel_direction))
     max_speed = 2300.0
     boost_acceleration = 1600.0
@@ -203,7 +202,9 @@ def find_wall_drive(agent, cap_=4.0):
             # and climb. This avoids the old optimistic straight-line ETA.
             distance = normal_distance + tangent_distance + vertical_distance
 
-        eta = _wall_drive_eta(distance, car, target - car.location)
+        eta = _wall_drive_eta(
+            distance, car, target - car.location, on_wall=attached_wall is not None
+        )
         if eta > intercept_in - 0.08:
             reject_unreachable += 1
             continue
