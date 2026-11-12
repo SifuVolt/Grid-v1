@@ -4223,6 +4223,34 @@ class jump_shot:
                     self.counter = 4
 
                 elif (
+                    low_boost_dodge
+                    and not self.side_mode
+                    and not defensive_save
+                    and local_contact_for_dodge.x > 0
+                    and nose_to_contact.x > 0
+                    and nose_to_contact.magnitude() <= 900
+                    and T > -0.05
+                ):
+                    # A low-boost single-jump selection still needs a
+                    # speed impulse. If the hitbox-targeted dodge window
+                    # has not quite lined up, use a straight forward flip
+                    # rather than abandoning the jump with no follow-up.
+                    print(
+                        f"[LOW BOOST SINGLE-JUMP FLIP] "
+                        f"contact_x={local_contact_for_dodge.x:.0f} "
+                        f"nose_gap={nose_to_contact.magnitude():.0f} "
+                        f"T={T:.3f}",
+                        flush=True
+                    )
+                    agent.controller.pitch = -1
+                    agent.controller.yaw = 0
+                    agent.controller.roll = 0
+                    agent.controller.jump = True
+                    agent.last_flip_time = agent.time
+                    self.dodging = True
+                    self.counter = 4
+
+                elif (
                     (
                         local_target.x <= 0
                         and not (low_boost_dodge and nose_to_contact.x > 0)
