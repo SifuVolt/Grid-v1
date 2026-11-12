@@ -224,9 +224,10 @@ class wall_approach:
 
     def wall_surface_for_ball(self, ball, team=None):
         radius = 92.75
+        # Only the two side walls are valid setup surfaces.
+        # Ignore both back walls, including the opponent's.
         candidates = [
             ("x", 1 if ball.x >= 0 else -1, 4096.0 - abs(ball.x) - radius),
-            ("y", 1 if ball.y >= 0 else -1, 5120.0 - abs(ball.y) - radius),
         ]
         candidates.sort(key=lambda item: item[2])
         for axis, wall_side, gap in candidates:
@@ -248,14 +249,7 @@ class wall_approach:
             and car.up.x * car.location.x < 0
         ):
             return "x", (1 if car.location.x >= 0 else -1)
-        if (
-            abs(car.location.y) > 4500
-            and abs(car.up.y) > 0.65
-            and car.up.y * car.location.y < 0
-        ):
-            wall_side = 1 if car.location.y >= 0 else -1
-            if team is None or wall_side != side(team):
-                return "y", wall_side
+        # Back walls are deliberately excluded from wall routines.
         return None
 
     def run(self, agent: VirxERLU, manual=False):
