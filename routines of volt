@@ -1022,8 +1022,10 @@ class Aerial:
         if speed <= 500:
             return 0.65
         if speed <= max_speed:
-            return lerp((speed - 500) / 1800, 0.65, 0.55)
-        return lerp((speed - max_speed) / 2300, 0.55, 0.3)
+            blend = (speed - 500) / 1800
+            return 0.65 + (0.55 - 0.65) * blend
+        blend = (speed - max_speed) / 2300
+        return 0.55 + (0.3 - 0.55) * blend
 
     def _party_cannon_shot_direction(self, agent, ball, ball_velocity, time_remaining):
         # Port of Party Cannon's SetTargetLocation shot prediction.
@@ -1089,7 +1091,7 @@ class Aerial:
             offset_z = float(getattr(local_offset, "z", 0.0))
             world_offset = (
                 agent.me.forward * offset_x
-                + agent.me.right * offset_y
+                + agent.me.forward.cross(agent.me.up) * offset_y
                 + agent.me.up * offset_z
             )
 
