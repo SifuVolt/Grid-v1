@@ -166,7 +166,7 @@ def find_wall_drive(agent, cap_=4.0):
             continue
 
         # Exclude ceiling-height touches; this is a vertical-wall routine.
-        if not 180 <= loc.z <= 2200 or loc.z < car.location.z + 60:
+        if not 90 <= loc.z <= 2200 or loc.z < car.location.z + 60:
             reject_height += 1
             continue
 
