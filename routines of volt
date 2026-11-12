@@ -1237,7 +1237,7 @@ class Aerial:
         desired_direction = self._orientation_target(agent, delta_x, T)
         target = agent.me.local(desired_direction)
 
-        delta_v = delta_x.dot(agent.me.forward) / max(T, agent.delta_time)
+        delta_v = delta_x.dot(agent.me.forward) / max(T, dt)
 
         if self.counter in {0, 4}:
             if self.jumping and self.jump_type_fast:
@@ -1264,13 +1264,13 @@ class Aerial:
             if (
                 agent.me.airborne
                 and agent.me.boost > 0
-                and delta_v >= agent.boost_accel * 0.1 + throttle_accel * agent.delta_time
+                and delta_v >= agent.boost_accel * 0.1 + throttle_accel * dt
             ):
                 agent.controller.boost = True
                 agent.controller.throttle = 1
-            elif abs(delta_v) >= throttle_accel * agent.delta_time * 0.1:
+            elif abs(delta_v) >= throttle_accel * dt * 0.1:
                 agent.controller.throttle = cap(
-                    delta_v / (throttle_accel * agent.delta_time),
+                    delta_v / (throttle_accel * dt),
                     -1,
                     1
                 )
@@ -1302,10 +1302,10 @@ class Aerial:
             or (
                 not self.jumping
                 and (
-                    delta_v >= agent.boost_accel * 0.1 + throttle_accel * agent.delta_time
+                    delta_v >= agent.boost_accel * 0.1 + throttle_accel * dt
                     or (
                         T > 1
-                        and delta_v >= throttle_accel * agent.delta_time * 0.1
+                        and delta_v >= throttle_accel * dt * 0.1
                     )
                 )
                 and not virxrlcu.aerial_shot_is_viable(
