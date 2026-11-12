@@ -995,278 +995,297 @@ class double_jump:
 
 
 class Aerial:
-    """Grid jump launch followed by a continuously controlled boosted aerial."""
-
-    def __init__(self, intercept_time, targets=None, fast_aerial=True,
-                 launch_data=None):
+    def __init__(self, intercept_time, targets=None, fast_aerial=True):
         self.intercept_time = intercept_time
         self.fast_aerial = fast_aerial
         self.targets = targets
-        self.launch_data = launch_data
-
         self.shot_vector = None
         self.target = None
         self.ball = None
-        self.ceiling = False
 
-        self.launch_started = False
-        self.launch_complete = False
-        self.launch_time = -1.0
-        self.launch_frames = 0
-        self.jump_amount = 0
-        self.second_jump_sent = False
-        self.prev_jump = False
-        self.launch_up = None
+        self.jump_type_fast = None
+        self.jumping = False
+        self.dodging = False
+        self.ceiling = False
+        self.jump_time = -1
+        self.counter = 0
+        self.double_jump_complete = False
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
-        self.fast_aerial = getattr(shot, "fast_aerial", self.fast_aerial)
-        self.targets = getattr(shot, "targets", self.targets)
-
-    def _finish(self, agent):
-        agent.pop()
-        agent.shooting = False
-        if agent.me.airborne:
-            agent.push(ball_recovery())
-
-    def _start_launch(self, agent):
-        # A side-wall car is airborne according to RLBot, but can still use
-        # its wall-relative jump. A freely flying car must not jump again.
-        on_side_wall = (
-            abs(agent.me.location.x) > 3500
-            and abs(agent.me.up.x) > 0.65
-            and agent.me.up.x * agent.me.location.x < 0
-        )
-        if agent.me.airborne and not on_side_wall:
-            self.jump_amount = 0
-            self.launch_complete = True
-            self.launch_started = True
-            return
-
-        if self.launch_data is not None:
-            self.jump_amount = int(self.launch_data.get("jump_amount", 0))
-        else:
-            launch_axis = agent.me.up
-            required_height = max(
-                0.0,
-                (self.target - agent.me.location).dot(launch_axis)
-            )
-            _, self.jump_amount = new_jump_time(
-                required_height,
-                self.fast_aerial
-            )
-
-        self.jump_amount = max(0, min(2, self.jump_amount))
-        self.launch_up = agent.me.up.copy()
-        self.launch_time = agent.time
-        self.launch_frames = 0
-        self.second_jump_sent = False
-        self.prev_jump = False
-        self.launch_started = True
-
-    def _run_grid_launch(self, agent):
-        if self.launch_complete:
-            return
-
-        self.launch_frames = max(
-            0,
-            round((agent.time - self.launch_time) * 120)
-        )
-
-        # Exact Grid launch cadence: 24-frame first-jump hold, one release
-        # frame, then a distinct one-frame second-jump press when required.
-        if self.launch_frames < 24:
-            agent.controller.jump = True
-            self.prev_jump = True
-        elif self.jump_amount >= 2 and not self.second_jump_sent:
-            if self.prev_jump:
-                agent.controller.jump = False
-                self.prev_jump = False
-            else:
-                agent.controller.jump = True
-                self.second_jump_sent = True
-                self.prev_jump = True
-        else:
-            agent.controller.jump = False
-            self.prev_jump = False
-            self.launch_complete = True
+        self.fast_aerial = shot.fast_aerial
+        self.targets = shot.targets
 
     def run(self, agent: VirxERLU):
         if not agent.shooting:
             agent.shooting = True
 
-        prediction = getattr(agent, "ball_prediction_struct", None)
-        slices = getattr(prediction, "slices", None) if prediction is not None else None
-        if not slices:
-            self._finish(agent)
-            return
-
         T = self.intercept_time - agent.time
-        if T <= -0.4:
-            self._finish(agent)
-            return
+        xf = agent.me.location + agent.me.velocity * T + 0.5 * agent.gravity * T * T
+        vf = agent.me.velocity + agent.gravity * T
 
-        # Prediction arrays can end before the requested intercept when a
-        # packet arrives late. Clamp the index rather than indexing past them.
-        slice_n = max(0, min(math.ceil(max(T, 0.0) * 120) - 1, len(slices) - 1))
-        if T > 0.05 or self.ball is None:
-            physics = slices[slice_n].physics
-            self.ball = Vector(
-                physics.location.x,
-                physics.location.y,
-                physics.location.z
+        slice_n = math.ceil(T * 120) - 1
+        agent.dbg_2d(f"Shot slice #: {slice_n}")
+
+        if T > 0.1 or self.ball is None:
+            ball = agent.ball_prediction_struct.slices[slice_n].physics.location
+            self.ball = Vector(ball.x, ball.y, ball.z)
+            self.ceiling = agent.me.location.z > 2044 - agent.me.hitbox.height * 2 and not agent.me.jumped
+
+        
+        # Work out the intended direction of the ball after contact.
+        car_to_ball = (self.ball - agent.me.location).normalize()
+
+        if self.targets is None:
+            self.shot_vector = car_to_ball
+        else:
+            left_direction = (self.targets[0] - self.ball).normalize()
+            right_direction = (self.targets[1] - self.ball).normalize()
+
+            self.shot_vector = car_to_ball.clamp(
+                left_direction,
+                right_direction
             )
+
+        
+        # Detect a useful backboard rebound for an already-airborne car.
+        left_post, right_post = agent.foe_goal_shot
+
+        goal_center = Vector(
+            (left_post.x + right_post.x) / 2,
+            (left_post.y + right_post.y) / 2,
+            300
+        )
+
+        # Read the predicted ball velocity at this aerial's intercept.
+        prediction = agent.ball_prediction_struct
+        backboard_mode = False
+        goal_direction = (goal_center - self.ball).normalize()
+
+        if (
+            agent.me.airborne
+            and prediction is not None
+            and 0 <= slice_n < len(prediction.slices)
+        ):
+            physics = prediction.slices[slice_n].physics
             ball_velocity = Vector(
                 physics.velocity.x,
                 physics.velocity.y,
                 physics.velocity.z
             )
-            self.ceiling = (
-                agent.me.location.z > 2044 - agent.me.hitbox.height * 2
-                and not agent.me.jumped
-            )
-        else:
-            ball_velocity = Vector()
 
-        # Preserve Volt's goal-window shot direction.
-        car_to_ball = (self.ball - agent.me.location).normalize()
-        if self.targets is None:
-            self.shot_vector = car_to_ball
-        else:
-            left_direction = (Vector(*self.targets[0]) - self.ball).normalize()
-            right_direction = (Vector(*self.targets[1]) - self.ball).normalize()
-            self.shot_vector = car_to_ball.clamp(
-                left_direction, right_direction
-            )
-
-        # Preserve the existing opponent-backboard rebound behaviour.
-        left_post, right_post = agent.foe_goal_shot
-        goal_center = Vector(
-            (left_post.x + right_post.x) * 0.5,
-            (left_post.y + right_post.y) * 0.5,
-            300
-        )
-        goal_direction = (goal_center - self.ball).normalize()
-        backboard_mode = False
-        if agent.me.airborne and 0 <= slice_n < len(slices):
+            # Positive means moving towards goal; negative means away.
             towards_goal = ball_velocity.dot(goal_direction)
+
             near_backboard = (
                 abs(self.ball.y - goal_center.y) < 1100
                 and self.ball.z > 450
                 and abs(self.ball.x) < 3500
             )
+
+            # Only take over for an actual rebound opportunity.
+            # Avoid activating for a ball simply travelling into the wall.
             backboard_mode = (
-                near_backboard and towards_goal < -150 and 0.15 < T < 2.0
+                near_backboard
+                and towards_goal < -150
+                and 0.15 < T < 2.0
             )
+
         if backboard_mode:
             self.shot_vector = goal_direction
 
-        self.target = self.ball - self.shot_vector * agent.best_shot_value
+            if (
+                not hasattr(self, "last_backboard_debug")
+                or agent.time - self.last_backboard_debug >= 0.5
+            ):
+                self.last_backboard_debug = agent.time
+                print(
+                    f"[AERIAL BACKBOARD] Rebound follow-up | "
+                    f"ball=({self.ball.x:.0f}, {self.ball.y:.0f}, "
+                    f"{self.ball.z:.0f}) | "
+                    f"car_z={agent.me.location.z:.0f} | "
+                    f"goal_dir=({goal_direction.x:.2f}, "
+                    f"{goal_direction.y:.2f}, {goal_direction.z:.2f})",
+                    flush=True
+                )
+
+        self.target = self.ball - (
+            self.shot_vector * agent.best_shot_value
+        )
+
+
+        agent.sphere(self.ball, 92.75)
+
         if self.ceiling:
             self.target -= Vector(z=92)
 
-        agent.sphere(self.ball, 92.75)
-        agent.dbg_2d(f"Aerial T={T:.2f}")
+        if self.jumping or not agent.me.airborne:
+            agent.dbg_2d("Jumping")
 
-        if not self.launch_started:
-            self._start_launch(agent)
+            if not self.jumping or not agent.me.airborne:
+                self.jump_type_fast = self.fast_aerial
+                self.jumping = True
+                self.jump_time = agent.time
+                self.counter = 0
+                self.double_jump_complete = False
 
-        self._run_grid_launch(agent)
+            jump_elapsed = agent.time - self.jump_time
 
-        # Predict the unboosted contact position from the car's ACTUAL
-        # post-launch velocity. This avoids adding a second, fictitious jump
-        # impulse to a velocity that already contains Grid's jump impulses.
-        future_position = (
-            agent.me.location
-            + agent.me.velocity * max(T, 0.0)
-            + agent.gravity * (0.5 * max(T, 0.0) ** 2)
-        )
-        delta = self.target - future_position
+            # how much of the jump acceleration time is left
+            tau = max(0.0, jump_max_duration - jump_elapsed)
 
-        if T > 0.02:
-            required_acceleration = delta * (2.0 / (T * T))
-        else:
-            required_acceleration = delta
+            # impulse from the first jump
+            if jump_elapsed == 0:
+                vf += agent.me.up * jump_speed
+                xf += agent.me.up * jump_speed * T
 
-        if required_acceleration.magnitude() < 80:
-            steering_direction = delta
-        else:
-            steering_direction = required_acceleration
+            # acceleration from holding jump
+            vf += agent.me.up * jump_acc * tau
+            xf += agent.me.up * jump_acc * tau * (T - 0.5 * tau)
 
-        if steering_direction.magnitude() < 1:
-            steering_direction = self.shot_vector
+            if self.jump_type_fast:
+                # impulse from the second jump
+                vf += agent.me.up * jump_speed
+                xf += agent.me.up * jump_speed * (T - tau)
 
-        # During the Grid launch, use its direct contact-point orientation.
-        # Once the second jump is complete, continuously steer toward the
-        # acceleration vector needed to meet the predicted contact point.
-        if not self.launch_complete:
-            local_contact = agent.me.local_location(self.target)
-            defaultPD(agent, local_contact)
-        elif backboard_mode:
-            defaultPD(
-                agent,
-                agent.me.local(steering_direction),
-                upside_down=(self.ball.z < agent.me.location.z - 80)
+                if jump_elapsed <= jump_max_duration:
+                    agent.controller.jump = True
+                elif self.counter < 4:
+                    self.counter += 1
+
+                if self.counter == 3:
+                    agent.controller.jump = True
+                    self.dodging = True
+                elif self.counter == 4:
+                    self.dodging = self.jumping = False
+                    self.double_jump_complete = True
+            elif jump_elapsed <= jump_max_duration:
+                agent.controller.jump = True
+            else:
+                self.jumping = False
+
+        if self.ceiling:
+            agent.dbg_2d(f"Ceiling shot")
+
+        delta_x = self.target - xf
+        direction = delta_x.normalize() if not self.jumping else delta_x.flatten().normalize()
+
+        agent.line(agent.me.location, agent.me.location + (direction * 250), agent.renderer.black)
+        c_vf = vf + agent.me.location
+        agent.line(c_vf - Vector(z=100), c_vf + Vector(z=100), agent.renderer.blue)
+        agent.line(xf - Vector(z=100), xf + Vector(z=100), agent.renderer.red)
+        agent.line(self.target - Vector(z=100), self.target + Vector(z=100), agent.renderer.green)
+
+        
+        if not self.dodging:
+            target = delta_x if delta_x.magnitude() > 50 else self.shot_vector
+            target = agent.me.local(target)
+
+            # After Volt's fast double-jump, copy Grid's final aerial
+            # orientation: face the ball's horizontal direction, or for
+            # balls above double-jump height, pitch vertically and roll
+            # the roof toward the ball. Switch to the shot direction once
+            # the predicted contact error is within 50 units.
+            final_double_jump_approach = (
+                self.double_jump_complete
+                and 0 < T <= 0.45
             )
-        elif virxrlcu.find_landing_plane(
-            tuple(agent.me.location),
-            tuple(agent.me.velocity),
-            agent.gravity.z
-        ) == 4:
-            defaultPD(
-                agent,
-                agent.me.local(steering_direction),
-                upside_down=True
-            )
-        else:
-            defaultPD(
-                agent,
-                agent.me.local(steering_direction),
-                up=Vector(z=1)
-            )
 
-        # Boost is the aerial's propulsion, not just a short post-jump burst.
-        # Required acceleration is recomputed every tick, so the bot boosts
-        # harder when behind the intercept and eases off when momentum suffices.
-        if T > 0 and agent.me.boost > 0:
-            forward_alignment = agent.me.forward.dot(
-                steering_direction.normalize()
-            ) if steering_direction.magnitude() > 1 else 0.0
-            forward_acceleration = required_acceleration.dot(agent.me.forward)
-            if (
-                forward_alignment > 0.68
-                and forward_acceleration > 120
-            ):
-                agent.controller.boost = True
-            elif forward_alignment > 0.45 and forward_acceleration > 250:
-                agent.controller.boost = True
+            if final_double_jump_approach:
+                if delta_x.magnitude() <= 50:
+                    defaultPD(agent, agent.me.local(self.shot_vector))
+                else:
+                    ball_flat = (
+                        self.ball - agent.me.location
+                    ).flatten()
 
-        # Air throttle is weaker than boost but can still help preserve
-        # forward acceleration while boost is unavailable or misaligned.
-        if T > 0 and steering_direction.magnitude() > 1:
-            forward_need = required_acceleration.dot(agent.me.forward)
-            if forward_need > 80:
-                agent.controller.throttle = cap(
-                    forward_need / max(throttle_accel * min_boost_time, 1),
-                    -1,
-                    1
+                    if ball_flat.magnitude() > 1:
+                        if self.ball.z > new_max_jump_height(True):
+                            # Grid's prev_wait branch: nose vertical,
+                            # then roll the roof toward the ball.
+                            vertical_target = agent.me.local(Vector(z=1))
+                            defaultPD(
+                                agent,
+                                vertical_target,
+                                up=Vector(z=1)
+                            )
+
+                            right_direction = agent.me.up.cross(agent.me.forward)
+                            if right_direction.magnitude() > 1:
+                                alignment = cap(
+                                    ball_flat.normalize().dot(
+                                        right_direction.normalize()
+                                    ),
+                                    -1,
+                                    1
+                                )
+                                roll_angle = math.acos(alignment)
+                                agent.controller.roll = sign(
+                                    math.pi / 2 - roll_angle
+                                )
+                        else:
+                            # Grid's normal double-jump branch: keep the
+                            # nose aimed along the ball's flat direction.
+                            defaultPD(
+                                agent,
+                                agent.me.local(ball_flat),
+                                up=Vector(z=1)
+                            )
+                    else:
+                        defaultPD(agent, target)
+
+            elif agent.controller.jump:
+                defaultPD(agent, target.flatten(), up=agent.me.up)
+
+            elif backboard_mode:
+                # If the ball is below the car, invert to expose the
+                # underside. If it is above the car, keep the roof facing it.
+                ball_below_car = (
+                    self.ball.z < agent.me.location.z - 80
                 )
 
-        # Keep lightweight renderer diagnostics for contact and trajectory.
-        agent.line(
-            agent.me.location,
-            agent.me.location + steering_direction.normalize() * 250,
-            agent.renderer.black
-        )
-        agent.line(
-            self.target - Vector(z=100),
-            self.target + Vector(z=100),
-            agent.renderer.green
-        )
+                defaultPD(
+                    agent,
+                    target,
+                    upside_down=ball_below_car
+                )
 
-        if T <= -0.4:
-            self._finish(agent)
+            elif virxrlcu.find_landing_plane(
+                tuple(agent.me.location),
+                tuple(agent.me.velocity),
+                agent.gravity.z
+            ) == 4:
+                defaultPD(agent, target, upside_down=True)
 
+            else:
+                defaultPD(
+                    agent,
+                    target,
+                    upside_down=self.shot_vector.z < 0
+                )
+
+        # only boost/throttle if we're facing the right direction
+        if abs(agent.me.forward.dot(direction)) > 0.5 and T > 0:
+            if T > 1 and not self.jumping: agent.controller.roll = 1 if self.shot_vector.z < 0 else -1
+            # the change in velocity the bot needs to put it on an intercept course with the target
+            delta_v = delta_x.dot(agent.me.forward) / T
+            if agent.me.boost > 0 and delta_v >= agent.boost_accel * min_boost_time:
+                agent.controller.boost = True
+                delta_v -= agent.boost_accel * min_boost_time
+
+            if delta_v >= throttle_accel * min_boost_time:
+                agent.controller.throttle = cap(delta_v / (throttle_accel * min_boost_time), -1, 1)
+
+        if T <= -0.4 or (not self.jumping and T > 1.5 and not virxrlcu.aerial_shot_is_viable(T, agent.boost_accel, tuple(agent.gravity), agent.me.get_raw(agent), tuple(self.target))):
+            agent.pop()
+            agent.shooting = False
+            agent.push(ball_recovery())
+        elif (self.ceiling and self.target.dist(agent.me.location) < 92 + agent.me.hitbox.length and not agent.me.doublejumped and agent.me.location.z < agent.ball.location.z + 92 and self.target.y * side(agent.team) > -4240) or (not self.ceiling and not agent.me.doublejumped and T < 0.1):
+            agent.dbg_2d("Flipping")
+            local_target = agent.me.local_location(self.target).flatten().normalize()
+            agent.controller.pitch = -local_target.x
+            agent.controller.yaw = local_target.y
+            agent.controller.jump = True
 
 class half_flip:
     """
@@ -4020,7 +4039,7 @@ class ground_shot:
         # Capping T above 0 to prevent division problems
         time_remaining = cap(T, 0.000001, 6)
 
-        if T > 0.1 or self.ball_location is None:
+        if T > 0 or self.ball_location is None:
             ball_slice = _safe_prediction_slice(agent, T)
             if ball_slice is None:
                 agent.pop()
