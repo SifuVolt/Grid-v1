@@ -2179,6 +2179,14 @@ class Bot(VirxERLU):
                     if current_name in ordinary_shots and not committed_routine_lock:
                         self.clear()
 
+                    # Tell teammates this bot no longer owns a shot. They
+                    # should remove the claim and continue normal role selection.
+                    self.teamplay_shot = None
+                    self.cover_role_released = False
+                    self.last_comms_signature = None
+                    self.last_comms_send_time = -999.0
+                    self.send_teamplay_comm("SHOT_ABANDONED", 0.0, 10.0)
+
                     # Yield to the teammate's better opportunity.
                     # Continue to the existing fallback behaviour.
                 else:
@@ -2447,6 +2455,7 @@ class Bot(VirxERLU):
             if status not in {
                 "SHOT_FOUND",
                 "ANY_SHOT_FOUND",
+                "SHOT_ABANDONED",
                 "LOW_BOOST",
                 "NO_SHOT",
                 "DEFEND",
