@@ -1,7 +1,7 @@
 import virxrlcu
 from util.agent import VirxERLU
 from util.utils import (Vector, almost_equals, cap, cap_in_field, defaultDrive,
-                        defaultPD, lerp, math, peek_generator, side, sign,
+                        defaultPD, defaultThrottle, lerp, math, peek_generator, side, sign,
                         dodge_impulse)
 import random
 from util.grid_double_jump import new_jump_time, new_max_jump_height
@@ -207,7 +207,7 @@ class wall_approach:
     WALL_Y = 5070
     MIN_BALL_HEIGHT = 190
     MAX_BALL_HEIGHT = 2200
-    MAX_WALL_GAP = 650
+    MAX_WALL_GAP = 1800
 
     def __init__(self, intercept_time, targets=None):
         self.intercept_time = intercept_time
@@ -295,7 +295,6 @@ class wall_approach:
             surface is None
             or ball.z < self.MIN_BALL_HEIGHT
             or ball.z > self.MAX_BALL_HEIGHT
-            or ball.z < car.location.z + 60
         ):
             print(
                 f"[WALL DRIVE] STOP: left wall window "
@@ -310,8 +309,8 @@ class wall_approach:
         wall_velocity = (
             ball_velocity.x if axis == "x" else ball_velocity.y
         )
-        if wall_gap > 180 and wall_velocity * wall_side < -180:
-            print("[WALL DRIVE] STOP: ball moving away from wall", flush=True)
+        if wall_gap > 260 and wall_velocity * wall_side < 260:
+            print("[WALL DRIVE] STOP: ball not approaching wall", flush=True)
             agent.pop()
             agent.shooting = False
             return
@@ -385,6 +384,17 @@ class wall_approach:
         local_target = car.local_location(drive_target)
         time_left = max(0.12, min(T, 3.0))
         speed_required = min(2200, max(900, distance / time_left))
+
+        # Slow down before sharp turns instead of asking for full speed
+        # while the nose is pointed away from the wall route.
+        local_angle = abs(math.atan2(local_target.y, local_target.x))
+        turn_speed_cap = (
+            950 if local_angle > 1.65 else
+            1250 if local_angle > 1.20 else
+            1650 if local_angle > 0.75 else
+            2200
+        )
+        speed_required = min(speed_required, turn_speed_cap)
         speed = car.velocity.magnitude()
         if self.last_debug_time < 0 or agent.time - self.last_debug_time >= 0.35:
             self.last_debug_time = agent.time
@@ -392,18 +402,47 @@ class wall_approach:
                 f"[WALL DRIVE] {drive_phase} surface={axis}{wall_side:+d} "
                 f"target=({drive_target.x:.0f},{drive_target.y:.0f},{drive_target.z:.0f}) "
                 f"distance={distance:.0f} T={T:.2f} speed={speed_required:.0f} "
-                f"boost={car.boost:.0f}",
+                f"boost={car.boost:.0f} controller={controller_mode} "
+                f"steer={agent.controller.steer:.2f} yaw={agent.controller.yaw:.2f} "
+                f"throttle={agent.controller.throttle:.2f}",
                 flush=True
             )
 
-        defaultDrive(agent, speed_required, local_target)
-        # Boost only when it closes a real speed/reachability gap.
-        agent.controller.boost = (
+        if on_wall:
+            # On a vertical wall, world-up is wrong: it rolls the car away
+            # from the surface. Keep the car's roof normal aligned with the
+            # wall normal while steering toward the contact point.
+            wall_up = (
+                Vector(-wall_side, 0, 0)
+                if axis == "x"
+                else Vector(0, -wall_side, 0)
+            )
+            target_angles = defaultPD(
+                agent, local_target, up=car.local(wall_up)
+            )
+            defaultThrottle(
+                agent, speed_required, target_angles, local_target
+            )
+            controller_mode = "SURFACE PD"
+        else:
+            defaultDrive(agent, speed_required, local_target)
+            controller_mode = "GROUND PD"
+
+        # Keep VirxERLU's speed controller, but add a wall-shot urgency
+        # override when there is a genuine acceleration deficit.
+        yaw_error = abs(target_angles[1]) if on_wall else local_angle
+        needs_boost = (
             car.boost > 0
-            and distance > 450
-            and speed_required > max(1100.0, speed + 100.0)
-            and distance / time_left > speed + 100.0
+            and distance > 550
+            and speed_required > speed + 140
+            and yaw_error < 0.85
+            and not agent.controller.handbrake
         )
+        if needs_boost:
+            agent.controller.throttle = 1
+            agent.controller.boost = True
+        elif yaw_error > 1.15 or agent.controller.handbrake:
+            agent.controller.boost = False
 
         if on_wall and car.location.dist(ball) < 190:
             print(
