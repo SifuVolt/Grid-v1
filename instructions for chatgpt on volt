@@ -1525,7 +1525,7 @@ class Bot(VirxERLU):
             # look for an aerial intercept. The aerial routine owns the
             # double-jump launch from the wall; otherwise keep wall driving.
             car = self.me
-            attached_wall = tools.car_wall_surface(car)
+            attached_wall = tools.car_wall_surface(car, self.team)
             if (
                 attached_wall is not None
                 and not car.doublejumped
@@ -1547,7 +1547,7 @@ class Bot(VirxERLU):
                         )
                         ball_location = aerial_slice.physics.location
                         ball_surface = tools.wall_surface_for_ball(
-                            ball_location, max_gap=650.0
+                            ball_location, max_gap=650.0, team=self.team
                         )
                         same_wall = (
                             ball_surface is not None
