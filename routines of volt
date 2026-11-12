@@ -222,7 +222,7 @@ class wall_approach:
         self.intercept_time = shot.intercept_time
         self.targets = getattr(shot, "targets", self.targets)
 
-    def wall_surface_for_ball(self, ball):
+    def wall_surface_for_ball(self, ball, team=None):
         radius = 92.75
         candidates = [
             ("x", 1 if ball.x >= 0 else -1, 4096.0 - abs(ball.x) - radius),
@@ -235,10 +235,13 @@ class wall_approach:
             # The low central back-wall opening is the goal interior.
             if axis == "y" and abs(ball.x) < 900 and ball.z < 700:
                 continue
+            # Exclude our own back wall from attacking wall-drive routes.
+            if axis == "y" and team is not None and wall_side == side(team):
+                continue
             return axis, wall_side, max(0.0, gap)
         return None
 
-    def car_wall_surface(self, car):
+    def car_wall_surface(self, car, team=None):
         if (
             abs(car.location.x) > 3500
             and abs(car.up.x) > 0.65
@@ -250,7 +253,9 @@ class wall_approach:
             and abs(car.up.y) > 0.65
             and car.up.y * car.location.y < 0
         ):
-            return "y", (1 if car.location.y >= 0 else -1)
+            wall_side = 1 if car.location.y >= 0 else -1
+            if team is None or wall_side != side(team):
+                return "y", wall_side
         return None
 
     def run(self, agent: VirxERLU, manual=False):
@@ -290,7 +295,7 @@ class wall_approach:
             agent.shooting = False
             return
 
-        surface = self.wall_surface_for_ball(ball)
+        surface = self.wall_surface_for_ball(ball, agent.team)
         if (
             surface is None
             or ball.z < self.MIN_BALL_HEIGHT
@@ -334,7 +339,7 @@ class wall_approach:
                 max(110, ball.z - goal_direction.z * 185)
             )
 
-        attached_wall = self.car_wall_surface(car)
+        attached_wall = self.car_wall_surface(car, agent.team)
         if attached_wall is not None and attached_wall != (axis, wall_side):
             print(
                 f"[WALL DRIVE] STOP: different wall "
@@ -1236,18 +1241,29 @@ class Aerial:
         xf = agent.me.location + agent.me.velocity * T + 0.5 * agent.gravity * T * T
         vf = agent.me.velocity + agent.gravity * T
 
-        slice_n = math.ceil(T * 120) - 1
+        prediction = agent.ball_prediction_struct
+        slices = prediction.slices
+        # Select the slice by its absolute game timestamp. The old ceil(T*120)
+        # index could drift from the intercept after prediction updates, and
+        # the previous 0.1s guard froze the ball at a stale position.
+        slice_n = min(
+            range(len(slices)),
+            key=lambda i: abs(
+                slices[i].game_seconds - self.intercept_time
+            )
+        )
         agent.dbg_2d(f"Shot slice #: {slice_n}")
 
-        if T > 0.1 or self.ball is None:
-            ball = agent.ball_prediction_struct.slices[slice_n].physics.location
-            self.ball = Vector(ball.x, ball.y, ball.z)
-            self.ceiling = agent.me.location.z > 2044 - agent.me.hitbox.height * 2 and not agent.me.jumped
+        aerial_physics = slices[slice_n].physics
+        ball = aerial_physics.location
+        self.ball = Vector(ball.x, ball.y, ball.z)
+        self.ceiling = (
+            agent.me.location.z > 2044 - agent.me.hitbox.height * 2
+            and not agent.me.jumped
+        )
 
-        
         # Use the predicted ball velocity and Party Cannon's post-hit
         # trajectory model to choose the outgoing shot direction.
-        aerial_physics = agent.ball_prediction_struct.slices[slice_n].physics
         aerial_ball_velocity = Vector(
             aerial_physics.velocity.x,
             aerial_physics.velocity.y,
@@ -1442,8 +1458,17 @@ class Aerial:
                     else:
                         defaultPD(agent, target)
 
-            elif agent.controller.jump:
-                defaultPD(agent, target.flatten(), up=agent.me.up)
+            elif agent.controller.jump and not self.dodging:
+                if T > 0.45 and abs(delta_x.z) > 80:
+                    # Party Cannon aims in 3D while the aerial is launching.
+                    # Preserve the quick double-jump path for near contacts.
+                    defaultPD(
+                        agent,
+                        target,
+                        up=Vector(z=1)
+                    )
+                else:
+                    defaultPD(agent, target.flatten(), up=agent.me.up)
 
             elif backboard_mode:
                 # If the ball is below the car, invert to expose the
@@ -1472,6 +1497,13 @@ class Aerial:
                     upside_down=self.shot_vector.z < 0
                 )
 
+        if self.dodging:
+            # A neutral second-jump pulse avoids turning the fast aerial into
+            # an unintended directional dodge. Boost remains enabled below.
+            agent.controller.pitch = 0
+            agent.controller.yaw = 0
+            agent.controller.roll = 0
+
         # Check the remaining flight against Party Cannon's boost budget.
         # The position/velocity supplied here are Volt's existing predicted
         # values, including the current jump model above.
@@ -1498,7 +1530,7 @@ class Aerial:
                 return
 
         # Party Cannon's forward-projection boost and air-throttle control.
-        if T > 0 and not self.dodging:
+        if T > 0:
             party_cannon_forward_need = delta_x.dot(agent.me.forward) / T
             party_cannon_forward_angle = (
                 math.acos(cap(
