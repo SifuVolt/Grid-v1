@@ -209,9 +209,10 @@ class wall_approach:
     MAX_BALL_HEIGHT = 2200
     MAX_WALL_GAP = 1800
 
-    def __init__(self, intercept_time, targets=None):
+    def __init__(self, intercept_time, targets=None, reset_setup=False):
         self.intercept_time = intercept_time
         self.targets = targets
+        self.reset_setup = reset_setup
         self.ball_location = None
         self.start_time = -1
         self.last_debug_time = -1
@@ -345,6 +346,15 @@ class wall_approach:
             return
 
         on_wall = attached_wall == (axis, wall_side)
+        if self.reset_setup and on_wall and car.location.dist(ball) < 260:
+            print(
+                f"[FLIP RESET] wall contact reached "
+                f"distance={car.location.dist(ball):.0f} T={T:.2f}",
+                flush=True
+            )
+            agent.pop()
+            return
+
         if on_wall:
             drive_target = contact_target
             drive_phase = "WALL CLIMB"
@@ -395,6 +405,7 @@ class wall_approach:
         )
         speed_required = min(speed_required, turn_speed_cap)
         speed = car.velocity.magnitude()
+        controller_mode = "SURFACE PD" if on_wall else "GROUND PD"
         if self.last_debug_time < 0 or agent.time - self.last_debug_time >= 0.35:
             self.last_debug_time = agent.time
             print(
@@ -449,6 +460,303 @@ class wall_approach:
                 f"ball=({ball.x:.0f},{ball.y:.0f},{ball.z:.0f}) T={T:.2f}",
                 flush=True
             )
+
+
+class flip_reset:
+    """
+    Side-wall flip-reset setup.
+
+    Get the ball onto a side wall, leave the wall, use a neutral double-jump,
+    then aim the car's wheel plane at the ball. A reset is accepted only after
+    the dodge was spent and becomes available again near the ball in mid-air.
+    """
+
+    def __init__(self, intercept_time, targets=None, mode="wall", wall_side=0):
+        self.intercept_time = intercept_time
+        self.targets = targets
+        self.mode = mode
+        self.wall_side = wall_side
+        self.phase = 0
+        self.phase_start = -1.0
+        self.wall_setup = None
+        self.flip_spent = False
+        self.last_debug_time = -1.0
+
+    def update(self, shot):
+        if self.phase == 0:
+            self.intercept_time = shot.intercept_time
+            self.wall_side = getattr(shot, "wall_side", self.wall_side)
+            self.mode = getattr(shot, "mode", self.mode)
+        self.targets = getattr(shot, "targets", self.targets)
+
+    @staticmethod
+    def _side_wall_contact(car):
+        return (
+            abs(car.location.x) > 3500
+            and abs(car.up.x) > 0.65
+            and car.up.x * car.location.x < 0
+        )
+
+    def _handoff_to_aerial(self, agent, reset_confirmed):
+        prediction = getattr(agent, "ball_prediction_struct", None)
+        slices = getattr(prediction, "slices", None) if prediction is not None else None
+        intercept_time = agent.time + 0.45
+        if slices:
+            wanted_time = agent.time + 0.45
+            future_slice = min(
+                slices,
+                key=lambda item: abs(item.game_seconds - wanted_time)
+            )
+            intercept_time = max(agent.time + 0.15, future_slice.game_seconds)
+
+        print(
+            f"[FLIP RESET] {'CONFIRMED' if reset_confirmed else 'handoff without reset'} "
+            f"boost={agent.me.boost:.0f} doublejumped={agent.me.doublejumped}",
+            flush=True
+        )
+        agent.pop()
+        agent.push(Aerial(intercept_time, agent.foe_goal_shot, fast_aerial=False))
+        agent.shooting = True
+
+    def _start_wall_setup(self, agent, intercept_time):
+        self.wall_setup = wall_approach(
+            intercept_time,
+            agent.foe_goal_shot,
+            reset_setup=True
+        )
+        self.phase = 1
+        print(
+            f"[FLIP RESET] wall setup mode={self.mode} "
+            f"side={self.wall_side:+d} intercept={intercept_time - agent.time:.2f}s",
+            flush=True
+        )
+        agent.push(self.wall_setup)
+
+    def _dribble_to_wall(self, agent):
+        car = agent.me
+        ball = agent.ball.location
+        wall_gap = 4096.0 - abs(ball.x) - 92.75
+        ball_distance = car.location.dist(ball)
+
+        if ball.z >= 180 and wall_gap <= 520:
+            prediction = getattr(agent, "ball_prediction_struct", None)
+            slices = getattr(prediction, "slices", None) if prediction is not None else None
+            intercept_time = agent.time + 0.9
+            if slices:
+                for ball_slice in slices[12:min(len(slices), 360)]:
+                    loc = ball_slice.physics.location
+                    vel = ball_slice.physics.velocity
+                    gap = 4096.0 - abs(loc.x) - 92.75
+                    if (
+                        180 <= loc.z <= 1800
+                        and gap <= 550
+                        and (vel.x * self.wall_side > 80 or gap <= 220)
+                        and ball_slice.game_seconds > agent.time + 0.12
+                    ):
+                        intercept_time = ball_slice.game_seconds
+                        break
+            self._start_wall_setup(agent, intercept_time)
+            return
+
+        if (
+            agent.time - self.phase_start > 3.0
+            or ball_distance > 1250
+            or ball.z > 430
+        ):
+            print(
+                f"[FLIP RESET] dribble setup abandoned "
+                f"distance={ball_distance:.0f} wall_gap={wall_gap:.0f}",
+                flush=True
+            )
+            agent.pop()
+            agent.shooting = False
+            return
+
+        push_direction = Vector(self.wall_side, 0, 0)
+        drive_target = ball - push_direction * 250
+        local_target = car.local_location(drive_target)
+        distance = car.location.dist(drive_target)
+        speed_required = min(1450, max(750, distance * 1.35))
+        local_angle = abs(math.atan2(local_target.y, local_target.x))
+        defaultDrive(agent, speed_required, local_target)
+        agent.controller.boost = (
+            car.boost > 0
+            and distance > 850
+            and local_angle < 0.38
+            and car.velocity.flatten().magnitude() < 1650
+        )
+
+        if self.last_debug_time < 0 or agent.time - self.last_debug_time >= 0.4:
+            self.last_debug_time = agent.time
+            print(
+                f"[FLIP RESET] DRIBBLE ball_dist={ball_distance:.0f} "
+                f"wall_gap={wall_gap:.0f} target=({drive_target.x:.0f},"
+                f"{drive_target.y:.0f}) boost={car.boost:.0f}",
+                flush=True
+            )
+
+    def run(self, agent: VirxERLU):
+        agent.shooting = True
+
+        if self.phase == 0:
+            if self.mode == "dribble":
+                self._dribble_to_wall(agent)
+                return
+            self._start_wall_setup(agent, self.intercept_time)
+            return
+
+        # This parent resumes after its wall_approach child has popped.
+        if self.phase == 1:
+            car = agent.me
+            distance = car.location.dist(agent.ball.location)
+            if distance > 760 or (
+                not self._side_wall_contact(car)
+                and not car.airborne
+            ):
+                print(
+                    f"[FLIP RESET] wall setup missed "
+                    f"distance={distance:.0f} airborne={car.airborne}",
+                    flush=True
+                )
+                self._handoff_to_aerial(agent, False)
+                return
+
+            self.phase = 2
+            self.phase_start = agent.time
+            print(
+                f"[FLIP RESET] WALL POP distance={distance:.0f} "
+                f"speed={car.velocity.magnitude():.0f}",
+                flush=True
+            )
+
+        if self.phase == 2:
+            elapsed = agent.time - self.phase_start
+            if elapsed < 0.11:
+                agent.controller.jump = True
+                agent.controller.pitch = 0
+                agent.controller.yaw = 0
+                agent.controller.roll = 0
+                agent.controller.boost = False
+                return
+
+            if elapsed < 0.18:
+                agent.controller.jump = False
+                agent.controller.pitch = 0
+                agent.controller.yaw = 0
+                agent.controller.roll = 0
+                return
+
+            if elapsed < 0.27:
+                agent.controller.jump = True
+                agent.controller.pitch = 0
+                agent.controller.yaw = 0
+                agent.controller.roll = 0
+                return
+
+            agent.controller.jump = False
+            self.phase = 3
+            self.phase_start = agent.time
+            print("[FLIP RESET] UNDERSIDE APPROACH", flush=True)
+
+        if self.phase == 3:
+            prediction = getattr(agent, "ball_prediction_struct", None)
+            slices = getattr(prediction, "slices", None) if prediction is not None else None
+            if not slices:
+                self._handoff_to_aerial(agent, False)
+                return
+
+            wanted_time = agent.time + 0.55
+            future_slice = min(
+                slices,
+                key=lambda item: abs(item.game_seconds - wanted_time)
+            )
+            physics = future_slice.physics
+            ball = Vector(
+                physics.location.x,
+                physics.location.y,
+                physics.location.z
+            )
+
+            car = agent.me
+            away_from_ball = (car.location - ball).normalize()
+            if away_from_ball.magnitude() < 0.01:
+                away_from_ball = car.up.normalize()
+
+            half_height = float(getattr(car.hitbox, "height", 36.0)) * 0.5
+            wheel_standoff = 92.75 + half_height + 8.0
+            wheel_contact_target = ball + away_from_ball * wheel_standoff
+            position_error = wheel_contact_target - car.location
+
+            goal_direction = (
+                agent.foe_goal.location - ball
+            ).flatten().normalize()
+            if goal_direction.magnitude() < 0.01:
+                goal_direction = car.forward.flatten().normalize()
+
+            nose_direction = (
+                goal_direction - away_from_ball * goal_direction.dot(away_from_ball)
+            ).normalize()
+            if nose_direction.magnitude() < 0.01:
+                nose_direction = (
+                    car.forward - away_from_ball * car.forward.dot(away_from_ball)
+                ).normalize()
+            if nose_direction.magnitude() < 0.01:
+                nose_direction = car.forward
+
+            defaultPD(
+                agent,
+                car.local(nose_direction),
+                up=away_from_ball
+            )
+
+            time_to_target = max(0.12, future_slice.game_seconds - agent.time)
+            forward_need = position_error.dot(car.forward) / time_to_target
+            direction_error = math.acos(cap(
+                car.forward.dot(position_error.normalize()),
+                -1,
+                1
+            )) if position_error.magnitude() > 1 else math.pi
+
+            agent.controller.throttle = cap(
+                forward_need / max(1.0, throttle_accel * 0.12),
+                -1,
+                1
+            )
+            agent.controller.boost = (
+                car.boost > 0
+                and time_to_target > 0.14
+                and position_error.magnitude() > 230
+                and forward_need > 280
+                and direction_error < 0.58
+            )
+
+            if car.doublejumped:
+                self.flip_spent = True
+
+            current_ball_distance = car.location.dist(agent.ball.location)
+            if (
+                self.flip_spent
+                and not car.doublejumped
+                and car.airborne
+                and current_ball_distance < 260
+            ):
+                self._handoff_to_aerial(agent, True)
+                return
+
+            elapsed = agent.time - self.phase_start
+            if elapsed > 1.35 or future_slice.game_seconds <= agent.time + 0.06:
+                self._handoff_to_aerial(agent, False)
+                return
+
+            if self.last_debug_time < 0 or agent.time - self.last_debug_time >= 0.35:
+                self.last_debug_time = agent.time
+                print(
+                    f"[FLIP RESET] WHEEL TARGET ball_dist={current_ball_distance:.0f} "
+                    f"target_error={position_error.magnitude():.0f} "
+                    f"T={time_to_target:.2f} boost={car.boost:.0f} "
+                    f"flip_spent={self.flip_spent} doublejumped={car.doublejumped}",
+                    flush=True
+                )
 
 class wall_dash:
     JUMP_TIME = 0.07
