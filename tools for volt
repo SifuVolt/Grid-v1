@@ -119,7 +119,12 @@ def _wall_drive_eta(distance, car, direction, on_wall=False):
 def find_flip_reset(agent, cap_=3.5):
     """Find a side-wall reset setup with enough boost for the climb and aerial."""
     car = agent.me
-    if car.boost < 40:
+    nearby_big_pads = [
+        pad for pad in agent.boosts
+        if pad.active and pad.large
+        and pad.location.dist(car.location) <= 1650
+    ]
+    if car.boost < 40 and not nearby_big_pads:
         return None
 
     attached_wall = car_wall_surface(car, agent.team)
@@ -195,6 +200,18 @@ def find_flip_reset(agent, cap_=3.5):
             )
             eta = ground_eta + climb_distance / climb_speed
 
+        if car.boost < 40:
+            closest_pad = min(
+                nearby_big_pads,
+                key=lambda pad: pad.location.dist(car.location)
+            )
+            pad_distance = closest_pad.location.dist(car.location)
+            pad_eta = pad_distance / max(
+                1050.0,
+                min(1800.0, car.velocity.flatten().magnitude() + 650.0)
+            )
+            eta += pad_eta
+
         if eta > intercept_in - 0.10:
             continue
 
@@ -218,7 +235,9 @@ def find_flip_reset(agent, cap_=3.5):
         )
 
     # Secondary setup: the ball is close enough to carry toward a side wall.
-    if not car.airborne and car.boost >= 52:
+    if not car.airborne and (
+        car.boost >= 52 or nearby_big_pads
+    ):
         ball = agent.ball.location
         ball_distance = car.location.dist(ball)
         wall_side = 1 if ball.x >= 0 else -1
