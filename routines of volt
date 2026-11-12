@@ -1010,6 +1010,11 @@ class Aerial:
         self.jump_time = -1
         self.counter = 0
         self.double_jump_complete = False
+        self.jump_amount = 1
+        self.jump_frames = 0
+        self.prev_jump = False
+        self.second_jump_sent = False
+        self.required_jump_time = 0.0
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -1128,41 +1133,66 @@ class Aerial:
                 self.jump_time = agent.time
                 self.counter = 0
                 self.double_jump_complete = False
+                self.jump_frames = 0
+                self.prev_jump = False
+                self.second_jump_sent = False
 
-            jump_elapsed = agent.time - self.jump_time
+                # Grid's jump solver chooses whether this contact needs one
+                # jump or the full double-jump launch.
+                required_height = max(
+                    0.0, self.target.z - agent.me.location.z
+                )
+                self.required_jump_time, self.jump_amount = new_jump_time(
+                    required_height, self.jump_type_fast
+                )
+                if self.jump_amount not in (1, 2):
+                    self.jump_amount = 2 if self.jump_type_fast else 1
 
-            # how much of the jump acceleration time is left
-            tau = max(0.0, jump_max_duration - jump_elapsed)
+            jump_elapsed = max(0.0, agent.time - self.jump_time)
+            self.jump_frames = max(0, round(jump_elapsed * 120))
 
-            # impulse from the first jump
-            if jump_elapsed == 0:
-                vf += agent.me.up * jump_speed
-                xf += agent.me.up * jump_speed * T
-
-            # acceleration from holding jump
-            vf += agent.me.up * jump_acc * tau
-            xf += agent.me.up * jump_acc * tau * (T - 0.5 * tau)
-
-            if self.jump_type_fast:
-                # impulse from the second jump
-                vf += agent.me.up * jump_speed
-                xf += agent.me.up * jump_speed * (T - tau)
-
-                if jump_elapsed <= jump_max_duration:
-                    agent.controller.jump = True
-                elif self.counter < 4:
-                    self.counter += 1
-
-                if self.counter == 3:
-                    agent.controller.jump = True
-                    self.dodging = True
-                elif self.counter == 4:
-                    self.dodging = self.jumping = False
-                    self.double_jump_complete = True
-            elif jump_elapsed <= jump_max_duration:
+            # Grid's launch: hold the first jump for 24 frames, release it,
+            # then send a distinct one-frame second-jump press when needed.
+            if self.jump_frames < 24:
                 agent.controller.jump = True
+                self.prev_jump = True
+            elif (
+                self.jump_amount >= 2
+                and not self.second_jump_sent
+                and not agent.me.doublejumped
+            ):
+                if self.prev_jump:
+                    agent.controller.jump = False
+                    self.prev_jump = False
+                else:
+                    agent.controller.jump = True
+                    self.second_jump_sent = True
+                    self.prev_jump = True
             else:
+                agent.controller.jump = False
+                self.prev_jump = False
                 self.jumping = False
+                self.double_jump_complete = True
+
+            # Predict the jump contribution at the intercept. The first
+            # jump is already in the car's velocity after takeoff; account
+            # for its initial impulse on the launch tick and for the Grid
+            # 292 uu/s second-jump impulse until the packet reports it.
+            if self.jump_frames == 0:
+                first_jump_impulse = 564.9931640625
+                vf += agent.me.up * first_jump_impulse
+                xf += agent.me.up * (first_jump_impulse * max(0.0, T))
+
+            if (
+                self.jump_amount >= 2
+                and not agent.me.doublejumped
+                and not self.second_jump_sent
+            ):
+                second_jump_delay = max(0.0, 25 / 120 - jump_elapsed)
+                second_jump_flight = max(0.0, T - second_jump_delay)
+                if second_jump_flight > 0:
+                    vf += agent.me.up * 292
+                    xf += agent.me.up * (292 * second_jump_flight)
 
         if self.ceiling:
             agent.dbg_2d(f"Ceiling shot")
