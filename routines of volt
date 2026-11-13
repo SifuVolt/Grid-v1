@@ -1613,12 +1613,25 @@ class AirDribble(Aerial):
                 self.double_jump_complete = False
 
             if agent.time >= self.first_intercept_time + 0.06:
+                contact_distance = agent.me.location.dist(agent.ball.location)
+                if contact_distance > 600:
+                    print(
+                        f"[AIR DRIBBLE] first touch missed; "
+                        f"car_ball={contact_distance:.0f}",
+                        flush=True
+                    )
+                    agent.pop()
+                    agent.shooting = False
+                    agent.push(ball_recovery())
+                    return
+
                 self.stage = 2
                 self.finisher = Aerial(
                     self.second_intercept_time, self.targets, False
                 )
                 print(
-                    f"[AIR DRIBBLE] keep-up phase complete; "
+                    f"[AIR DRIBBLE] keep-up contact confirmed; "
+                    f"car_ball={contact_distance:.0f} "
                     f"finisher_in={self.second_intercept_time - agent.time:.2f}s",
                     flush=True
                 )
