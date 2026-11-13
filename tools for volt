@@ -116,7 +116,7 @@ def _wall_drive_eta(distance, car, direction, on_wall=False):
 
 
 def find_wall_drive(agent, cap_=4.0):
-    """Find a reachable touch on either side wall or either back wall."""
+    """Find a reachable wall touch at the ball's upward-roll peak."""
     car = agent.me
     debug_now = agent.time
     debug_due = (
@@ -153,20 +153,23 @@ def find_wall_drive(agent, cap_=4.0):
     reject_height = 0
     reject_other_wall = 0
     reject_unreachable = 0
+    reject_not_peak = 0
     best = None
-    max_index = min(len(slices), int(cap_ * 120))
+    max_index = min(len(slices) - 1, int(cap_ * 120))
 
-    for index in range(12, max_index):
+    for index in range(13, max_index):
         ball_slice = slices[index]
+        previous = slices[index - 1].physics
+        following = slices[index + 1].physics
         physics = ball_slice.physics
         loc = physics.location
         vel = physics.velocity
+
         surface = wall_surface_for_ball(loc, 1800.0, agent.team)
         if surface is None:
             reject_wall_window += 1
             continue
 
-        # Exclude ceiling-height touches; this is a vertical-wall routine.
         if not 180 <= loc.z <= 2200 or loc.z < car.location.z + 60:
             reject_height += 1
             continue
@@ -180,73 +183,115 @@ def find_wall_drive(agent, cap_=4.0):
             reject_other_wall += 1
             continue
 
-        # The ball should be on the wall or still travelling toward it.
         wall_velocity = vel.x if axis == "x" else vel.y
-        # Start the approach before the ball reaches the wall. At larger
-        # gaps it must be moving decisively toward that wall.
         if wall_gap > 260 and wall_velocity * wall_side < 260:
             reject_wall_window += 1
             continue
 
+        # A useful wall shot is a local height maximum reached while the
+        # ball was climbing. Do not select an arbitrary descending slice.
+        is_peak = (
+            loc.z >= previous.location.z
+            and loc.z >= following.location.z
+            and previous.velocity.z > 15
+            and vel.z <= 100
+        )
+        if not is_peak:
+            reject_not_peak += 1
+            continue
+
+        # Build the point the car must occupy behind the ball's wall-plane
+        # movement. At a near-vertical peak, this naturally puts it below.
+        tangent_velocity = Vector(0, vel.y, max(0.0, vel.z))
+        if tangent_velocity.magnitude() < 80:
+            tangent_velocity = Vector(
+                0, previous.velocity.y, max(0.0, previous.velocity.z)
+            )
+        if tangent_velocity.magnitude() < 80:
+            tangent_velocity = Vector(0, 0, 1)
+        else:
+            tangent_velocity = tangent_velocity.normalize()
+
+        behind_ball = Vector(
+            wall_side * 4050.0,
+            loc.y - tangent_velocity.y * 185.0,
+            max(110.0, loc.z - tangent_velocity.z * 185.0)
+        )
+
         if axis == "x":
-            wall_entry = Vector(wall_side * 3900, loc.y, max(100.0, car.location.z))
-            target = Vector(wall_side * 3900, loc.y, max(100.0, loc.z))
+            wall_entry = Vector(
+                wall_side * 3900.0,
+                behind_ball.y,
+                max(100.0, car.location.z)
+            )
             normal_distance = abs(wall_entry.x - car.location.x)
             tangent_distance = abs(wall_entry.y - car.location.y)
         else:
-            wall_entry = Vector(loc.x, wall_side * 4900, max(100.0, car.location.z))
-            target = Vector(loc.x, wall_side * 4900, max(100.0, loc.z))
+            wall_entry = Vector(
+                behind_ball.x,
+                wall_side * 4900.0,
+                max(100.0, car.location.z)
+            )
             normal_distance = abs(wall_entry.y - car.location.y)
             tangent_distance = abs(wall_entry.x - car.location.x)
 
         if attached_wall is not None:
-            distance = car.location.dist(target)
+            distance = car.location.dist(behind_ball)
             eta = _wall_drive_eta(
-                distance, car, target - car.location, on_wall=True
+                distance, car, behind_ball - car.location, on_wall=True
             )
         else:
-            # First reach the wall at floor height, then climb to the ball.
             ground_distance = normal_distance + tangent_distance
-            climb_distance = abs(target.z - car.location.z)
+            climb_distance = abs(behind_ball.z - car.location.z)
             ground_eta = _wall_drive_eta(
                 ground_distance, car, wall_entry - car.location
             )
-            climb_speed = max(700.0, min(1500.0, car.velocity.flatten().magnitude() + 500.0))
-            climb_eta = climb_distance / climb_speed
-            eta = ground_eta + climb_eta
+            climb_speed = max(
+                700.0,
+                min(1500.0, car.velocity.flatten().magnitude() + 500.0)
+            )
+            eta = ground_eta + climb_distance / climb_speed
+
         if eta > intercept_in - 0.08:
             reject_unreachable += 1
             continue
 
+        # Prefer the earliest peak the car can actually get behind, with
+        # only a small preference for a route that has extra time in hand.
         score = intercept_in + eta * 0.04
         if best is None or score < best[0]:
             best = (
                 score, intercept_in, loc.x, loc.y, loc.z,
-                axis, wall_side, wall_gap, eta
+                axis, wall_side, wall_gap, eta, tangent_velocity.y,
+                tangent_velocity.z
             )
 
     if best is None:
         if debug_due:
             print(
-                f"[WALL DRIVE FIND] no candidate | "
+                f"[WALL DRIVE FIND] no reachable peak | "
                 f"wall_window={reject_wall_window} "
                 f"height={reject_height} "
                 f"other_wall={reject_other_wall} "
+                f"not_peak={reject_not_peak} "
                 f"unreachable={reject_unreachable} slices={len(slices)}",
                 flush=True
             )
         return None
 
-    _, intercept_in, x, y, z, axis, wall_side, wall_gap, eta = best
+    (
+        _, intercept_in, x, y, z, axis, wall_side, wall_gap,
+        eta, tangent_y, tangent_z
+    ) = best
     print(
-        f"[WALL DRIVE FIND] surface={axis}{wall_side:+d} gap={wall_gap:.0f} "
-        f"eta={eta:.2f}s boost={car.boost:.0f} "
-        f"car=({car.location.x:.0f},{car.location.y:.0f},{car.location.z:.0f}) "
-        f"intercept={intercept_in:.2f}s ball=({x:.0f},{y:.0f},{z:.0f})",
+        f"[WALL DRIVE FIND] PEAK surface={axis}{wall_side:+d} "
+        f"eta={eta:.2f}s intercept={intercept_in:.2f}s "
+        f"ball=({x:.0f},{y:.0f},{z:.0f}) "
+        f"tangent=({tangent_y:.2f},{tangent_z:.2f}) "
+        f"car=({car.location.x:.0f},{car.location.y:.0f},{car.location.z:.0f})",
         flush=True
     )
     return wall_approach(agent.time + intercept_in, agent.foe_goal_shot)
-
 
 def find_ground_shot(agent, target, cap_=6):
     return find_shot(agent, target, cap_, can_aerial=False, can_double_jump=False, can_jump=False)
