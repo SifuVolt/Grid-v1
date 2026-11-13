@@ -1031,11 +1031,66 @@ class double_jump:
             agent.controller.jump = False
             self.prev_jump = False
 
-        # Aim toward the contact point during the jump.
-        local_contact = agent.me.local_location(
-            self.offset_target
+        # Match Aerial's predictive orientation controller rather than
+        # aiming at the static contact point. Predict where the car will be
+        # at the intercept using the same jump-hold and second-jump impulses,
+        # then orient toward the remaining contact error.
+        jump_elapsed = agent.time - self.jump_time
+        tau = max(0.0, jump_max_duration - jump_elapsed)
+        predicted_position = (
+            agent.me.location
+            + agent.me.velocity * T
+            + agent.gravity * (0.5 * T * T)
         )
-        defaultPD(agent, local_contact)
+
+        # Remaining acceleration from holding the first jump.
+        predicted_position += (
+            agent.me.up
+            * jump_acc
+            * tau
+            * (T - 0.5 * tau)
+        )
+
+        # Grid sends its second jump at the end of the 24-frame hold.
+        # Credit the impulse only for the part of the flight after it occurs.
+        second_jump_delay = max(
+            0.0, jump_max_duration - jump_elapsed
+        )
+        if self.second_jump_sent or agent.me.doublejumped:
+            second_jump_flight = max(0.0, T)
+        else:
+            second_jump_flight = max(
+                0.0, T - second_jump_delay
+            )
+
+        if second_jump_flight > 0:
+            predicted_position += (
+                agent.me.up * jump_speed * second_jump_flight
+            )
+
+        delta_x = self.offset_target - predicted_position
+        orientation_target = (
+            delta_x
+            if delta_x.magnitude() > 50
+            else self.shot_vector
+        )
+        local_orientation_target = agent.me.local(orientation_target)
+
+        # Use the same 3D-vs-level orientation choice as Aerial while it is
+        # launching: larger vertical corrections use world-up; otherwise
+        # keep the car level relative to its current up axis.
+        if T > 0.45 and abs(delta_x.z) > 80:
+            defaultPD(
+                agent,
+                local_orientation_target,
+                up=Vector(z=1)
+            )
+        else:
+            defaultPD(
+                agent,
+                local_orientation_target.flatten(),
+                up=agent.me.up
+            )
 
         # Use boost only when it can help close the remaining gap.
         if T > 0:
