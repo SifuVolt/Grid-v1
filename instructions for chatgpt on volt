@@ -2045,7 +2045,6 @@ class Bot(VirxERLU):
                 "speed_flip",
                 "speedflip_kickoff",
                 "Aerial",
-                "AirDribble",
             }
 
             # Keep the existing power clear running.
@@ -2095,14 +2094,8 @@ class Bot(VirxERLU):
         if not self.is_clear():
             active_routine = self.stack[0]
             committed_aerial = (
-                (
-                    active_routine.__class__.__name__ == "Aerial"
-                    and getattr(active_routine, "aerialing", False)
-                )
-                or (
-                    active_routine.__class__.__name__ == "AirDribble"
-                    and getattr(active_routine, "stage", 1) == 2
-                )
+                active_routine.__class__.__name__ == "Aerial"
+                and getattr(active_routine, "aerialing", False)
             )
         committed_routine_lock = (
             committed_jump_under_pressure or committed_aerial
@@ -2128,8 +2121,7 @@ class Bot(VirxERLU):
             "ground_shot",
             "jump_shot",
             "double_jump",
-            "Aerial",
-            "AirDribble"
+            "Aerial"
         }
 
         if self.is_clear() or self.odd_tick == 0:
@@ -2181,7 +2173,6 @@ class Bot(VirxERLU):
                         "jump_shot",
                         "ground_shot",
                         "Aerial",
-                        "AirDribble",
                         "wall_approach"
                     }
 
@@ -2221,8 +2212,7 @@ class Bot(VirxERLU):
                                 "ground_shot",
                                 "jump_shot",
                                 "double_jump",
-                                "Aerial",
-                                "AirDribble"
+                                "Aerial"
                             }
 
                             # Don't cancel an ordinary shot just because a
@@ -2281,20 +2271,12 @@ class Bot(VirxERLU):
                     flush=True
                 )
 
-            air_dribble = (
-                tools.find_air_dribble(self, self.foe_goal_shot)
-                if can_take_first_challenge and not fast_intercept_zone
-                else None
-            )
-
             fast_intercept_searched = (
                 fast_intercept_zone and can_take_first_challenge
             )
 
             if wall_drive is not None:
                 shot = wall_drive
-            elif air_dribble is not None:
-                shot = air_dribble
             elif fast_intercept_searched:
                 shot = routines.fast_intercept_finder().find(self)
 
@@ -2358,7 +2340,6 @@ class Bot(VirxERLU):
                             "jump_shot",
                             "double_jump",
                             "Aerial",
-                            "AirDribble",
                             "wall_approach"
                         }
 
