@@ -1489,13 +1489,20 @@ def find_air_dribble(agent, target, cap_=6):
     if not wall_rebound and not high_ball:
         return None
 
-    first = find_shot(
-        agent, target, cap_,
-        can_aerial=True,
-        can_double_jump=False,
-        can_jump=False,
-        can_ground=False
-    )
+    # Ignore the active routine's short intercept window while searching
+    # for a later second touch. Restore the live shooting state immediately.
+    was_shooting = agent.shooting
+    try:
+        agent.shooting = False
+        first = find_shot(
+            agent, target, cap_,
+            can_aerial=True,
+            can_double_jump=False,
+            can_jump=False,
+            can_ground=False
+        )
+    finally:
+        agent.shooting = was_shooting
     if not isinstance(first, Aerial):
         return None
 
