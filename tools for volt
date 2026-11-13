@@ -1596,7 +1596,10 @@ def find_air_dribble(agent, target, cap_=6):
         f"setup={'wall rebound' if wall_rebound else 'high ball'}",
         flush=True
     )
-    return AirDribble(first_time, best_second, target, first.fast_aerial)
+    return AirDribble(
+        first_time, best_second, target, first.fast_aerial,
+        wall_launch=wall_rebound
+    )
 
 
 def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
