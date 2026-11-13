@@ -1551,12 +1551,73 @@ class Aerial:
             agent.pop()
             agent.shooting = False
             agent.push(ball_recovery())
-        elif (self.ceiling and self.target.dist(agent.me.location) < 92 + agent.me.hitbox.length and not agent.me.doublejumped and agent.me.location.z < agent.ball.location.z + 92 and self.target.y * side(agent.team) > -4240) or (not self.ceiling and not agent.me.doublejumped and T < 0.1):
+        elif getattr(self, "allow_final_flip", True) and ((self.ceiling and self.target.dist(agent.me.location) < 92 + agent.me.hitbox.length and not agent.me.doublejumped and agent.me.location.z < agent.ball.location.z + 92 and self.target.y * side(agent.team) > -4240) or (not self.ceiling and not agent.me.doublejumped and T < 0.1)):
             agent.dbg_2d("Flipping")
             local_target = agent.me.local_location(self.target).flatten().normalize()
             agent.controller.pitch = -local_target.x
             agent.controller.yaw = local_target.y
             agent.controller.jump = True
+
+
+class AirDribble(Aerial):
+    """Two-contact aerial: a controlled keep-up touch followed by a goal shot."""
+
+    def __init__(self, first_intercept_time, second_intercept_time,
+                 targets=None, fast_aerial=True):
+        super().__init__(first_intercept_time, targets, fast_aerial)
+        self.first_intercept_time = first_intercept_time
+        self.second_intercept_time = second_intercept_time
+        self.stage = 1
+        self.allow_final_flip = False
+        self.finisher = None
+        self.keep_up_direction = None
+
+    def update(self, shot):
+        self.first_intercept_time = shot.first_intercept_time
+        self.second_intercept_time = shot.second_intercept_time
+        self.intercept_time = self.first_intercept_time
+        self.targets = shot.targets
+        self.fast_aerial = shot.fast_aerial
+
+    def _party_cannon_shot_direction(self, agent, ball, ball_velocity,
+                                     time_remaining):
+        goal_direction = super()._party_cannon_shot_direction(
+            agent, ball, ball_velocity, time_remaining
+        )
+        if self.stage != 1:
+            return goal_direction
+
+        # Hit from underneath with forward carry; the first touch is not a shot.
+        forward = goal_direction.flatten().normalize()
+        if forward.magnitude() < 0.001:
+            forward = agent.me.forward.flatten().normalize()
+        self.keep_up_direction = (
+            forward * 0.72 + Vector(z=0.69)
+        ).normalize()
+        return self.keep_up_direction
+
+    def run(self, agent: VirxERLU):
+        if self.stage == 1:
+            if agent.time >= self.first_intercept_time + 0.06:
+                self.stage = 2
+                self.finisher = Aerial(
+                    self.second_intercept_time, self.targets, False
+                )
+                print(
+                    f"[AIR DRIBBLE] keep-up phase complete; "
+                    f"finisher_in={self.second_intercept_time - agent.time:.2f}s",
+                    flush=True
+                )
+                return
+            super().run(agent)
+            return
+
+        if self.finisher is None:
+            self.finisher = Aerial(
+                self.second_intercept_time, self.targets, False
+            )
+        self.finisher.run(agent)
+
 
 class half_flip:
     """
