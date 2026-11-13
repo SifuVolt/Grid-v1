@@ -1563,7 +1563,7 @@ class AirDribble(Aerial):
     """Two-contact aerial: a controlled keep-up touch followed by a goal shot."""
 
     def __init__(self, first_intercept_time, second_intercept_time,
-                 targets=None, fast_aerial=True):
+                 targets=None, fast_aerial=True, wall_launch=False):
         super().__init__(first_intercept_time, targets, fast_aerial)
         self.first_intercept_time = first_intercept_time
         self.second_intercept_time = second_intercept_time
@@ -1571,6 +1571,7 @@ class AirDribble(Aerial):
         self.allow_final_flip = False
         self.finisher = None
         self.keep_up_direction = None
+        self.wall_launch = wall_launch
 
     def update(self, shot):
         self.first_intercept_time = shot.first_intercept_time
@@ -1601,6 +1602,16 @@ class AirDribble(Aerial):
 
     def run(self, agent: VirxERLU):
         if self.stage == 1:
+            # A car attached to a side wall is airborne in Volt's wrapper.
+            # Explicitly initiate the wall jump so the aerial's jump model
+            # includes the takeoff impulse instead of silently skipping it.
+            if self.wall_launch and not self.jumping:
+                self.jump_type_fast = self.fast_aerial
+                self.jumping = True
+                self.jump_time = agent.time
+                self.counter = 0
+                self.double_jump_complete = False
+
             if agent.time >= self.first_intercept_time + 0.06:
                 self.stage = 2
                 self.finisher = Aerial(
