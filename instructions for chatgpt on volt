@@ -2097,14 +2097,8 @@ class Bot(VirxERLU):
                 active_routine.__class__.__name__ == "Aerial"
                 and getattr(active_routine, "aerialing", False)
             )
-        committed_flip_reset = False
-        if not self.is_clear():
-            committed_flip_reset = any(
-                routine.__class__.__name__ == "flip_reset"
-                for routine in self.stack
-            )
         committed_routine_lock = (
-            committed_jump_under_pressure or committed_aerial or committed_flip_reset
+            committed_jump_under_pressure or committed_aerial
         )
 
         # Wall-shot attempt: only start from a clear stack so we don't
@@ -2127,8 +2121,7 @@ class Bot(VirxERLU):
             "ground_shot",
             "jump_shot",
             "double_jump",
-            "Aerial",
-            "flip_reset"
+            "Aerial"
         }
 
         if self.is_clear() or self.odd_tick == 0:
@@ -2143,13 +2136,9 @@ class Bot(VirxERLU):
                 or self.defensive_emergency()
             )
             if wall_allowed:
-                flip_reset_shot = tools.find_flip_reset(self)
-                if flip_reset_shot is not None:
-                    shot = flip_reset_shot
-                else:
-                    wall_drive = tools.find_wall_drive(self)
-                    if wall_drive is not None:
-                        shot = wall_drive
+                wall_drive = tools.find_wall_drive(self)
+                if wall_drive is not None:
+                    shot = wall_drive
             elif self.time - getattr(self, "_last_wall_drive_gate_debug", -999.0) >= 0.5:
                 self._last_wall_drive_gate_debug = self.time
                 print(
@@ -2162,10 +2151,8 @@ class Bot(VirxERLU):
 
             if shot is not None:
                 is_wall_drive = shot.__class__.__name__ == "wall_approach"
-                is_flip_reset = shot.__class__.__name__ == "flip_reset"
                 should_commit = (
                     is_wall_drive
-                    or is_flip_reset
                     or self.should_commit_to_shot(
                         self.teamplay_score,
                         self.teamplay_contact_time
@@ -2186,8 +2173,7 @@ class Bot(VirxERLU):
                         "jump_shot",
                         "ground_shot",
                         "Aerial",
-                        "wall_approach",
-                        "flip_reset"
+                        "wall_approach"
                     }
 
                     if current_name in ordinary_shots and not committed_routine_lock:
@@ -2206,7 +2192,7 @@ class Bot(VirxERLU):
                 else:
                     if (
                         not committed_routine_lock
-                        and shot.__class__.__name__ not in {"wall_approach", "flip_reset"}
+                        and shot.__class__.__name__ != "wall_approach"
                         and routines.half_flip_manager.request_for_shot(self, shot)
                     ):
                         return
@@ -2226,8 +2212,7 @@ class Bot(VirxERLU):
                                 "ground_shot",
                                 "jump_shot",
                                 "double_jump",
-                                "Aerial",
-                                "flip_reset"
+                                "Aerial"
                             }
 
                             # Don't cancel an ordinary shot just because a
@@ -2235,7 +2220,6 @@ class Bot(VirxERLU):
                             if (
                                 current_shot_name in ordinary_shots
                                 and new_shot_name in ordinary_shots
-                                and new_shot_name != "flip_reset"
                             ):
                                 current_intercept = getattr(
                                     self.stack[0], "intercept_time", float("inf")
@@ -2336,7 +2320,6 @@ class Bot(VirxERLU):
 
                 if (
                     not committed_routine_lock
-                    and shot.__class__.__name__ != "flip_reset"
                     and routines.half_flip_manager.request_for_shot(self, shot)
                 ):
                     return
@@ -2357,8 +2340,7 @@ class Bot(VirxERLU):
                             "jump_shot",
                             "double_jump",
                             "Aerial",
-                            "wall_approach",
-                            "flip_reset"
+                            "wall_approach"
                         }
 
                         # Don't cancel an ordinary shot just because a
@@ -2366,7 +2348,7 @@ class Bot(VirxERLU):
                         if (
                             current_shot_name in ordinary_shots
                             and new_shot_name in ordinary_shots
-                            and new_shot_name not in {"wall_approach", "flip_reset"}
+                            and new_shot_name != "wall_approach"
                         ):
                             current_intercept = getattr(
                                 self.stack[0], "intercept_time", float("inf")
