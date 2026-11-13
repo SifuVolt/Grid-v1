@@ -4141,58 +4141,43 @@ class jump_shot:
             delta_x = self.offset_target - xf
             d_direction = delta_x.normalize()
 
-            # Use the same 3D PD orientation used by Aerial while the
-            # jump is in progress. Aim at the predicted hitbox contact
-            # target (not simply the ball centre), so PD chooses the correct
-            # left/right yaw before the dodge.
+            # Jump-shot takeoff orientation:
+            # hold S (nose up) while using the A/D yaw axis to turn the
+            # car until its forward direction matches the intended
+            # ball-to-goal shot vector. Do not aim at the offset/contact
+            # point here: that would turn the car toward the approach side
+            # instead of lining its nose up with the outgoing shot.
             #
-            # For an airborne ball above the car, preserve the deliberate
-            # nose-up S tilt while keeping the PD-generated yaw and roll.
-            # Quick shots skip that tilt but still get the same left/right
-            # orientation. The existing counter-3 dodge timing is unchanged.
+            # defaultPD supplies the signed, proportional yaw from the
+            # local shot direction. We keep that yaw, force S, and disable
+            # roll so this is a clean nose-up + left/right turn manoeuvre.
             if self.counter < 3 and not self.dodging:
-                orientation_world = (
-                    delta_x if delta_x.magnitude() > 50
-                    else self.shot_vector
-                )
-                orientation_local = agent.me.local(orientation_world)
+                orientation_local = agent.me.local(self.shot_vector).normalize()
 
-                if orientation_local.magnitude() > 1:
+                if orientation_local.magnitude() > 0.001:
                     defaultPD(
                         agent,
-                        orientation_local.flatten(),
+                        orientation_local,
                         up=Vector(z=1)
                     )
+                    yaw_to_shot = agent.controller.yaw
                 else:
-                    local_ball = agent.me.local_location(self.ball_location)
-                    defaultPD(
-                        agent,
-                        local_ball.flatten(),
-                        up=Vector(z=1)
-                    )
+                    yaw_to_shot = 0
 
-                ball_is_airborne = self.ball_location.z > 130
-                ball_is_above_car = self.ball_location.z > agent.me.location.z + 65
-                hold_s = (
-                    ball_is_airborne
-                    and ball_is_above_car
-                    and not self.quick_shot
-                )
-
-                if hold_s:
-                    # Override only pitch; retain PD's left/right yaw and
-                    # roll so the car can tilt back while orienting.
-                    agent.controller.pitch = 1
+                agent.controller.pitch = 1
+                agent.controller.yaw = yaw_to_shot
+                agent.controller.roll = 0
 
                 if not self._orientation_logged:
                     print(
                         f"[JUMP SHOT ORIENT] T={T:.3f} "
-                        f"target_local=({orientation_local.x:.2f},"
+                        f"shot_local=({orientation_local.x:.2f},"
                         f"{orientation_local.y:.2f},"
                         f"{orientation_local.z:.2f}) "
-                        f"ball_z={self.ball_location.z:.0f} "
-                        f"car_z={agent.me.location.z:.0f} "
-                        f"hold_S={hold_s} counter={self.counter}",
+                        f"yaw={yaw_to_shot:.2f} "
+                        f"shot_dir=({self.shot_vector.x:.2f},"
+                        f"{self.shot_vector.y:.2f}) "
+                        f"counter={self.counter}",
                         flush=True
                     )
                     self._orientation_logged = True
