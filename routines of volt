@@ -314,24 +314,43 @@ class wall_approach:
             agent.shooting = False
             return
 
+        # Track the ball along the wall first. The wall-shot target is
+        # deliberately behind its tangent movement, not underneath it.
+        travel_direction = Vector(
+            0,
+            ball_velocity.y,
+            max(0.0, ball_velocity.z)
+        )
+        if travel_direction.magnitude() < 80:
+            travel_direction = Vector(0, 0, 1)
+        else:
+            travel_direction = travel_direction.normalize()
+
+        # At the peak, turn the final approach toward the opponent's goal.
+        # Blend into that direction late so the car does not abandon the
+        # ball's upward path too early.
         goal_direction = (
             agent.foe_goal.location - ball
         ).flatten().normalize()
-        if goal_direction.magnitude() < 0.01:
-            goal_direction = Vector(0, -side(agent.team), 0)
-
-        if axis == "x":
-            contact_target = Vector(
-                wall_side * self.WALL_X,
-                ball.y - goal_direction.y * 185,
-                max(110, ball.z - goal_direction.z * 185)
-            )
+        shot_direction = Vector(0, goal_direction.y, 0)
+        if shot_direction.magnitude() < 0.01:
+            shot_direction = Vector(0, -side(agent.team), 0)
         else:
-            contact_target = Vector(
-                ball.x - goal_direction.x * 185,
-                wall_side * self.WALL_Y,
-                max(110, ball.z - goal_direction.z * 185)
-            )
+            shot_direction = shot_direction.normalize()
+
+        tracking_blend = cap(T / 0.75, 0, 1)
+        approach_direction = (
+            travel_direction * tracking_blend
+            + shot_direction * (1 - tracking_blend)
+        ).normalize()
+        if approach_direction.magnitude() < 0.01:
+            approach_direction = travel_direction
+
+        contact_target = Vector(
+            wall_side * self.WALL_X,
+            ball.y - approach_direction.y * 185,
+            max(110, ball.z - approach_direction.z * 185)
+        )
 
         attached_wall = self.car_wall_surface(car, agent.team)
         if attached_wall is not None and attached_wall != (axis, wall_side):
@@ -395,17 +414,6 @@ class wall_approach:
         )
         speed_required = min(speed_required, turn_speed_cap)
         speed = car.velocity.magnitude()
-        if self.last_debug_time < 0 or agent.time - self.last_debug_time >= 0.35:
-            self.last_debug_time = agent.time
-            print(
-                f"[WALL DRIVE] {drive_phase} surface={axis}{wall_side:+d} "
-                f"target=({drive_target.x:.0f},{drive_target.y:.0f},{drive_target.z:.0f}) "
-                f"distance={distance:.0f} T={T:.2f} speed={speed_required:.0f} "
-                f"boost={car.boost:.0f} controller={controller_mode} "
-                f"steer={agent.controller.steer:.2f} yaw={agent.controller.yaw:.2f} "
-                f"throttle={agent.controller.throttle:.2f}",
-                flush=True
-            )
 
         if on_wall:
             # On a vertical wall, world-up is wrong: it rolls the car away
@@ -426,6 +434,18 @@ class wall_approach:
         else:
             defaultDrive(agent, speed_required, local_target)
             controller_mode = "GROUND PD"
+
+        if self.last_debug_time < 0 or agent.time - self.last_debug_time >= 0.35:
+            self.last_debug_time = agent.time
+            print(
+                f"[WALL DRIVE] {drive_phase} surface={axis}{wall_side:+d} "
+                f"target=({drive_target.x:.0f},{drive_target.y:.0f},{drive_target.z:.0f}) "
+                f"distance={distance:.0f} T={T:.2f} speed={speed_required:.0f} "
+                f"boost={car.boost:.0f} controller={controller_mode} "
+                f"steer={agent.controller.steer:.2f} yaw={agent.controller.yaw:.2f} "
+                f"throttle={agent.controller.throttle:.2f}",
+                flush=True
+            )
 
         # Keep VirxERLU's speed controller, but add a wall-shot urgency
         # override when there is a genuine acceleration deficit.
