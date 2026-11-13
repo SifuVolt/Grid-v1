@@ -2045,6 +2045,7 @@ class Bot(VirxERLU):
                 "speed_flip",
                 "speedflip_kickoff",
                 "Aerial",
+                "AirDribble",
             }
 
             # Keep the existing power clear running.
@@ -2127,7 +2128,8 @@ class Bot(VirxERLU):
             "ground_shot",
             "jump_shot",
             "double_jump",
-            "Aerial"
+            "Aerial",
+            "AirDribble"
         }
 
         if self.is_clear() or self.odd_tick == 0:
