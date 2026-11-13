@@ -1373,14 +1373,55 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             and 0 < time_to_goal_line <= 2.5
         )
         approach_side = None
+        side_shot_reason = None
+
+        # First preserve the existing correction for a rolling ball whose
+        # projected path would miss outside a post.
         if rolling_toward_goal and projected_goal_x is not None:
             projected_lateral = (
                 Vector(projected_goal_x, goal_y, 0) - goal_center
             ).dot(left_of_goal)
             if projected_lateral > half_goal_width - 92.75:
                 approach_side = "left"
+                side_shot_reason = "projected_outside_right_post"
             elif projected_lateral < -half_goal_width + 92.75:
                 approach_side = "right"
+                side_shot_reason = "projected_outside_left_post"
+
+        # In the opponent's attacking third, a wide corner approach can
+        # produce a poor cross-goal touch even when the ball itself is
+        # already in a clear scoring position. In that situation, route
+        # around the side the car is ALREADY on and side-dodge inward.
+        #
+        # left_of_goal is the lateral axis of the intended shot. The sign
+        # of the car's offset selects the matching physical side, avoiding
+        # a needless drive across the ball.
+        if approach_side is None:
+            attacking_depth = -best_ball_location.y * side(agent.team)
+            goal_line_distance = abs(goal_y - best_ball_location.y)
+            car_lateral = (
+                agent.me.location - best_ball_location
+            ).dot(left_of_goal)
+            ball_in_open_central_lane = abs(best_ball_location.x) < 2600
+            car_is_wide = (
+                abs(agent.me.location.x) > 2200
+                and abs(car_lateral) > 450
+            )
+            near_opponent_goal = (
+                attacking_depth > 3000
+                and goal_line_distance < 2100
+            )
+
+            if (
+                near_opponent_goal
+                and ball_in_open_central_lane
+                and car_is_wide
+                and best_ball_location.z < 500
+            ):
+                approach_side = (
+                    "left" if car_lateral > 0 else "right"
+                )
+                side_shot_reason = "wide_corner_attack"
 
         side_shot_selected = False
         if approach_side is not None:
@@ -1421,7 +1462,8 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                 side_shot_selected = True
                 print(
                     f"[SHOT PLANNER] selected {approach_side} side_shot "
-                    f"projected_x={projected_goal_x:.0f} "
+                    f"reason={side_shot_reason} "
+                    f"projected_x={projected_goal_x if projected_goal_x is not None else 'n/a'} "
                     f"T={time_to_intercept:.2f} "
                     f"setup_distance={side_setup_distance:.0f} "
                     f"travel_estimate={side_setup_time:.2f}",
