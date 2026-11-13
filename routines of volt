@@ -1578,6 +1578,9 @@ class AirDribble(Aerial):
         self.intercept_time = self.first_intercept_time
         self.targets = shot.targets
         self.fast_aerial = shot.fast_aerial
+        if self.stage == 2 and self.finisher is not None:
+            self.finisher.intercept_time = self.second_intercept_time
+            self.finisher.targets = self.targets
 
     def _party_cannon_shot_direction(self, agent, ball, ball_velocity,
                                      time_remaining):
