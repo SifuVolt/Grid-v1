@@ -1090,6 +1090,8 @@ class Aerial:
         self.jump_time = -1
         self.counter = 0
         self.double_jump_complete = False
+        self.side_wall_route = False
+        self.side_wall_launched = False
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -1227,6 +1229,149 @@ class Aerial:
 
         return boost_estimate
 
+    def _run_side_wall_takeoff(self, agent, time_remaining):
+        """
+        Internally route an aerial up a side wall before launching.
+
+        The car may begin on the floor or already be attached to the matching
+        side wall. Back walls are never considered. Returns True while this
+        method owns the controller; returns False once the aerial can proceed.
+        """
+        car = agent.me
+        ball = self.ball
+
+        # A side-wall aerial only makes sense when the predicted contact is
+        # genuinely close to one of the two side walls and above the floor.
+        wall_side = 1 if ball.x >= 0 else -1
+        wall_gap = 4096.0 - abs(ball.x) - 92.75
+        if not (-5 <= wall_gap <= 700) or ball.z < 300:
+            self.side_wall_route = False
+            return False
+
+        attached_wall = None
+        if (
+            abs(car.location.x) > 3500
+            and abs(car.up.x) > 0.65
+            and car.up.x * car.location.x < 0
+        ):
+            attached_wall = 1 if car.location.x >= 0 else -1
+
+        # A free-flight car or a car attached to the opposite side wall
+        # should keep using the ordinary aerial controller.
+        if car.airborne and attached_wall is None:
+            return False
+        if attached_wall is not None and attached_wall != wall_side:
+            return False
+
+        # A late intercept is better handled by the normal aerial than by
+        # trying to climb a wall that cannot be reached in time.
+        if time_remaining <= 0.35 and not self.jumping:
+            return False
+
+        goal_direction = (
+            _relative_goal_aim_point(agent, self.targets) - ball
+        ).flatten().normalize()
+        if goal_direction.magnitude() < 0.01:
+            goal_direction = Vector(0, -side(agent.team), 0)
+
+        # Keep the car just inside the wall, with its nose lane aligned to
+        # the hitbox contact target already calculated by Aerial.
+        wall_x = wall_side * 3850.0
+        lane_y = self.target.y if self.target is not None else ball.y
+        climb_z = max(180.0, min(ball.z - 185.0, 1900.0))
+        if attached_wall is not None:
+            drive_target = Vector(wall_x, lane_y, climb_z)
+            phase = "CLIMB"
+        else:
+            # From the floor, first reach the wall at the ball's lane.
+            drive_target = Vector(wall_x, ball.y, max(100.0, car.location.z))
+            phase = "TO WALL"
+
+        local_target = car.local_location(drive_target)
+        distance = car.location.dist(drive_target)
+        time_for_drive = max(0.18, time_remaining - 0.20)
+        speed_required = cap(distance / time_for_drive, 900, 2300)
+
+        # Turn-aware speed: preserve speed on a clean line, but don't boost
+        # blindly while the nose is pointed across the field.
+        local_angle = abs(math.atan2(local_target.y, local_target.x))
+        turn_cap = (
+            900 if local_angle > 1.75 else
+            1200 if local_angle > 1.30 else
+            1650 if local_angle > 0.80 else
+            2300
+        )
+        speed_required = min(speed_required, turn_cap)
+        speed = car.velocity.magnitude()
+
+        if attached_wall is None:
+            # defaultDrive performs VirxERLU's speed-aware throttle control;
+            # unlike a fixed throttle=1, it can ease off before overspeeding.
+            defaultDrive(agent, speed_required, local_target)
+            boost_angle = local_angle
+        else:
+            wall_up = Vector(-wall_side, 0, 0)
+            target_angles = defaultPD(
+                agent, local_target, up=car.local(wall_up)
+            )
+            defaultThrottle(
+                agent, speed_required, target_angles, local_target
+            )
+            boost_angle = abs(target_angles[1])
+
+        agent.controller.boost = (
+            car.boost > 0
+            and distance > 550
+            and speed < speed_required - 100
+            and boost_angle < 0.65
+            and not agent.controller.handbrake
+        )
+
+        if (
+            not hasattr(self, "side_wall_debug_time")
+            or agent.time - self.side_wall_debug_time >= 0.35
+        ):
+            self.side_wall_debug_time = agent.time
+            print(
+                f"[AERIAL SIDE WALL] {phase} side={wall_side:+d} "
+                f"gap={wall_gap:.0f} distance={distance:.0f} "
+                f"T={time_remaining:.2f} speed={speed:.0f}/"
+                f"{speed_required:.0f} boost={car.boost:.0f}",
+                flush=True
+            )
+
+        if attached_wall is None:
+            return True
+
+        # Start the aerial only once the car has climbed into the ball's
+        # height/lane. If the intercept becomes urgent, launch from the
+        # closest reachable point rather than continuing to drive past it.
+        height_error = abs(car.location.z - climb_z)
+        lane_error = abs(car.location.y - lane_y)
+        launch_ready = (
+            (height_error < 190 and lane_error < 420)
+            or (distance < 330)
+            or (time_remaining < 0.55 and distance < 650)
+        )
+        if not launch_ready:
+            return True
+
+        self.side_wall_route = False
+        self.side_wall_launched = True
+        self.jump_type_fast = self.fast_aerial
+        self.jumping = True
+        self.jump_time = agent.time
+        self.counter = 0
+        self.double_jump_complete = False
+        agent.controller.jump = True
+        print(
+            f"[AERIAL SIDE WALL] LAUNCH side={wall_side:+d} "
+            f"height_error={height_error:.0f} lane_error={lane_error:.0f} "
+            f"T={time_remaining:.2f}",
+            flush=True
+        )
+        return False
+
     def run(self, agent: VirxERLU):
         if not agent.shooting:
             agent.shooting = True
@@ -1336,6 +1481,11 @@ class Aerial:
 
         if self.ceiling:
             self.target -= Vector(z=92)
+
+        # Side-wall setup is part of Aerial itself. It can drive up from the
+        # floor or continue climbing when already attached to that side wall.
+        if not self.jumping and self._run_side_wall_takeoff(agent, T):
+            return
 
         if self.jumping or not agent.me.airborne:
             agent.dbg_2d("Jumping")
