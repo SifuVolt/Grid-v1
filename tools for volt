@@ -1073,7 +1073,7 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
     gravity = tuple(agent.gravity)
 
     max_aerial_height = 1200 if len(agent.friends) == 0 and len(agent.foes) == 1 else math.inf
-    min_aerial_height = 551 if max_aerial_height > 1200 and agent.me.location.z >= 2044 - agent.me.hitbox.height * 1.1 else (150 if agent.boost_amount == 'unlimited' or agent.me.airborne else 450)
+    min_aerial_height = 551 if max_aerial_height > 1200 and agent.me.location.z >= 2044 - agent.me.hitbox.height * 1.1 else (150 if agent.boost_amount == 'unlimited' or agent.me.airborne else 350)
 
     is_on_ground = not agent.me.airborne
     can_ground = is_on_ground and can_ground
@@ -1525,7 +1525,7 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
         else (
             150
             if agent.boost_amount == 'unlimited' or agent.me.airborne
-            else 450
+            else 350
         )
     )
 
