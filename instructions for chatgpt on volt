@@ -1192,10 +1192,7 @@ class Bot(VirxERLU):
         if best_challenger is None:
             best_challenger = min(
                 cars,
-                key=lambda car: car.location.dist(ball)
-                + (0 if car.forward.flatten().dot(
-                    (ball - car.location).flatten().normalize()
-                ) > 0 else 500)
+                key=self._eta_to_ball
             )
 
         attacker = best_challenger
