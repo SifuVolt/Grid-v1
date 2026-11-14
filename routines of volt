@@ -842,6 +842,8 @@ class Aerial:
         self.jump_time = -1
         self.counter = 0
         self.double_jump_complete = False
+        self.ground_setup_start = None
+        self.last_ground_setup_debug = -999.0
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -1110,6 +1112,92 @@ class Aerial:
         if self.ceiling:
             self.target -= Vector(z=92)
 
+        # Build useful launch speed on the ground before beginning the
+        # aerial, but never delay a tight intercept or an already-fast car.
+        # This gives the car momentum before the jump instead of spending
+        # most of its boost accelerating from a slow airborne start.
+        if not self.jumping and not agent.me.airborne:
+            launch_direction = (
+                self.target - agent.me.location
+            ).flatten().normalize()
+            if launch_direction.magnitude() < 0.001:
+                launch_direction = (
+                    self.ball - agent.me.location
+                ).flatten().normalize()
+
+            flat_forward = agent.me.forward.flatten().normalize()
+            flat_velocity = agent.me.velocity.flatten()
+            ground_speed = flat_velocity.magnitude()
+            forward_speed = (
+                flat_velocity.dot(launch_direction)
+                if launch_direction.magnitude() > 0.001 else 0.0
+            )
+            alignment = (
+                flat_forward.dot(launch_direction)
+                if flat_forward.magnitude() > 0.001
+                and launch_direction.magnitude() > 0.001 else -1.0
+            )
+
+            if self.ground_setup_start is None:
+                self.ground_setup_start = agent.time
+
+            setup_elapsed = agent.time - self.ground_setup_start
+            setup_budget = min(0.38, max(0.0, T - 0.90))
+            enough_launch_speed = (
+                forward_speed >= 1150
+                and alignment >= 0.88
+            )
+            can_build_ground_speed = (
+                T > 1.05
+                and setup_elapsed < setup_budget
+                and not enough_launch_speed
+                and (
+                    agent.boost_amount == "unlimited"
+                    or agent.me.boost > 0
+                )
+            )
+
+            if can_build_ground_speed:
+                local_launch_direction = agent.me.local(launch_direction)
+                defaultPD(
+                    agent,
+                    local_launch_direction,
+                    up=agent.me.up
+                )
+                agent.controller.throttle = 1
+                agent.controller.boost = (
+                    alignment >= 0.72
+                    and ground_speed < 1900
+                    and (
+                        agent.boost_amount == "unlimited"
+                        or agent.me.boost > 0
+                    )
+                )
+                agent.controller.jump = False
+
+                if agent.time - self.last_ground_setup_debug >= 0.25:
+                    self.last_ground_setup_debug = agent.time
+                    print(
+                        f"[AERIAL GROUND BUILD] speed={ground_speed:.0f} "
+                        f"forward={forward_speed:.0f} "
+                        f"align={alignment:.2f} "
+                        f"boost={agent.me.boost:.0f} "
+                        f"T={T:.2f} elapsed={setup_elapsed:.2f}",
+                        flush=True
+                    )
+                return
+
+            if self.ground_setup_start is not None:
+                if agent.time - self.last_ground_setup_debug >= 0.25:
+                    print(
+                        f"[AERIAL LAUNCH] speed={ground_speed:.0f} "
+                        f"forward={forward_speed:.0f} "
+                        f"align={alignment:.2f} T={T:.2f} "
+                        f"reason={'speed ready' if enough_launch_speed else 'time/setup limit'}",
+                        flush=True
+                    )
+                    self.last_ground_setup_debug = agent.time
+                self.ground_setup_start = None
 
         if self.jumping or not agent.me.airborne:
             agent.dbg_2d("Jumping")
