@@ -1,4 +1,4 @@
-from util.routines import Aerial, double_jump, ground_shot, jump_shot, side_shot, virxrlcu, wall_approach
+from util.routines import Aerial, Redirect, double_jump, ground_shot, jump_shot, side_shot, virxrlcu, wall_approach
 from util.utils import Vector, math, side, cap
 from util.grid_double_jump import find_double_jump as grid_find_double_jump
 
@@ -1328,11 +1328,90 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
     )
 
     if best_shot["shot_type"] == 3:
-        routine = Aerial(
-            best_intercept_time,
-            best_targets,
-            best_shot["fast"]
+        intercept_slice = min(
+            slices,
+            key=lambda s: abs(s.game_seconds - best_intercept_time)
         )
+        redirect_ball_velocity = Vector(
+            intercept_slice.physics.velocity.x,
+            intercept_slice.physics.velocity.y,
+            intercept_slice.physics.velocity.z
+        )
+        goal_center = Vector(
+            (best_targets[0][0] + best_targets[1][0]) * 0.5,
+            (best_targets[0][1] + best_targets[1][1]) * 0.5,
+            0
+        )
+        goal_direction = (
+            goal_center - best_ball_location
+        ).flatten().normalize()
+        incoming_direction = redirect_ball_velocity.flatten().normalize()
+        local_ball = agent.me.local_location(best_ball_location)
+
+        goal_y = goal_center.y
+        time_to_goal = (
+            (goal_y - best_ball_location.y) / redirect_ball_velocity.y
+            if abs(redirect_ball_velocity.y) > 150 else -1
+        )
+        projected_goal_x = (
+            best_ball_location.x
+            + redirect_ball_velocity.x * time_to_goal
+            if 0 < time_to_goal <= 4.0 else None
+        )
+
+        goal_left_x = min(best_targets[0][0], best_targets[1][0])
+        goal_right_x = max(best_targets[0][0], best_targets[1][0])
+        projected_near_goal = (
+            projected_goal_x is not None
+            and goal_left_x - 850 <= projected_goal_x <= goal_right_x + 850
+        )
+        needs_lateral_redirect = (
+            projected_goal_x is not None
+            and (
+                projected_goal_x < goal_left_x + 110
+                or projected_goal_x > goal_right_x - 110
+            )
+        )
+        redirect_angle = (
+            math.acos(cap(
+                incoming_direction.dot(goal_direction), -1, 1
+            ))
+            if incoming_direction.magnitude() > 0.001 else math.pi
+        )
+
+        redirect_selected = (
+            local_ball.y < -150
+            and best_ball_location.z > 250
+            and redirect_ball_velocity.flatten().magnitude() > 600
+            and incoming_direction.dot(goal_direction) > 0.45
+            and 0.1 < time_to_goal <= 4.0
+            and projected_near_goal
+            and needs_lateral_redirect
+            and redirect_angle <= math.radians(35)
+            and 0.1 < time_to_intercept <= 3.5
+        )
+
+        if redirect_selected:
+            routine = Redirect(
+                best_intercept_time,
+                best_targets,
+                best_shot["fast"]
+            )
+            print(
+                f"[REDIRECT SELECTED] behind={local_ball.y:.0f} "
+                f"height={best_ball_location.z:.0f} "
+                f"ball_speed={redirect_ball_velocity.flatten().magnitude():.0f} "
+                f"goal_x={projected_goal_x:.0f} "
+                f"angle={math.degrees(redirect_angle):.1f} "
+                f"T={time_to_intercept:.2f}",
+                flush=True
+            )
+        else:
+            routine = Aerial(
+                best_intercept_time,
+                best_targets,
+                best_shot["fast"]
+            )
     elif best_shot["shot_type"] in (0, 1) and can_jump:
         # A side shot is a goal-line correction, not a half-field choice.
         # Project the rolling ball to the opponent goal line and only use
