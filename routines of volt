@@ -4222,6 +4222,20 @@ class jump_shot:
             distance, target_speed, velocity = self._drive_arrival(
                 agent, max(T, dt)
             )
+            contact_height = self._surface_height(
+                self.offset_target,
+                self._surface_axis,
+                self._surface_plane,
+                self._surface_normal
+            )
+            if contact_height >= 270:
+                print(
+                    f"[PARTY JUMP ABORT] contact height={contact_height:.1f} "
+                    f"exceeds jump-shot limit",
+                    flush=True
+                )
+                self._finish(agent)
+                return
             speed = agent.me.velocity.magnitude()
             eta_speed = cap(
                 speed + (agent.boost_accel * 0.25 if agent.me.boost > 0 else 0),
