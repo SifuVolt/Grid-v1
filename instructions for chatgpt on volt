@@ -1402,7 +1402,6 @@ class Bot(VirxERLU):
             "jump_shot",
             "double_jump",
             "Aerial",
-            "wall_approach",
             "short_shot"
         }
 
@@ -1513,67 +1512,6 @@ class Bot(VirxERLU):
                 )
                 self.push(routines.goto_boost(closest_boost))
 
-
-        # A selected wall-drive is a committed surface-driving action.
-        # Keep it alive until its own routine ends; teamplay/shot selection
-        # must not replace it on the next packet.
-        if (
-            not self.is_clear()
-            and self.stack[0].__class__.__name__ == "wall_approach"
-        ):
-            # Once the wall drive has attached to the matching side wall,
-            # look for an aerial intercept. The aerial routine owns the
-            # double-jump launch from the wall; otherwise keep wall driving.
-            car = self.me
-            attached_wall = tools.car_wall_surface(car, self.team)
-            if (
-                attached_wall is not None
-                and not car.doublejumped
-                and self.odd_tick == 0
-            ):
-                aerial = tools.find_any_aerial(self, cap_=6)
-                if aerial is not None:
-                    prediction = self.ball_prediction_struct
-                    slices = (
-                        prediction.slices
-                        if prediction is not None else ()
-                    )
-                    if slices:
-                        aerial_slice = min(
-                            slices,
-                            key=lambda item: abs(
-                                item.game_seconds - aerial.intercept_time
-                            )
-                        )
-                        ball_location = aerial_slice.physics.location
-                        ball_surface = tools.wall_surface_for_ball(
-                            ball_location, max_gap=650.0, team=self.team
-                        )
-                        same_wall = (
-                            ball_surface is not None
-                            and ball_surface[:2] == attached_wall
-                        )
-                        wall_gap = (
-                            ball_surface[2]
-                            if same_wall else 0.0
-                        )
-                    else:
-                        same_wall = False
-                        wall_gap = 0.0
-
-                    # Launch from the wall when the predicted ball is not
-                    # close enough for a direct wall-drive touch.
-                    if same_wall and wall_gap > 100:
-                        print(
-                            f"[WALL DRIVE] wall aerial launch "
-                            f"gap={wall_gap:.0f} "
-                            f"T={aerial.intercept_time - self.time:.2f}",
-                            flush=True
-                        )
-                        self.clear()
-                        self.push(aerial)
-                        return
-            return
 
         # Share and compare shot opportunities with teammates.
         self.update_teamplay()
@@ -2127,36 +2065,10 @@ class Bot(VirxERLU):
         if self.is_clear() or self.odd_tick == 0:
             shot = self.teamplay_shot
 
-            # The cached teamplay candidate may be a later ground shot.
-            # Recheck the live prediction first so a reachable wall touch
-            # can replace it instead of waiting for the ball to fall.
-            wall_allowed = (
-                not self.friends
-                or self.get_grid_active_challenger() == self.me.index
-                or self.defensive_emergency()
-            )
-            if wall_allowed:
-                wall_drive = tools.find_wall_drive(self)
-                if wall_drive is not None:
-                    shot = wall_drive
-            elif self.time - getattr(self, "_last_wall_drive_gate_debug", -999.0) >= 0.5:
-                self._last_wall_drive_gate_debug = self.time
-                print(
-                    f"[WALL DRIVE SKIP] team-role gate | "
-                    f"player={self.me.index} "
-                    f"active_challenger={self.get_grid_active_challenger()} "
-                    f"friends={len(self.friends)}",
-                    flush=True
-                )
-
             if shot is not None:
-                is_wall_drive = shot.__class__.__name__ == "wall_approach"
-                should_commit = (
-                    is_wall_drive
-                    or self.should_commit_to_shot(
-                        self.teamplay_score,
-                        self.teamplay_contact_time
-                    )
+                should_commit = self.should_commit_to_shot(
+                    self.teamplay_score,
+                    self.teamplay_contact_time
                 )
 
                 if not should_commit:
@@ -2173,7 +2085,6 @@ class Bot(VirxERLU):
                         "jump_shot",
                         "ground_shot",
                         "Aerial",
-                        "wall_approach"
                     }
 
                     if current_name in ordinary_shots and not committed_routine_lock:
@@ -2192,7 +2103,6 @@ class Bot(VirxERLU):
                 else:
                     if (
                         not committed_routine_lock
-                        and shot.__class__.__name__ != "wall_approach"
                         and routines.half_flip_manager.request_for_shot(self, shot)
                     ):
                         return
@@ -2252,32 +2162,11 @@ class Bot(VirxERLU):
                 or self.defensive_emergency()
             )
 
-            # Prefer a reachable wall drive over waiting for a later ground shot.
-            wall_drive = (
-                tools.find_wall_drive(self)
-                if can_take_first_challenge
-                else None
-            )
-            if (
-                not can_take_first_challenge
-                and self.time - getattr(self, "_last_wall_drive_gate_debug", -999.0) >= 0.5
-            ):
-                self._last_wall_drive_gate_debug = self.time
-                print(
-                    f"[WALL DRIVE SKIP] first-challenge gate | "
-                    f"player={self.me.index} "
-                    f"active_challenger={self.get_grid_active_challenger()} "
-                    f"friends={len(self.friends)}",
-                    flush=True
-                )
-
             fast_intercept_searched = (
                 fast_intercept_zone and can_take_first_challenge
             )
 
-            if wall_drive is not None:
-                shot = wall_drive
-            elif fast_intercept_searched:
+            if fast_intercept_searched:
                 shot = routines.fast_intercept_finder().find(self)
 
             elif ball_depth < 640 and can_take_first_challenge:
@@ -2340,7 +2229,6 @@ class Bot(VirxERLU):
                             "jump_shot",
                             "double_jump",
                             "Aerial",
-                            "wall_approach"
                         }
 
                         # Don't cancel an ordinary shot just because a
@@ -2348,7 +2236,6 @@ class Bot(VirxERLU):
                         if (
                             current_shot_name in ordinary_shots
                             and new_shot_name in ordinary_shots
-                            and new_shot_name != "wall_approach"
                         ):
                             current_intercept = getattr(
                                 self.stack[0], "intercept_time", float("inf")
