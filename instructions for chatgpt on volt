@@ -2419,11 +2419,19 @@ class Bot(VirxERLU):
         # The elected goalie remains the fallback; in 3v3 the transition
         # player prepares for the loose ball instead of attempting a bump.
         if (
-            self.is_clear()
+            shot is None
             and self.friends
             and self.get_grid_active_challenger() == self.me.index
+            and current_name in {
+                None, "grid_defense", "goto_boost",
+                "cover_followup_wait"
+            }
             and not self.defensive_emergency()
         ):
+            # Replace passive positioning/boost collection with pressure,
+            # but never override a teammate's already-committed shot.
+            if current_name is not None:
+                self.clear()
             print(
                 f"[RISK CHALLENGE] player={self.me.index} "
                 f"no reliable intercept; committing to pressure",
