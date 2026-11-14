@@ -2088,7 +2088,18 @@ class Bot(VirxERLU):
                 flush=True
             )
 
-        committed_routine_lock = committed_jump_under_pressure
+        # RedUtils AerialShot becomes uninterruptible as soon as its launch
+        # controller takes over. Keep that behaviour in Volt's strategy too.
+        committed_aerial = False
+        if not self.is_clear():
+            active_routine = self.stack[0]
+            committed_aerial = (
+                active_routine.__class__.__name__ == "Aerial"
+                and getattr(active_routine, "aerialing", False)
+            )
+        committed_routine_lock = (
+            committed_jump_under_pressure or committed_aerial
+        )
 
         # Wall-shot attempt: only start from a clear stack so we don't
         # interrupt kickoff, recovery, defence, or an existing shot.
@@ -2329,7 +2340,6 @@ class Bot(VirxERLU):
                             "jump_shot",
                             "double_jump",
                             "Aerial",
-                            "Redirect",
                             "wall_approach"
                         }
 
