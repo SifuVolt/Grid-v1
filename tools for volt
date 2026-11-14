@@ -279,10 +279,59 @@ def find_aerial(agent, target, cap_=6):
 def find_any_aerial(agent, cap_=6):
     return find_any_shot(agent, cap_, can_double_jump=False, can_jump=False, can_ground=False)
 
+def airborne_opponent_beats_aerial(agent, ball_location, time_remaining):
+    """
+    Only reject an aerial when an airborne opponent is actually closing on
+    the predicted contact in 3D and their projected arrival is earlier.
+    Grounded opponents and airborne opponents travelling across/away from
+    the ball do not suppress the aerial.
+    """
+    ball_pos = (
+        ball_location
+        if isinstance(ball_location, Vector)
+        else Vector(*ball_location)
+    )
+
+    for foe in agent.foes:
+        if not getattr(foe, "airborne", False):
+            continue
+
+        to_ball = ball_pos - foe.location
+        distance = to_ball.magnitude()
+        if distance <= 180:
+            return True
+
+        direction = to_ball / max(1.0, distance)
+        closing_speed = foe.velocity.dot(direction)
+
+        # A meaningful positive 3D projection is required. Merely being
+        # close to the ball or moving quickly in another direction is not
+        # enough to win the aerial race.
+        if closing_speed <= 250:
+            continue
+
+        opponent_eta = max(0.0, (distance - 180) / closing_speed)
+        if opponent_eta + 0.10 < time_remaining:
+            if agent.time - getattr(agent, "_last_aerial_race_debug", -999.0) >= 0.5:
+                agent._last_aerial_race_debug = agent.time
+                print(
+                    f"[AERIAL RACE LOST] foe={getattr(foe, 'index', -1)} "
+                    f"distance={distance:.0f} closing3d={closing_speed:.0f} "
+                    f"foe_eta={opponent_eta:.2f} bot_eta={time_remaining:.2f}",
+                    flush=True
+                )
+            return True
+
+    return False
+
+
 def useful_non_aerial_shot(agent, ball_location, ball_velocity, shot, intercept_time):
-    # Aerials are handled separately.
+    # Aerials ignore ordinary proximity pressure, but not an airborne
+    # opponent who is demonstrably travelling toward this exact contact.
     if shot['shot_type'] == 3:
-        return True
+        return not airborne_opponent_beats_aerial(
+            agent, ball_location, intercept_time - agent.time
+        )
 
     ball_pos = Vector(*ball_location)
     ball_vel = Vector(
