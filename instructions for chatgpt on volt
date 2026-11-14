@@ -2163,6 +2163,9 @@ class Bot(VirxERLU):
             "Redirect"
         }
 
+        # Keep the cached candidate available on ticks where the full
+        # finder is not rerun; the risk-challenge fallback reads this below.
+        shot = self.teamplay_shot
         if self.is_clear() or self.odd_tick == 0:
             shot = self.teamplay_shot
 
