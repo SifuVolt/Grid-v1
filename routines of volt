@@ -1470,26 +1470,8 @@ class Aerial:
                 flush=True
             )
 
-        # Party Cannon AerialShot wall correction: flatten the outgoing
-        # direction when the hitbox standoff target is too close to a wall.
-        hitbox_length = float(getattr(agent.me.hitbox, "length", 118.01))
-        wall_standoff = 92.75 + hitbox_length * 0.5
-        self.shot_vector, aerial_wall_normal, aerial_wall_clearance = (
-            WallShot.adjust_aerial(self.ball, self.shot_vector, wall_standoff)
-        )
-        if aerial_wall_normal is not None and (
-            not hasattr(self, "_wall_aerial_logged")
-            or agent.time - self._wall_aerial_logged >= 0.5
-        ):
-            self._wall_aerial_logged = agent.time
-            print(
-                f"[WALL AERIAL] clearance={aerial_wall_clearance:.1f} "
-                f"normal=({aerial_wall_normal.x:.0f},"
-                f"{aerial_wall_normal.y:.0f},{aerial_wall_normal.z:.0f})",
-                flush=True
-            )
-
-        # Position the actual hitbox against the ball's rear surface.
+        # Find the car reference position that places the front of its
+        # actual hitbox against the ball's rear surface along ShotDirection.
         self.target = self._party_cannon_hitbox_target(
             agent, self.ball, self.shot_vector
         )
@@ -3673,189 +3655,34 @@ class WallShot:
             return Vector(plane, point.y, point.z)
         return Vector(point.x, plane, point.z)
 
-    @staticmethod
-    def _shot_power_modifier(speed):
-        # Direct port of Party Cannon Utils.ShotPowerModifier.
-        speed = cap(speed, 0, 4600)
-        if speed <= 500:
-            return 0.65
-        if speed <= max_speed:
-            blend = (speed - 500) / 1800
-            return 0.65 + (0.55 - 0.65) * blend
-        blend = (speed - max_speed) / 4600
-        return 0.55 + (0.30 - 0.55) * blend
-
-    @staticmethod
-    def _time_to_jump(normal, height, gravity):
-        # Direct port of Party Cannon Utils.TimeToJump, using VirxERLU's
-        # Rocket League jump constants.
-        jump_speed = 291.667
-        jump_accel = 1458.333
-        jump_duration = 0.2
-        sticky_accel = 325.0
-        gravity = normal.dot(gravity)
-        if abs(gravity) < 0.001:
-            gravity = -0.001
-
-        height_after_jump = (
-            jump_speed * jump_duration
-            + jump_accel * jump_duration * jump_duration / 2
-            - sticky_accel * 0.05 * (jump_duration - 0.025)
-            + gravity * jump_duration * jump_duration / 2
-        )
-        intermediate_velocity = (
-            jump_speed - 16.25
-            + (gravity + jump_accel) * jump_duration
-        )
-        final_velocity = math.sqrt(max(
-            intermediate_velocity * intermediate_velocity
-            + 2 * gravity * (height - height_after_jump),
-            0
-        ))
-
-        if height < height_after_jump:
-            final_velocity = math.sqrt(max(
-                (jump_speed - 16.25) ** 2
-                + 2 * (gravity + jump_accel) * height,
-                0
-            ))
-            return (
-                final_velocity - jump_speed + 16.25
-            ) / (gravity + jump_accel)
-
-        return jump_duration + (
-            final_velocity - intermediate_velocity
-        ) / gravity
-
     @classmethod
-    def adjust_jump(
-        cls, ball_location, shot_direction, ball_velocity=None,
-        car_location=None, shot_target=None, gravity=None,
-        time_remaining=0.0, jump_time=0.0
-    ):
+    def adjust_jump(cls, ball_location, shot_direction):
         """
-        Party Cannon JumpShot.SetTargetLocation port.
-
-        Predicts the post-hit ball path, chooses the nearest wall plane,
-        limits the shot/dodge elevation to what the jump can rotate into,
-        and applies the wall-clearance correction.
+        Party Cannon JumpShot rule: if the 165-unit approach point would be
+        less than 40 units from a wall, flatten the shot against that wall.
         """
-        if (
-            ball_velocity is not None
-            and car_location is not None
-            and shot_target is not None
-            and gravity is not None
-            and time_remaining > dt
-        ):
-            safe_time = max(time_remaining, dt)
-            approach_direction = (
-                ball_location - car_location
-            ).flatten().normalize()
-            car_final_velocity = (
-                (ball_location - car_location) / safe_time
-                + approach_direction * 500
-            ).cap(0, max_speed)
-            velocity_for_power = (
-                car_final_velocity * 6 + ball_velocity
-            ) / 7
-            direction_to_score = (
-                shot_target - ball_location
-            ).flatten().normalize()
-            velocity_difference = (
-                car_final_velocity - ball_velocity
-            ).magnitude()
-            score_speed = (
-                velocity_difference
-                * cls._shot_power_modifier(velocity_difference)
-                + velocity_for_power.dot(direction_to_score)
-            )
-            time_to_score = (
-                ball_location.flatten().dist(shot_target.flatten())
-                / cap(score_speed, 500, 6000)
-            )
-            predicted_velocity = (
-                car_final_velocity + ball_velocity * 2
-            ) / 3
-            predicted_ball = (
-                ball_location
-                + predicted_velocity * time_to_score
-                + gravity * (0.5 * time_to_score * time_to_score)
-            )
-            predicted_direction = (
-                shot_target - predicted_ball
-            ).normalize()
-            if predicted_direction.magnitude() > 0.001:
-                shot_direction = predicted_direction
-
-        _, axis, plane, normal = cls.nearest_wall(ball_location)
+        distance, axis, plane, normal = cls.nearest_wall(ball_location)
         target = ball_location - shot_direction * 165
         target_surface = cls.surface_point(target, axis, plane)
         target_height = (target - target_surface).dot(normal)
 
-        # Treat a nearby vertical arena surface as a wall-shot surface.
-        # Party Cannon performs its dodge-angle calculation even when the
-        # initial standoff is more than 40 units from the wall.
-        if target_height > 250 or abs(normal.z) >= 0.95:
-            return shot_direction, None, target_height, jump_time, None
+        if target_height >= 40:
+            return shot_direction, None, target_height
 
-        # Party Cannon's achievable dodge-angle calculation. Its jump
-        # estimate is measured along the contacted surface normal, not world Z.
-        jump_time = cls._time_to_jump(
-            normal, max(target_height, 50) - 17, gravity
-        ) if gravity is not None else max(0.0, jump_time)
-        angle = math.asin(cap(shot_direction.dot(normal), -1, 1))
-        rotation_time = max(0.0, jump_time)
-        angular_accel = 12.46
-        max_angular_velocity = 5.5
-        if angular_accel * rotation_time > max_angular_velocity:
-            time_to_max = max_angular_velocity / angular_accel
-            predicted_rotation = (
-                angular_accel * 0.5 * time_to_max * time_to_max
-                + max_angular_velocity * (rotation_time - time_to_max)
-            )
-        else:
-            predicted_rotation = (
-                angular_accel * 0.5 * rotation_time * rotation_time
-            )
-        dodge_angle = min(
-            angle + 0.25,
-            math.pi * 0.4,
-            max(predicted_rotation + 0.2, 0.6)
-        )
-        angle = dodge_angle - 0.25
+        ball_surface = cls.surface_point(ball_location, axis, plane)
+        ball_height = (ball_location - ball_surface).dot(normal)
         tangent = shot_direction - normal * shot_direction.dot(normal)
+
         if tangent.magnitude() < 0.001:
-            return shot_direction, None, target_height, jump_time, None
-        tangent = tangent.normalize()
-        dodge_direction = (
-            tangent * math.cos(dodge_angle)
-            + normal * math.sin(dodge_angle)
-        ).normalize()
-        shot_direction = (
-            tangent * math.cos(angle)
+            return shot_direction, None, target_height
+
+        angle = math.asin(cap((ball_height - 40) / 165, -1, 1))
+        adjusted = (
+            tangent.normalize() * math.cos(angle)
             + normal * math.sin(angle)
         ).normalize()
 
-        target = ball_location - shot_direction * 165
-        target_surface = cls.surface_point(target, axis, plane)
-        target_height = (target - target_surface).dot(normal)
-        if target_height < 40:
-            ball_surface = cls.surface_point(ball_location, axis, plane)
-            ball_height = (ball_location - ball_surface).dot(normal)
-            angle = math.asin(cap((ball_height - 40) / 165, -1, 1))
-            shot_direction = (
-                tangent.normalize() * math.cos(angle)
-                + normal * math.sin(angle)
-            ).normalize()
-
-        target = ball_location - shot_direction * 165
-        target_surface = cls.surface_point(target, axis, plane)
-        target_height = (target - target_surface).dot(normal)
-        jump_time = cls._time_to_jump(
-            normal, max(target_height, 40) - 17, gravity
-        ) if gravity is not None else max(0.0, jump_time)
-
-        return shot_direction, normal, target_height, jump_time, dodge_direction
+        return adjusted, normal, target_height
 
     @classmethod
     def adjust_aerial(cls, ball_location, shot_direction, approach_distance=155):
@@ -3908,9 +3735,6 @@ class jump_shot:
         self.patience = shot_patience()
         self.wall_shot_active = False
         self.wall_shot_normal = None
-        self.wall_jump_time = None
-        self.wall_dodge_direction = None
-        self.ball_velocity = Vector()
         self.contact_point = None
 
     def update(self, shot):
@@ -3985,10 +3809,6 @@ class jump_shot:
 
             ball = slices[slice_n].physics.location
             self.ball_location = Vector(ball.x, ball.y, ball.z)
-            ball_velocity = slices[slice_n].physics.velocity
-            self.ball_velocity = Vector(
-                ball_velocity.x, ball_velocity.y, ball_velocity.z
-            )
 
             self.needed_jump_time = virxrlcu.get_jump_time(
                 ball.z - agent.me.location.z,
@@ -4012,28 +3832,12 @@ class jump_shot:
         # the corrected shot direction.
         self.wall_shot_active = False
         self.wall_shot_normal = None
-        self.wall_dodge_direction = None
-        (
-            self.shot_vector,
-            wall_normal,
-            wall_clearance,
-            wall_jump_time,
-            wall_dodge_direction
-        ) = WallShot.adjust_jump(
-            self.ball_location,
-            self.shot_vector,
-            self.ball_velocity,
-            agent.me.location,
-            target_center,
-            agent.gravity,
-            T,
-            self.needed_jump_time
+        self.shot_vector, wall_normal, wall_clearance = WallShot.adjust_jump(
+            self.ball_location, self.shot_vector
         )
         if wall_normal is not None:
             self.wall_shot_active = True
             self.wall_shot_normal = wall_normal
-            self.wall_jump_time = wall_jump_time
-            self.wall_dodge_direction = wall_dodge_direction
             print(
                 f"[WALL JUMP SHOT] clearance={wall_clearance:.1f} "
                 f"normal=({wall_normal.x:.0f},{wall_normal.y:.0f},"
@@ -4122,7 +3926,7 @@ class jump_shot:
                     )
                 )
                 self.offset_target -= agent.gravity * (
-                    0.5 * self.wall_jump_time ** 2
+                    0.5 * self.needed_jump_time ** 2
                 )
             self.contact_approach_target = self.offset_target.copy()
 
@@ -4343,33 +4147,19 @@ class jump_shot:
             # and above the car. This adds no waiting phase and leaves the
             # existing counter-3 dodge trigger intact.
             if self.counter < 3 and not self.dodging:
-                if self.wall_shot_active and self.wall_dodge_direction is not None:
-                    # Party Cannon aims along its computed DodgeDirection,
-                    # with the roof orientation derived from the wall normal.
-                    dodge_direction = self.wall_dodge_direction
-                    wall_up = dodge_direction.cross(
-                        dodge_direction.cross(-self.wall_shot_normal)
-                    ).normalize()
-                    defaultPD(
-                        agent,
-                        agent.me.local(dodge_direction),
-                        up=agent.me.local(wall_up)
-                    )
-                    hold_s = False
-                else:
-                    local_ball = agent.me.local_location(self.ball_location)
-                    defaultPD(agent, local_ball.flatten())
+                local_ball = agent.me.local_location(self.ball_location)
+                defaultPD(agent, local_ball.flatten())
 
-                    ball_is_airborne = self.ball_location.z > 130
-                    ball_is_above_car = self.ball_location.z > agent.me.location.z + 65
-                    hold_s = (
-                        ball_is_airborne
-                        and ball_is_above_car
-                        and not self.quick_shot
-                    )
+                ball_is_airborne = self.ball_location.z > 130
+                ball_is_above_car = self.ball_location.z > agent.me.location.z + 65
+                hold_s = (
+                    ball_is_airborne
+                    and ball_is_above_car
+                    and not self.quick_shot
+                )
 
-                    if hold_s:
-                        agent.controller.pitch = 1
+                if hold_s:
+                    agent.controller.pitch = 1
 
                 if not self._orientation_logged:
                     print(
