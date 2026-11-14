@@ -1760,6 +1760,19 @@ class Bot(VirxERLU):
                 self._goalie_fallback_active = False
                 self._goalie_fallback_routine = None
 
+            # Keep the fallback's own shot running even after the original
+            # challenger's short-lived message expires. Immediate goal danger
+            # is still allowed to override it in the emergency logic below.
+            if (
+                getattr(self, "_goalie_fallback_active", False)
+                and not self.is_clear()
+                and self.stack[0] is getattr(
+                    self, "_goalie_fallback_routine", None
+                )
+                and not self.ball_in_goal_danger()
+            ):
+                return
+
             if current_name == "goalie_followup_wait" and not contested_message:
                 self.clear()
                 current_name = None
@@ -1773,15 +1786,6 @@ class Bot(VirxERLU):
                 )
                 fallback_at = contact_at + 0.10
                 contact_key = round(contact_at * 4.0) / 4.0
-
-                if (
-                    getattr(self, "_goalie_fallback_active", False)
-                    and current_name in {
-                        "ground_shot", "jump_shot", "double_jump",
-                        "Aerial", "Redirect"
-                    }
-                ):
-                    return
 
                 if getattr(self, "_goalie_fallback_completed_key", None) == contact_key:
                     pass
