@@ -3774,7 +3774,7 @@ class WallShot:
         # Party Cannon performs its dodge-angle calculation even when the
         # initial standoff is more than 40 units from the wall.
         if target_height > 250 or abs(normal.z) >= 0.95:
-            return shot_direction, None, target_height
+            return shot_direction, None, target_height, jump_time
 
         # Party Cannon's achievable dodge-angle calculation. Its jump
         # estimate is measured along the contacted surface normal, not world Z.
@@ -3803,7 +3803,7 @@ class WallShot:
         angle = dodge_angle - 0.25
         tangent = shot_direction - normal * shot_direction.dot(normal)
         if tangent.magnitude() < 0.001:
-            return shot_direction, None, target_height
+            return shot_direction, None, target_height, jump_time
         shot_direction = (
             tangent.normalize() * math.cos(angle)
             + normal * math.sin(angle)
