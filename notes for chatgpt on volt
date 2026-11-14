@@ -182,4 +182,4 @@ This file is the project handoff and change checklist. Read it before every code
 - The designated goalie remains the defensive fallback. If the goalie is itself elected as challenger because it is already facing the ball better, the next-deepest teammate is promoted to goalie so the fallback role is never left empty. In 3v3, the transition player treats `RISK_CHALLENGE` as an active commitment and prepares for the loose-ball follow-up; it does not start the transition bump play for a risk challenge.
 - `RISK_CHALLENGE` is an accepted teamplay status and is included in the message's `shot_type` field. Teammates recognize it as an active commitment rather than interpreting it as `NO_SHOT`.
 - Emergency defence remains higher priority and is not replaced by this risk-first behaviour.
-- This uses an existing routine and message protocol; it has not been compiled or tested in-game.
+- This uses the existing `short_shot` routine and message protocol. Its boost/speed-gain branch previously referenced undefined `T` and `time` names; those checks now use the routine's elapsed time. It has not been compiled or tested in-game.
