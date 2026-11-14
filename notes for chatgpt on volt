@@ -125,8 +125,10 @@ This file is the project handoff and change checklist. Read it before every code
 
 - The previous aerial-opponent race filter, aerial commitment lock, and untargeted teammate/chip fallback were reverted at the user's request. Do not reintroduce them unless explicitly requested.
 - New `Redirect` is a subclass of `Aerial`, not a replacement for the normal Aerial. It reuses the existing Party Cannon shot-direction prediction, jump simulation, boost estimate, and aerial PD orientation controller.
-- Select Redirect only for a goal-directed aerial when the predicted ball is airborne (currently z > 350) and behind the car in local coordinates (currently local y < -100).
+- Select Redirect only for a goal-directed aerial when the predicted ball is airborne (currently z > 120) and behind the car in local coordinates (currently local y < -100).
 - Redirect changes the car-centre contact target so the front wheel pair reaches the ball while the car is inverted. The orientation controller must use `defaultPD(..., upside_down=True)`.
 - Untargeted aerials remain normal Aerial routines. This redirect is not a generic fallback or teammate pass.
 - Current live branch did not contain the earlier ground-speed setup described in section 6 despite the older note; inspect the live class before assuming that change is present.
 - Initial front-wheel contact offsets are geometric estimates (front axle at 34% of hitbox length; inverted wheel offset at half hitbox height). They require in-game tuning and have not been validated.
+
+- The live branch currently still contains the separate `wall_approach` routine and wall-drive selection logic, despite the older wall-architecture summary in section 5. Check the live code before any wall-related edit.
