@@ -1,0 +1,122 @@
+# Volt — Working Notes for ChatGPT
+
+Repository: https://github.com/SifuVolt/Grid-v1
+Active branch: `partycannon-python-port`
+Primary bot: Volt (Python, RLBot v5, VirxERLU)
+
+This file is the project handoff and change checklist. Read it before every code change and update it whenever a durable decision, architecture change, regression, or useful test result is established.
+
+## 1. Editing rules
+
+- Fetch the latest target file from the active branch immediately before editing. Never rely on an old copy or a previous conversation's SHA.
+- Make focused edits. Do not replace entire routines or files unless explicitly requested.
+- Preserve the existing working baseline. The user frequently reverts experiments; inspect the live branch before assuming a prior change is still present.
+- Prefer source-faithful ports from Party Cannon, Noob Black, RedUtils, or VirxERLU when requested. Do not invent a loose approximation and describe it as a carbon copy.
+- After each GitHub edit, fetch the file again and verify the actual content and blob SHA. Report commit SHA(s).
+- GitHub commits do not update the user's local OneDrive folder. The user must pull/copy the commit before local testing.
+- Never claim code compiled or worked in-game unless that was actually tested. Static text checks are not runtime tests.
+- User prefers targeted snippets/changes and precise explanations, not full routine/main file dumps.
+- When adding a new routine, user has sometimes explicitly preferred a class rather than standalone helper functions. Geometry/math helpers are acceptable when they do not control or own a routine.
+- Avoid changing existing calculated variables unnecessarily. Explain any unavoidable changes.
+- Add concise CMD diagnostics using `print(..., flush=True)` when useful; do not rely only on renderer debug.
+
+## 2. Project/runtime facts
+
+- Project is Volt, not the separate Grid bot project.
+- Local path seen previously: `...OneDrive\\Desktop\\RLBOTS\\Volt`.
+- RLBot v5, Python 3.11.9, packet rate 240; VirxERLU simulation timestep is approximately `dt = 1/120`.
+- `bot.toml` previously used `venv\\Scripts\\python.exe main.py`, agent id `BotMaker/ABot`, tag `1v1`.
+- Dependencies previously included `VirxERLU-CLib>=1.12.0` and numpy.
+- Common VirxERLU physics values cited by the user/source: max speed 2300, throttle acceleration about 66.67, braking about -3500, boost acceleration about 33.33 per second (check the live agent fields/constants before relying on a number), jump duration about 0.2 s, jump speed about 291.67, jump acceleration about 1458.33.
+- Volt's car wrapper exposes `airborne`; do not assume `on_ground` or `has_wheel_contact` exists.
+- Local files do not automatically sync with GitHub.
+
+## 3. Main files and responsibilities
+
+- `instructions for chatgpt on volt`: this is the bot's agent/decision code despite the filename. It controls teamplay, shot selection, routine stack decisions, defensive roles, and when shot finders are called.
+- `routines of volt`: custom routines/actions including `Aerial`, `jump_shot`, `ground_shot`, side shots, defense/recovery and shot-surface geometry.
+- `tools for volt`: shot finding, intercept filtering/scoring, target/contact selection, and helper logic used by the agent. It should not independently launch wall-drive routines.
+- `tools for volt` currently imports shot routines and contains the find_shot/find_any_shot pipeline. Do not reintroduce standalone wall approach/shot selection.
+- `routines of volt` has the `ShotSurfaceGeometry` helper for nearest-surface shot-vector correction. It is geometry only, not a movement routine.
+
+## 4. Durable behavior requirements
+
+### General decision-making / teamplay
+- Only the dedicated cover/goalie role should be passive; other teammates should remain aggressive within role selection.
+- A transition player should wait about 0.17–0.20 s after the first teammate shot before acting (not the old ~0.10 s).
+- Transition bump/demolition target: when transition player is out of defense, a teammate has possession/shot, and enemy defenders block the route, target the closest relevant defender; maximum two defenders.
+- Team statuses used include `NO_SHOT`, `SHOT_FOUND`, `ANY_SHOT_FOUND`, `LOW_BOOST`, `DEFEND`, and `SHOT_ABANDONED`. A real teammate `SHOT_FOUND` should take precedence over `ANY_SHOT_FOUND`.
+- Defense should not use wall-dash behavior (`allow_wall_dash=False`).
+- Emergency clear/save logic matters in deep own-half situations; do not weaken it while changing attack routines.
+- Goalie must not rotate unnecessarily in goal to face the ball when the ball is travelling toward the own goal. Prioritize protecting the net over needless aerial/boost detours.
+
+### Shots and mechanics
+- Shot planner horizon should generally consider 1–3 s opportunities, not only ~0.45 s.
+- Low boost (below roughly 12) should discourage complex shot types where possible.
+- Jump-shot shot vector should point toward the opponent goal; tilt-back then flip/dodge. Very quick shots may skip the tilt-back and use a forward flip.
+- Ground-shot should use the jump-shot shot vector/contact target logic where relevant and refresh stale contact data.
+- Aerial should aim the car's hitbox/nose at a deliberate ball contact point and predict the resulting shot direction toward goal. Avoid aiming at the ball centre blindly.
+- Aerial should be boost-aware and should not spend boost wastefully gaining all its momentum after takeoff if sufficient runway exists before takeoff.
+- Aerial orientation should be time-aware: use enough alignment for the available time, but do not over-rotate or miss a fast contact trying to achieve perfect orientation.
+- Side shots should be used only when the geometry and field position make sense, especially in the attacking half. Avoid weak side-flips in the own half.
+- For directional jump-shot dodge decisions, compare ball position to the interception point, not merely the car.
+- User dislikes backflip-heavy dodge behavior and excessive setup that loses good immediate shots.
+
+## 5. Wall behavior — current intended architecture
+
+- Volt must NOT have a separate wall-drive shot routine or planner that sends the car to a wall independently of the shot routines.
+- Party Cannon's approach is integrated into normal GroundShot, JumpShot, and AerialShot geometry/orientation. It does not require a standalone WallShot action.
+- Wall proximity may adjust the shot's contact direction/target geometry; it must not make the car abandon normal positioning or leave the goal open to chase a wall.
+- The own back wall should not be treated as a driveable wall for defensive positioning.
+- Current Party Cannon-inspired helper in `routines of volt` is named `ShotSurfaceGeometry`. It adjusts ground, jump, and aerial shot geometry relative to nearby arena surfaces. Current model covers floor, side walls, and back walls with axis-aligned planes; it is not a full beveled-corner/goal mesh.
+- The previous standalone `wall_approach`, `wall_shot`, wall-drive finder, and Aerial side-wall takeoff were removed.
+- Current commits on `partycannon-python-port` at time of writing:
+  - `02f726e`: remove wall-drive selection from agent decision code.
+  - `23693fb`: Party Cannon-derived wall-relative jump orientation.
+  - `ac83cd6`: integrate surface geometry into ground/aerial shots; remove standalone wall routines.
+  - `23ff275`: remove obsolete wall-drive and wall-shot functions from `tools for volt`.
+- Verify the current branch before assuming these commits or edits are still present; the user may revert.
+
+## 6. Current Aerial implementation notes
+
+- The live `Aerial` class in `routines of volt` uses Party Cannon-inspired shot direction prediction and hitbox standoff targeting.
+- It predicts the ball at `intercept_time`, derives `self.shot_vector`, applies `ShotSurfaceGeometry.adjust_aerial`, then computes a hitbox-aware `self.target`.
+- Its current launch condition is in the `if self.jumping or not agent.me.airborne:` block. On the first grounded tick it sets `self.jumping = True` and starts the jump immediately; this is why it currently launches from the floor without a distinct ground acceleration phase.
+- Current jump simulation adds first jump impulse/hold acceleration and optional second jump impulse; fast aerial holds the first jump then pulses the second jump. It then orients toward the predicted hitbox target and uses Party Cannon-style boost estimation / forward-projection boost control.
+- New requested behavior (2026-11-14): before jumping, let the car build useful ground speed with throttle/boost, then launch. If the car already has enough ground speed in the needed direction, skip the setup and launch immediately. Do not add a fixed delay that makes fast/near intercepts miss.
+- Design requirement for the requested change: ground-preparation must be conditional on a measurable speed/heading/reachability threshold, bounded by the time remaining, and must stop when launch is necessary. It should direct the car toward the actual aerial contact/shot approach, not drive sideways or away from the ball. Avoid double-counting ground acceleration in the airborne prediction after takeoff. Preserve the existing fast-aerial jump sequence and boost budget logic.
+- Add debug showing whether aerial launched immediately or used ground acceleration, with initial speed, target-direction speed, and remaining time. Keep logs rate-limited.
+
+## 7. Known regressions / pitfalls to avoid
+
+- NumPy Vector construction can fail with inhomogeneous shapes (e.g. `Vector(target_center)`); use consistent scalar components or the project's established constructor pattern.
+- `targets[0]` may be None; validate before indexing/converting.
+- Do not reference `tools` in a scope where it is not imported/defined.
+- Initialize variables on every control-flow path (past `slice_n` before assignment).
+- Clamp prediction slice indices; prior double-jump code indexed `slices[round(T*120)-1]` and could go out of range.
+- Aerial state fields must be initialized in `__init__` before use (past error: missing `aerial_started`).
+- Avoid undefined helper names such as `_centered_shot_vector` and unbound locals such as `vf`.
+- Be careful with VirxERLU Vector3 iteration/constructor assumptions.
+- Do not add unsupported car fields such as `on_ground` or `has_wheel_contact`.
+- Changes to aerial finder/selection must not accidentally make jump_shot start aerialing.
+- Changes to side-flip logic previously caused excessive backflips and lost tilt-back shots.
+- The user has reverted failed aerial, wall, reset, and shot experiments; always fetch the current live source first.
+
+## 8. Validation checklist for every change
+
+1. Read this notes file.
+2. Fetch current target file(s) and current blob SHA(s) from `partycannon-python-port`.
+3. Confirm the exact live implementation and call sites; do not trust old snippets.
+4. Make the smallest change that satisfies the request.
+5. Check syntax-sensitive indentation, names, imports, and every new state variable.
+6. Search for stale references and unintended duplicate paths.
+7. Fetch changed files again and verify exact content.
+8. Report commit SHA, files changed, what changed, what was intentionally left alone, and what was not tested.
+9. Tell user they need to pull/copy the commit locally before running the bot.
+10. Update this file with any new durable decisions, regressions, or test outcomes.
+
+## 9. Current work queue
+
+- Implement conditional pre-aerial ground acceleration: boost/throttle on the ground when the car's useful speed toward the aerial target is insufficient; launch immediately when already fast enough or when the intercept deadline requires it.
+- Test both a slow approach (should build ground speed before takeoff) and an already-fast approach (should not wait).
+- After the user reports results, tune thresholds from observed in-game behavior rather than guessing.
