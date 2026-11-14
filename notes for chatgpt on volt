@@ -173,3 +173,13 @@ This file is the project handoff and change checklist. Read it before every code
 - The former challenger cancels its stale shot and returns to the existing defensive/rotation routine. A short takeover grace period prevents every teammate from immediately releasing in sequence against the same opponent.
 - Emergency defence remains higher priority and is not released by this logic.
 - This is a timing/ETA handoff, not a guarantee of a successful touch. No compile or in-game test has been run.
+
+
+## 15. Risk-first challenger commitment (2026-11-14)
+
+- The elected first man must not stop pressuring simply because the prediction system cannot find a likely winning touch. If no reliable shot/intercept is available and the stack is clear, it uses the existing `short_shot` routine as a direct, low-confidence challenge toward the opponent goal.
+- While that routine is active, the challenger broadcasts `RISK_CHALLENGE` with a low score and a rough contact-time estimate. This means "I am committing to pressure, but do not assume I will win or touch the ball."
+- The designated goalie remains the defensive fallback. In 3v3, the transition player treats `RISK_CHALLENGE` as an active commitment and prepares for the loose-ball follow-up; it does not start the transition bump play for a risk challenge.
+- `RISK_CHALLENGE` is an accepted teamplay status and is included in the message's `shot_type` field. Teammates recognize it as an active commitment rather than interpreting it as `NO_SHOT`.
+- Emergency defence remains higher priority and is not replaced by this risk-first behaviour.
+- This uses an existing routine and message protocol; it has not been compiled or tested in-game.
