@@ -205,3 +205,21 @@ This file is the project handoff and change checklist. Read it before every code
 - In the air it aims along `DodgeDirection`, rolls its roof away from the dodge direction relative to the contact surface, holds jump until close to contact, releases for at least three frames, then dodges in the flattened shot direction about 0.05s before contact.
 - The timed `Arrive` creates `Drive(..., wasteBoost: true)`; boost is still gated by required target speed, forward alignment and speed. The jump-shot's airborne phase itself does not continuously boost.
 - Party Cannon uses `BoostAccel=991.667`, `BoostConsumption=33.3/s`, `AirThrottleAccel=66.667`, and `MaxSpeed=2300`. Its ETA model assumes the available boost can be spent to reach maximum speed; it does not enforce a fixed reserve for every action.
+
+
+## 18. Party Cannon JumpShot and boost-management port (2026-11-14)
+
+- Replaced the live `jump_shot` class in `routines of volt` with a Party Cannon-derived implementation, pinned to `ea84e4325ddb60565bbac6fb9766dc45f38b58cb`.
+- The shot prediction uses the Party Cannon 6:1 car/ball velocity blend for estimating shot power, the exact piecewise `ShotPowerModifier`, the 1:2 car/ball blend for outgoing ball velocity, ball gravity during time-to-goal prediction, and a shot direction from the predicted post-hit ball location to Volt's existing goal aim point.
+- Contact geometry uses Party Cannon's 165-unit standoff, surface-relative shot and dodge angles, 12.46 pitch angular acceleration, 5.5 maximum angular velocity, the 40-unit surface clearance correction, the additional 25-unit horizontal offset, and wall/ceiling gravity compensation. Arena geometry uses the live ball prediction and standard Soccar surface planes.
+- Jump timing ports Party Cannon's `TimeToJump` equation using Volt's existing `jump_speed`, `jump_acc`, `jump_max_duration`, and `agent.gravity`, plus Party Cannon's 325 sticky acceleration constant. Jump readiness compares the predicted jump position against the planned contact location and requires low velocity along the selected surface normal.
+- Approach uses a timed target speed (distance / time remaining), Party Cannon's arrival-target shift based on turn radius and jump recovery time, Volt's existing `defaultDrive` / `defaultPD` / `defaultThrottle`, and Party Cannon's boost alignment gate (<0.3 radians on ground; <0.8 airborne), forward-only condition, and explicit no-boost jump/dodge phase.
+- The jump phase aims along Party Cannon's DodgeDirection with the roof oriented away from it, holds jump until the contact window, releases for at least three frames, then dodges along the final shot direction at the 0.05-second contact window. The old custom hitbox-corner dodge-selection and repeated jump-shot boost logic were removed from this class.
+- Preserved the `side_shot` subclass as a separate lateral-approach variant; `ground_shot`, `Aerial`, and the existing aerial boost estimator were not rewritten by this change.
+- Added prediction-shift cancellation at 60 units and re-planning if boost increases during the approach. Jump-shot target updates occur at 0.2-second intervals, matching Party Cannon's update cadence.
+- Used Volt's live variables rather than introducing a parallel physics model: `agent.boost_accel`, `agent.gravity`, `agent.me.velocity`, orientation, hitbox, boost amount, prediction slices, and the existing jump/throttle constants. Party Cannon-only physical constants are retained only where Volt has no corresponding field (pitch angular acceleration, max angular velocity, sticky acceleration, and ball max speed).
+- GitHub commits:
+  - `c228da0`: initial Party Cannon JumpShot calculations, arrival, jump and boost port.
+  - `110f562`: prediction-shift validation and one-frame dodge-edge correction.
+  - `e98f70b`: Party Cannon's 270-unit jump-shot contact-height limit.
+- Static source checks confirmed the new calculation paths, imports, preserved side-shot subclass, and removal of the old hitbox-dodge block. No Python compile, simulation, or in-game test has been performed. Pull the branch locally before testing.
