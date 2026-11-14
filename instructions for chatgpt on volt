@@ -134,27 +134,34 @@ class Bot(VirxERLU):
             return None
 
         intercept_time = getattr(routine, "intercept_time", None)
-        if intercept_time is None or not math.isfinite(intercept_time):
-            return None
+        if intercept_time is None:
+            if routine.__class__.__name__ != "short_shot":
+                return None
+            # short_shot has no predicted slice, so compare the cars' ETAs
+            # to the current ball position instead.
+            contact_time = self._eta_to_ball(self.me)
+            contact_ball = self.ball.location
+        else:
+            if not math.isfinite(intercept_time):
+                return None
+            contact_time = intercept_time - self.time
+            prediction = getattr(self, "ball_prediction_struct", None)
+            slices = getattr(prediction, "slices", None) if prediction is not None else None
+            if not slices:
+                return None
 
-        contact_time = intercept_time - self.time
+            slice_index = max(
+                0, min(len(slices) - 1, round(contact_time * 120))
+            )
+            physics = slices[slice_index].physics
+            contact_ball = Vector(
+                physics.location.x,
+                physics.location.y,
+                physics.location.z
+            )
+
         if contact_time <= 0.05 or contact_time > 6.0:
             return None
-
-        prediction = getattr(self, "ball_prediction_struct", None)
-        slices = getattr(prediction, "slices", None) if prediction is not None else None
-        if not slices:
-            return None
-
-        slice_index = max(
-            0, min(len(slices) - 1, round(contact_time * 120))
-        )
-        physics = slices[slice_index].physics
-        contact_ball = Vector(
-            physics.location.x,
-            physics.location.y,
-            physics.location.z
-        )
 
         best_eta = float("inf")
         best_foe = None
@@ -1760,7 +1767,7 @@ class Bot(VirxERLU):
                     + challenger_message["contact_time"]
                 )
                 fallback_at = contact_at + 0.10
-                contact_key = round(contact_at * 10.0) / 10.0
+                contact_key = round(contact_at * 4.0) / 4.0
 
                 if (
                     getattr(self, "_goalie_fallback_active", False)
