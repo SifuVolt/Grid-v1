@@ -1229,36 +1229,6 @@ class Aerial:
 
         return boost_estimate
 
-    @staticmethod
-    def orient_jump_shot(agent, delta_x, shot_vector, time_remaining):
-        """
-        Reuse Aerial's launch-orientation controller for a jump shot.
-
-        The predicted contact error controls the nose direction; when the
-        contact error is nearly closed, the desired goal-shot vector becomes
-        the orientation target. This keeps the car aligned for the final
-        hitbox-directed dodge instead of merely pointing at the live ball.
-        """
-        target = (
-            delta_x
-            if delta_x.magnitude() > 50
-            else shot_vector
-        )
-        local_target = agent.me.local(target)
-
-        if time_remaining > 0.45 and abs(delta_x.z) > 80:
-            # Aerial's 3D launch orientation for a meaningful vertical
-            # contact error.
-            defaultPD(agent, local_target, up=Vector(z=1))
-        else:
-            # Aerial's normal jump orientation: preserve the car's current
-            # up direction while aligning the nose toward the strike.
-            defaultPD(
-                agent,
-                local_target.flatten(),
-                up=agent.me.up
-            )
-
     def _run_side_wall_takeoff(self, agent, time_remaining):
         """
         Internally route an aerial up a side wall before launching.
@@ -1633,10 +1603,16 @@ class Aerial:
                         defaultPD(agent, target)
 
             elif agent.controller.jump and not self.dodging:
-                # Shared launch controller also used by jump_shot.
-                self.orient_jump_shot(
-                    agent, delta_x, self.shot_vector, T
-                )
+                if T > 0.45 and abs(delta_x.z) > 80:
+                    # Party Cannon aims in 3D while the aerial is launching.
+                    # Preserve the quick double-jump path for near contacts.
+                    defaultPD(
+                        agent,
+                        target,
+                        up=Vector(z=1)
+                    )
+                else:
+                    defaultPD(agent, target.flatten(), up=agent.me.up)
 
             elif backboard_mode:
                 # If the ball is below the car, invert to expose the
@@ -4165,23 +4141,32 @@ class jump_shot:
             delta_x = self.offset_target - xf
             d_direction = delta_x.normalize()
 
-            # Aerial's orientation controller takes over immediately after
-            # the first jump. It aligns the car to the predicted contact,
-            # then transitions to the goal-directed shot vector as the
-            # contact error closes. The existing jump-release/dodge timing
-            # below is unchanged.
+            # ORIENT THE NOSE DURING THE EXISTING JUMP WINDOW.
+            # First steer toward the ball's horizontal position, then use S
+            # (positive pitch) to raise the nose when the ball is airborne
+            # and above the car. This adds no waiting phase and leaves the
+            # existing counter-3 dodge trigger intact.
             if self.counter < 3 and not self.dodging:
-                Aerial.orient_jump_shot(
-                    agent, delta_x, self.shot_vector, T
+                local_ball = agent.me.local_location(self.ball_location)
+                defaultPD(agent, local_ball.flatten())
+
+                ball_is_airborne = self.ball_location.z > 130
+                ball_is_above_car = self.ball_location.z > agent.me.location.z + 65
+                hold_s = (
+                    ball_is_airborne
+                    and ball_is_above_car
+                    and not self.quick_shot
                 )
 
+                if hold_s:
+                    agent.controller.pitch = 1
+
                 if not self._orientation_logged:
-                    local_strike = agent.me.local(self.shot_vector).flatten()
                     print(
-                        f"[JUMP SHOT AERIAL ORIENT] T={T:.3f} "
-                        f"contact_error={delta_x.magnitude():.1f} "
-                        f"shot_local=({local_strike.x:.2f},"
-                        f"{local_strike.y:.2f}) counter={self.counter}",
+                        f"[JUMP SHOT ORIENT] T={T:.3f} "
+                        f"ball_z={self.ball_location.z:.0f} "
+                        f"car_z={agent.me.location.z:.0f} "
+                        f"hold_S={hold_s} counter={self.counter}",
                         flush=True
                     )
                     self._orientation_logged = True
