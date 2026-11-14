@@ -1023,7 +1023,7 @@ class Aerial:
         # direction only when the planned car target is close to the nearest
         # arena surface.
         self.shot_vector, aerial_wall_normal, aerial_wall_clearance = (
-            WallShot.adjust_aerial(
+            ShotSurfaceGeometry.adjust_aerial(
                 self.ball, self.shot_vector,
                 92.75 + float(getattr(agent.me.hitbox, "length", 118.01)) * 0.5
             )
@@ -3256,7 +3256,7 @@ class shot_patience:
         return intercept_time
 
 
-class WallShot:
+class ShotSurfaceGeometry:
     """
     Party Cannon-style wall contact geometry shared by jump shots and aerials.
     The arena wall planes are used only to identify nearby vertical surfaces;
@@ -3385,6 +3385,38 @@ class WallShot:
             gravity_vector
         )
         return shot_direction, dodge_direction, normal, jump_time
+
+    @classmethod
+    def adjust_ground(cls, ball_location, shot_direction, approach_distance):
+        """
+        Party Cannon GroundShot surface correction. Keep the normal ground
+        approach unless its contact target would intersect the nearest
+        surface; then flatten the shot along that surface.
+        """
+        _, axis, plane, normal = cls.nearest_wall(ball_location)
+        target = ball_location - shot_direction * approach_distance
+        target_surface = cls.surface_point(target, axis, plane)
+        target_height = (target - target_surface).dot(normal)
+        ball_surface = cls.surface_point(ball_location, axis, plane)
+        ball_height = (ball_location - ball_surface).dot(normal)
+
+        if target_height >= 20:
+            return shot_direction, None, target_height
+
+        tangent = shot_direction - normal * shot_direction.dot(normal)
+        if tangent.magnitude() < 0.001:
+            return shot_direction, None, target_height
+
+        angle = math.asin(cap(
+            (ball_height - 20) / max(approach_distance, 1),
+            -1,
+            1
+        ))
+        adjusted = (
+            tangent.normalize() * math.cos(angle)
+            + normal * math.sin(angle)
+        ).normalize()
+        return adjusted, normal, target_height
 
     @classmethod
     def adjust_aerial(cls, ball_location, shot_direction, approach_distance=155):
@@ -3543,7 +3575,7 @@ class jump_shot:
             wall_dodge_direction,
             wall_normal,
             wall_jump_time
-        ) = WallShot.adjust_jump(
+        ) = ShotSurfaceGeometry.adjust_jump(
             self.ball_location, self.shot_vector, agent.gravity
         )
         if abs(wall_normal.z) < 0.95:
@@ -4282,7 +4314,34 @@ class ground_shot:
         self.shot_vector = (
             self.goal_aim_point - self.ball_location
         ).flatten().normalize()
-        self.offset_target = self.ball_location - (self.shot_vector * agent.best_shot_value)
+
+        # Party Cannon GroundShot: use the nearest arena surface to correct
+        # only contacts whose approach point would sit inside that surface.
+        self.shot_vector, ground_surface_normal, ground_clearance = (
+            ShotSurfaceGeometry.adjust_ground(
+                self.ball_location,
+                self.shot_vector,
+                float(agent.best_shot_value)
+            )
+        )
+        if ground_surface_normal is not None:
+            self.contact_normal = ground_surface_normal
+            self.offset_target = (
+                self.ball_location
+                - self.shot_vector * agent.best_shot_value
+            )
+            print(
+                f"[GROUND SURFACE SHOT] clearance={ground_clearance:.1f} "
+                f"normal=({ground_surface_normal.x:.0f},"
+                f"{ground_surface_normal.y:.0f},"
+                f"{ground_surface_normal.z:.0f})",
+                flush=True
+            )
+        else:
+            self.offset_target = (
+                self.ball_location
+                - self.shot_vector * agent.best_shot_value
+            )
         contact_label = getattr(self, "contact_label", None)
         refreshed_contact = _contact_approach_from_label(
             self.ball_location,
