@@ -3664,7 +3664,7 @@ class WallShot:
         if speed <= max_speed:
             blend = (speed - 500) / 1800
             return 0.65 + (0.55 - 0.65) * blend
-        blend = (speed - max_speed) / 2300
+        blend = (speed - max_speed) / 4600
         return 0.55 + (0.30 - 0.55) * blend
 
     @staticmethod
@@ -3730,8 +3730,12 @@ class WallShot:
             and time_remaining > dt
         ):
             safe_time = max(time_remaining, dt)
+            approach_direction = (
+                ball_location - car_location
+            ).flatten().normalize()
             car_final_velocity = (
                 (ball_location - car_location) / safe_time
+                + approach_direction * 500
             ).cap(0, max_speed)
             velocity_for_power = (
                 car_final_velocity * 6 + ball_velocity
