@@ -1092,6 +1092,7 @@ class Aerial:
         self.double_jump_complete = False
         self.side_wall_route = False
         self.side_wall_launched = False
+        self.aerialing = False
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -1111,7 +1112,29 @@ class Aerial:
 
     def _party_cannon_shot_direction(self, agent, ball, ball_velocity, time_remaining):
         # Port of Party Cannon's SetTargetLocation shot prediction.
-        shot_target = _relative_goal_aim_point(agent, self.targets)
+        if self.targets is None:
+            # Untargeted aerial: pass above a forward teammate when one is
+            # available; otherwise deliberately chip the ball upward.
+            if agent.friends:
+                team_side = side(agent.team)
+                friend = max(
+                    agent.friends,
+                    key=lambda teammate: (
+                        -teammate.location.y * team_side
+                        + min(teammate.location.flat_dist(ball), 1800) * 0.25
+                    )
+                )
+                friend_position = friend.location + friend.velocity * 0.25
+                shot_target = Vector(
+                    friend_position.x,
+                    friend_position.y - team_side * 250,
+                    friend_position.z + 500
+                )
+            else:
+                shot_target = ball + Vector(z=1200)
+        else:
+            shot_target = _relative_goal_aim_point(agent, self.targets)
+
         safe_time = max(time_remaining, dt)
         car_final_velocity = (
             (ball - agent.me.location) / safe_time
@@ -1376,6 +1399,9 @@ class Aerial:
         if not agent.shooting:
             agent.shooting = True
 
+        if agent.me.airborne:
+            self.aerialing = True
+
         T = self.intercept_time - agent.time
         xf = agent.me.location + agent.me.velocity * T + 0.5 * agent.gravity * T * T
         vf = agent.me.velocity + agent.gravity * T
@@ -1493,6 +1519,7 @@ class Aerial:
             if not self.jumping or not agent.me.airborne:
                 self.jump_type_fast = self.fast_aerial
                 self.jumping = True
+                self.aerialing = True
                 self.jump_time = agent.time
                 self.counter = 0
                 self.double_jump_complete = False
