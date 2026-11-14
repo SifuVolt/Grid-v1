@@ -1567,9 +1567,7 @@ class Bot(VirxERLU):
                 active_challenger = self.get_grid_active_challenger()
                 if self.me.index != active_challenger:
                     self.push(
-                        routines.tactical_rotation(
-                            goalie=self.should_hold_cover_role()
-                        )
+                        routines.tactical_rotation()
                     )
                     return
 
@@ -1593,7 +1591,7 @@ class Bot(VirxERLU):
                     bool(self.friends)
                     and self.should_hold_cover_role()
                 )
-                self.push(routines.tactical_rotation(goalie=goalie_role))
+                self.push(routines.tactical_rotation())
                 return
 
             if ball_depth > 2500 or distance_to_ball < 1100:
