@@ -115,20 +115,21 @@ This file is the project handoff and change checklist. Read it before every code
 
 ## 9. Current work queue
 
-- Test Redirect with the ball airborne and behind the car: verify selection, upside-down orientation, front-wheel contact point, and whether the ball travels toward the goal.
-- Test ordinary goal-directed aerials with the ball in front of the car to ensure they still use the unchanged Aerial routine.
-- Tune the initial front-axle and inverted-wheel offsets only from in-game observations.
+- Test the underside Redirect with an airborne ball behind Volt that is travelling toward goal but projected close to/outside a post.
+- Confirm the redirect's shallow contact changes the ball's path without noticeably reducing its speed.
+- Confirm ordinary aerials remain unchanged when the ball is in front, grounded, travelling away from goal, or already projected safely inside the goal mouth.
+- Tune the underside tilt and contact standoff only from in-game observations.
 
 
 
-## 10. Upside-down front-wheel redirect (2026-11-14)
+## 10. Airborne underside redirect (2026-11-14)
 
-- The previous aerial-opponent race filter, aerial commitment lock, and untargeted teammate/chip fallback were reverted at the user's request. Do not reintroduce them unless explicitly requested.
-- New `Redirect` is a subclass of `Aerial`, not a replacement for the normal Aerial. It reuses the existing Party Cannon shot-direction prediction, jump simulation, boost estimate, and aerial PD orientation controller.
-- Select Redirect only for a goal-directed aerial when the predicted ball is airborne (currently z > 120) and behind the car in local coordinates (currently local y < -100).
-- Redirect changes the car-centre contact target so the front wheel pair reaches the ball while the car is inverted. The orientation controller must use `defaultPD(..., upside_down=True)`.
-- Untargeted aerials remain normal Aerial routines. This redirect is not a generic fallback or teammate pass.
-- Current live branch did not contain the earlier ground-speed setup described in section 6 despite the older note; inspect the live class before assuming that change is present.
-- Initial front-wheel contact offsets are geometric estimates (front axle at 34% of hitbox length; inverted wheel offset at half hitbox height). They require in-game tuning and have not been validated.
-
-- The live branch currently still contains the separate `wall_approach` routine and wall-drive selection logic, despite the older wall-architecture summary in section 5. Check the live code before any wall-related edit.
+- The user reverted the earlier upside-down/front-wheel Redirect experiment. Do not assume that implementation is present or reintroduce its wheel offsets.
+- The current Redirect is a separate subclass of `Aerial`; ordinary Aerial behaviour remains the fallback and is otherwise unchanged.
+- Shot selection considers Redirect only for a goal-directed aerial candidate when the predicted ball is behind Volt in local coordinates (local y < -150), airborne (z > 250), moving at more than 600 uu/s, and travelling generally toward the opponent goal.
+- It also projects the predicted ball trajectory to the opponent goal line. Redirect is selected only when the projected path is near the goal mouth but close to/outside a post, the required correction is modest (at most 35 degrees), and the intercept is reachable within the current time limits.
+- Redirect approaches the predicted ball position from above. Its forward axis follows the ball's existing horizontal travel direction; its underside is tilted slightly toward the required lateral correction. The contact target is offset by ball radius plus half the hitbox height.
+- Redirect deliberately skips the final dodge. The intended touch is a shallow trajectory correction that preserves most of the ball's existing speed, rather than a powerful shot that kills its momentum.
+- The geometry is an initial model, not a validated collision simulation. In-game tests must establish whether the car actually contacts with its underside and whether the ball retains enough speed.
+- Untargeted aerial selection remains normal Aerial. Redirect is only selected in the goal-directed `find_shot` path.
+- The live branch still contains `wall_approach` and wall-drive selection logic; inspect the live code before any wall-related edit.
