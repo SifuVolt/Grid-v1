@@ -1602,7 +1602,7 @@ class Bot(VirxERLU):
                     bool(self.friends)
                     and self.should_hold_cover_role()
                 )
-                self.push(routines.tactical_rotation(goalie=goalie_role))
+                self.push(routines.tactical_rotation())
 
             return
 
@@ -2123,7 +2123,7 @@ class Bot(VirxERLU):
                 attacker, goalie, transition = self.get_grid_team_roles()
                 goalie_role = self.should_hold_cover_role()
 
-            self.push(routines.tactical_rotation(goalie=goalie_role))
+            self.push(routines.tactical_rotation())
             return
 
         # If we get here, then we are doing our kickoff, nor can we shoot, nor can we retreat or shadow - so let's just wait!
