@@ -851,344 +851,183 @@ class Bot(VirxERLU):
         dot = forward.normalize().dot(to_ball.normalize())
         return math.acos(max(-1.0, min(1.0, dot)))
 
-    def get_grid_team_roles(self):
+    def get_volt_team_roles(self):
         """
-        Noob Black's rotating 3s role selection.
+        Dynamic tactical assignment shared by every teammate.
 
-        The best challenger is selected from all living teammates using
-        ball-side dependency and a penalty for cars facing/positioned badly.
-        The goalie is independently the deepest player, measured by distance
-        to our goal with lateral distance capped at 900 units. If that goalie
-        has the best horizontal facing angle to the ball, it takes the challenge.
+        Returns (first_man, last_man, support_man). Roles are selected from
+        predicted reachable ball windows and goal coverage, not fixed depth.
         """
-        cached_time = getattr(self, "_noob_black_roles_time", None)
+        cached_time = getattr(self, "_volt_roles_time", None)
         if cached_time == self.time:
-            return self._noob_black_roles_cache
+            return self._volt_roles_cache
 
         cars = [
             car for car in [self.me] + list(self.friends)
             if not getattr(car, "demolished", False)
         ]
         cars.sort(key=lambda car: car.index)
-
         if not cars:
             result = (None, None, None)
-            self._noob_black_roles_time = self.time
-            self._noob_black_roles_cache = result
+            self._volt_roles_time = self.time
+            self._volt_roles_cache = result
             return result
         if len(cars) == 1:
             result = (cars[0].index, None, None)
-            self._noob_black_roles_time = self.time
-            self._noob_black_roles_cache = result
+            self._volt_roles_time = self.time
+            self._volt_roles_cache = result
             return result
 
+        side_value = utils.side(self.team)
         ball = self.ball.location
         ball_velocity = self.ball.velocity
-        side = utils.side(self.team)
-        own_goal = self.friend_goal.location
-        prediction = self.ball_prediction_struct
-        slices = (
-            getattr(prediction, "slices", None)
-            if prediction is not None else None
-        ) or ()
+        ball_depth = ball.y * side_value
+        prediction = getattr(self, "ball_prediction_struct", None)
+        slices = getattr(prediction, "slices", None) if prediction is not None else None
+        slices = slices or ()
 
-        # Noob Black limits its urgent-save window to five seconds and treats
-        # a predicted crossing of the goal plane as a save deadline.
-        save_deadline = -1.0
-        for ball_slice in slices:
-            time_to_goal = ball_slice.game_seconds - self.time
-            if time_to_goal <= 0:
-                continue
-            if time_to_goal > 5.0:
-                break
-            if abs(ball_slice.physics.location.y) >= 5235:
-                save_deadline = time_to_goal
-                break
-
-        sidewall_clear = (
-            abs(ball.y - own_goal.y) <= 1000
-            and abs(ball.x) >= 900
-            and save_deadline < 0
-        )
-
-        foe_goal = self.foe_goal.location
-
-        # Port Noob Black's next_bounce / air_pos prediction. It considers
-        # floor, side-wall, back-wall and ceiling contact before assigning
-        # a player to a rebound lane.
-        def next_bounce(position, velocity, height):
-            def bounce_root(target, root_sign):
-                a = -325.0
-                b = velocity.z
-                c = position.z
-                discriminant = (
-                    (target - c) / a
-                    + b * b / (4 * a * a)
-                )
-                if discriminant < 0:
-                    return None
-                return (
-                    -b / (2 * a)
-                    + math.sqrt(discriminant) * root_sign
-                )
-
-            if abs(velocity.x) > 0.001:
-                sx = 1 if velocity.x > 0 else -1
-                wall_x_time = (
-                    (4096 - height - position.x * sx)
-                    * sx / velocity.x
-                )
+        def travel_score(car, point, intercept_time):
+            offset = (point - car.location).flatten()
+            distance = offset.magnitude()
+            forward = car.forward.flatten()
+            speed = car.velocity.flatten().magnitude()
+            if distance > 1 and forward.magnitude() > 0.1:
+                angle = math.acos(max(-1.0, min(
+                    1.0, forward.normalize().dot(offset.normalize())
+                )))
             else:
-                wall_x_time = float("inf")
-
-            if abs(velocity.y) > 0.001:
-                sy = 1 if velocity.y > 0 else -1
-                wall_y_time = (
-                    (5120 - height - position.y * sy)
-                    * sy / velocity.y
-                )
-            else:
-                wall_y_time = float("inf")
-
-            floor_time = bounce_root(height, 1)
-            ceiling_time = bounce_root(2044 - height, -1)
-            if floor_time is None:
-                floor_time = 0.0
-            if ceiling_time is None:
-                ceiling_time = float("inf")
-
-            return min(
-                floor_time,
-                wall_x_time,
-                wall_y_time,
-                ceiling_time
+                angle = 0.0
+            turn_time = min(0.72, angle * 0.24)
+            boost = max(0.0, float(getattr(car, "boost", 0.0)))
+            cruise_speed = max(
+                900.0,
+                min(2050.0, 900.0 + speed * 0.48 + min(boost, 60.0) * 3.2)
             )
-
-        def air_pos(position, velocity, time_value):
-            return (
-                position
-                + velocity * time_value
-                + Vector(0, 0, -325) * time_value ** 2
+            height_gap = max(0.0, point.z - car.location.z - 260.0)
+            vertical_time = height_gap / (
+                1500.0 if getattr(car, "airborne", False) else 1050.0
             )
+            estimated_eta = turn_time + distance / cruise_speed + vertical_time
+            # A reachable early slice is strongly preferred. If it is not
+            # reachable, the miss margin still contributes to the ranking.
+            miss = max(0.0, estimated_eta - intercept_time)
+            return intercept_time + miss * 1.8 + turn_time * 0.12
 
-        normal_bounce_time = next_bounce(
-            ball, ball_velocity, 92.75
-        )
-        reverse_bounce_time = next_bounce(
-            ball, -ball_velocity, 92.75
-        )
-        normal_bounce = air_pos(
-            ball, ball_velocity, normal_bounce_time
-        )
-        reverse_bounce = air_pos(
-            ball, -ball_velocity, reverse_bounce_time
-        )
-
-        backwall_point = None
-        if not sidewall_clear and save_deadline < 0:
-            normal_hits_backwall = (
-                abs(normal_bounce.y - own_goal.y) <= 100
-                and normal_bounce.z > 0
-            )
-            reverse_hits_backwall = (
-                abs(reverse_bounce.y - own_goal.y) <= 100
-                and reverse_bounce.z > 0
-            )
-            if normal_hits_backwall or reverse_hits_backwall:
-                backwall_point = (
-                    normal_bounce
-                    if abs(normal_bounce.y - foe_goal.y)
-                    < abs(reverse_bounce.y - foe_goal.y)
-                    else reverse_bounce
-                )
-
-        ball_dependency = abs(ball.y - foe_goal.y)
-        if backwall_point is not None:
-            ball_dependency = abs(backwall_point.y - foe_goal.y)
-        else:
-            # Noob Black also adjusts dependency for a low double-jump-height
-            # bounce that is moving away from our goal and has no wall hit.
-            double_jump_height_time = (
-                -(564.9931640625 + 292)
-                / (-325.0556640625 * 2)
-            )
-            double_jump_height = (
-                -325.0556640625 * double_jump_height_time ** 2
-                + (564.9931640625 + 292) * double_jump_height_time
-                - 11.6591796875
-                - 292 * 25 / 120
-            )
-            bounce_time = next_bounce(
-                ball, ball_velocity, double_jump_height
-            )
-            vertical_bounce_time = next_bounce(
-                ball,
-                Vector(0, 0, ball_velocity.z),
-                double_jump_height
-            )
-            if abs(bounce_time - vertical_bounce_time) < 1e-6:
-                low_bounce = air_pos(
-                    ball, ball_velocity, bounce_time
-                )
-                if (
-                    low_bounce.y * foe_goal.y
-                    > ball.y * foe_goal.y
-                    and low_bounce.z < 600
-                ):
-                    ball_dependency = abs(
-                        low_bounce.y - foe_goal.y
-                    )
-
-        best_challenger = None
-        best_challenger_score = float("inf")
-        best_dependency = False
-        deepest_player = None
-        deepest_score = float("inf")
-
-        ball_flat_velocity = ball_velocity.flatten()
-        ball_flat_speed = ball_flat_velocity.magnitude()
-        ball_side = 1 if ball.x >= 0 else -1
-
+        intercept_scores = {}
         for car in cars:
-            location = car.location
-            velocity = car.velocity
-            forward = car.forward
-
-            furthest_score = (
-                min(location.dist(own_goal), 900.0)
-                + abs(location.y - own_goal.y)
-            )
-            if furthest_score < deepest_score:
-                deepest_score = furthest_score
-                deepest_player = car
-
-            post_x = 900 if location.x >= 0 else -900
-            own_goal_post = Vector(
-                x=post_x, y=side * 5050, z=0
-            )
-            facing_badly = forward.y * side > 0
-            falling_without_jump = (
-                location.z <= 200
-                and getattr(car, "doublejumped", False)
-                and velocity.z < 10
-                and velocity.y * side > 0
-            )
-            on_goal_post = (
-                location.flatten().dist(own_goal_post) <= 100
-            )
-            facing_own_goal_from_line = (
-                location.y * side >= 5050
-                and abs(location.x) <= 900
-                and forward.y * side > 0
-            )
-            closest_score = (
-                location.dist(ball)
-                + 5000.0 * (
-                    facing_badly
-                    or falling_without_jump
-                    or on_goal_post
-                    or facing_own_goal_from_line
-                )
-            )
-
-            if sidewall_clear:
-                dependency = (
-                    ball.x * ball_side >= location.x * ball_side
-                )
-            elif backwall_point is not None:
-                dependency = (
-                    abs(location.y - foe_goal.y)
-                    + abs(location.x - backwall_point.x) / 5
-                    > abs(backwall_point.y - foe_goal.y)
-                )
-            else:
-                lane_distance = (
-                    location.flatten() - ball.flatten()
-                )
-                cross_track = abs(
-                    lane_distance.x * ball_flat_velocity.y
-                    - lane_distance.y * ball_flat_velocity.x
-                )
-                along_track = abs(
-                    lane_distance.x * ball_flat_velocity.x
-                    + lane_distance.y * ball_flat_velocity.y
-                )
-                path_relevant = (
-                    save_deadline < 0
-                    or (
-                        cross_track / 2300.0 - 134.85
-                        < along_track / max(ball_flat_speed, 1.0)
+            best = float("inf")
+            if slices:
+                for ball_slice in slices:
+                    intercept_time = ball_slice.game_seconds - self.time
+                    if intercept_time < 0.08:
+                        continue
+                    if intercept_time > 3.25:
+                        break
+                    physics = ball_slice.physics
+                    point = Vector(
+                        physics.location.x,
+                        physics.location.y,
+                        physics.location.z
                     )
-                )
-                dependency = (
-                    abs(location.y - foe_goal.y)
-                    + abs(location.x - ball.x) / 5
-                    * (save_deadline >= 0)
-                    > ball_dependency
-                    and path_relevant
-                )
+                    if abs(point.y) > 5220:
+                        continue
+                    score = travel_score(car, point, intercept_time)
+                    if score < best:
+                        best = score
+            if best == float("inf"):
+                best = travel_score(car, ball, 0.35) + 0.35
+            intercept_scores[car.index] = best
 
+        first_man = min(
+            cars,
+            key=lambda car: (intercept_scores[car.index], car.index)
+        )
+
+        # Keep the current first man when the challenger is only marginally
+        # faster. This stops packet-to-packet role swaps during close races.
+        previous = getattr(self, "_volt_roles_previous", None)
+        if previous is not None:
+            previous_first = next(
+                (car for car in cars if car.index == previous[0]), None
+            )
             if (
-                (closest_score <= best_challenger_score
-                 and bool(dependency) >= best_dependency)
-                or bool(dependency) > best_dependency
+                previous_first is not None
+                and intercept_scores[previous_first.index]
+                    <= intercept_scores[first_man.index] + 0.18
             ):
-                best_challenger = car
-                best_challenger_score = closest_score
-                best_dependency = bool(dependency)
+                first_man = previous_first
 
-        attacker = best_challenger
-        goalie = deepest_player
+        # The last man is selected by how quickly they can cover the likely
+        # goal-mouth lane, not simply who happens to be deepest.
+        goal_y = self.friend_goal.location.y
+        toward_goal_speed = ball_velocity.y * side_value
+        projected_x = ball.x
+        if toward_goal_speed > 100.0 and ball_depth < 5100.0:
+            goal_time = (5120.0 - ball_depth) / toward_goal_speed
+            if 0.0 < goal_time < 4.5:
+                projected_x += ball_velocity.x * goal_time
+        projected_x = max(-900.0, min(900.0, projected_x))
+        guard_depth = max(3450.0, min(4750.0, 3500.0 + ball_depth * 0.24))
+        guard_point = Vector(projected_x, side_value * guard_depth, 0)
 
-        # A goalie normally holds the net, but if its nose is already
-        # pointing at the ball better than either teammate, let it challenge.
-        # This is a narrow role-selection exception, not a global teamplay
-        # priority override.
-        # The 3D-facing-angle exception is strictly defensive:
-        # it is available only while the ball remains in our half.
-        ball_depth = ball.y * side
-
-        if (
-            goalie.index != attacker.index
-            and ball_depth > 0.0
-        ):
-            goalie_angle = self._car_ball_facing_angle(goalie)
-            best_other_angle = min(
-                self._car_ball_facing_angle(car)
-                for car in cars
-                if car.index != goalie.index
+        candidates = [car for car in cars if car.index != first_man.index]
+        last_man = min(
+            candidates,
+            key=lambda car: (
+                travel_score(car, guard_point, 0.45)
+                + max(0.0, 2500.0 - car.location.y * side_value) / 18000.0,
+                car.index
             )
-            if goalie_angle + 0.001 < best_other_angle:
-                attacker = goalie
-                if self.time - getattr(
-                    self, "_last_goalie_angle_debug", -999.0
-                ) >= 0.5:
-                    self._last_goalie_angle_debug = self.time
-                    print(
-                        f"[GOALIE ANGLE CHALLENGE] "
-                        f"goalie={goalie.index} "
-                        f"angle={math.degrees(goalie_angle):.1f}deg "
-                        f"other_best={math.degrees(best_other_angle):.1f}deg "
-                        f"ball_depth={ball_depth:.0f}",
-                        flush=True
-                    )
+        )
 
-        transition = next(
+        # Preserve the defensive anchor unless another player has a clear
+        # coverage advantage. The larger margin avoids role oscillation.
+        if previous is not None:
+            previous_last = next(
+                (car for car in candidates if car.index == previous[1]), None
+            )
+            if previous_last is not None:
+                old_score = (
+                    travel_score(previous_last, guard_point, 0.45)
+                    + max(0.0, 2500.0 - previous_last.location.y * side_value) / 18000.0
+                )
+                new_score = (
+                    travel_score(last_man, guard_point, 0.45)
+                    + max(0.0, 2500.0 - last_man.location.y * side_value) / 18000.0
+                )
+                if old_score <= new_score + 0.28:
+                    last_man = previous_last
+
+        support_man = next(
             (
                 car for car in cars
-                if car.index != attacker.index
-                and car.index != goalie.index
+                if car.index not in {first_man.index, last_man.index}
             ),
             None
         )
         result = (
-            attacker.index,
-            goalie.index,
-            transition.index if transition is not None else None
+            first_man.index,
+            last_man.index,
+            support_man.index if support_man is not None else None
         )
-        self._noob_black_roles_time = self.time
-        self._noob_black_roles_cache = result
+        self._volt_roles_previous = result
+        self._volt_roles_time = self.time
+        self._volt_roles_cache = result
+
+        if self.time - getattr(self, "_last_volt_role_debug", -999.0) >= 0.8:
+            self._last_volt_role_debug = self.time
+            print(
+                f"[VOLT TACTICS] first={result[0]} last={result[1]} "
+                f"support={result[2]} first_eta={intercept_scores[first_man.index]:.2f} "
+                f"ball_depth={ball_depth:.0f} guard_x={projected_x:.0f}",
+                flush=True
+            )
         return result
+
+    def get_grid_team_roles(self):
+        # Compatibility name for existing callers; the assignment itself is
+        # now Volt's dynamic first/last/support model.
+        return self.get_volt_team_roles()
 
     def get_grid_active_challenger(self):
         """Noob Black's selected challenger always owns the first challenge."""
@@ -1599,128 +1438,10 @@ class Bot(VirxERLU):
         if self.friends:
             attacker, goalie, transition = self.get_grid_team_roles()
 
-        # The third player in 3v3 is the non-goalie cover/transition
-        # player. They do not join the attacker's first challenge; they wait
-        # for that expected contact, then take the earliest reachable
-        # follow-up touch from the ball's updated trajectory.
-        if self.friends and transition is not None and self.me.index == transition:
-            attacker_message = self.get_teammate_comm(
-                attacker, max_age=0.65
-            ) if attacker is not None else None
-
-            active_attack = (
-                attacker_message is not None
-                and attacker_message.get("cover_released", False)
-                and attacker_message.get("status") in {
-                    "SHOT_FOUND", "ANY_SHOT_FOUND"
-                }
-                and ball_depth < 1280
-                and not self.defensive_emergency()
-            )
-
-            # A bump is only valid while the teammate's attack is still live.
-            # Drop it immediately if the attack ends or defence becomes urgent.
-            if current_name == "transition_bump" and not active_attack:
-                self.clear()
-                current_name = None
-
-            # When the attacker is actively playing the ball, use the
-            # transition player to remove a defender screening the direct
-            # route to goal. Never trade away an urgent defensive recovery.
-            if active_attack and not self.defensive_emergency():
-                bump_target = self.get_transition_bump_target(attacker)
-
-                if current_name == "transition_bump":
-                    active_target = getattr(
-                        self.stack[0], "target_index", None
-                    )
-                    if (
-                        bump_target is not None
-                        and bump_target.index == active_target
-                    ):
-                        return
-
-                    self.clear()
-                    current_name = None
-
-                if (
-                    bump_target is not None
-                    and current_name in {
-                        None, "grid_defense", "goto_boost",
-                        "cover_followup_wait"
-                    }
-                    and self.time >= self.transition_bump_cooldown_until
-                ):
-                    if current_name is not None:
-                        self.clear()
-
-                    self.transition_bump_cooldown_until = self.time + 2.25
-                    print(
-                        f"[TRANSITION BUMP] player={self.me.index} "
-                        f"attacker={attacker} target={bump_target.index} "
-                        f"distance={self.me.location.flat_dist(bump_target.location):.0f}",
-                        flush=True
-                    )
-                    self.push(
-                        routines.transition_bump(bump_target.index)
-                    )
-                    return
-
-            if current_name == "transition_receive":
-                # Never let a receiving position suppress a new defensive
-                # emergency or continue after the teammate's attack expires.
-                if not active_attack or self.defensive_emergency():
-                    self.clear()
-                    current_name = None
-                else:
-                    return
-
-            # Predict the attacker's clear lane before contact, then let the
-            # transition_receive routine switch to the actual ball trajectory.
-            if (
-                active_attack
-                and current_name in {
-                    None, "grid_defense", "goto_boost",
-                    "cover_followup_wait"
-                }
-            ):
-                contact_time = max(
-                    0.0,
-                    min(3.0, attacker_message.get("contact_time", 0.0))
-                )
-                contact_at = (
-                    attacker_message["received_at"] + contact_time
-                )
-                contact_key = round(contact_at * 2.0) / 2.0
-                last_key = getattr(
-                    self, "_cover_followup_contact_key", None
-                )
-                last_start = getattr(
-                    self, "_cover_followup_last_start", -999.0
-                )
-
-                if (
-                    last_key is None
-                    or abs(contact_key - last_key) >= 0.5
-                ) and self.time - last_start >= 0.75:
-                    self._cover_followup_contact_key = contact_key
-                    self._cover_followup_last_start = self.time
-
-                    if current_name is not None:
-                        self.clear()
-
-                    print(
-                        f"[TRANSITION PREDICT] player={self.me.index} "
-                        f"attacker={attacker} "
-                        f"contact_in={max(0.0, contact_at - self.time):.2f}",
-                        flush=True
-                    )
-                    self.push(
-                        routines.transition_receive(
-                            attacker, contact_at, contact_key
-                        )
-                    )
-                    return
+        # First/last/support assignments now drive positioning directly.
+        # The former scripted bump-and-receive sequence is intentionally
+        # retired: support players maintain a live lane and can react to the
+        # actual rebound instead of committing to a guessed contact point.
 
         # Keep a started half-flip intact until its own routine finishes.
         if current_name == "half_flip":
@@ -1846,7 +1567,7 @@ class Bot(VirxERLU):
                 active_challenger = self.get_grid_active_challenger()
                 if self.me.index != active_challenger:
                     self.push(
-                        routines.grid_defense(
+                        routines.tactical_rotation(
                             goalie=self.should_hold_cover_role()
                         )
                     )
@@ -1872,7 +1593,7 @@ class Bot(VirxERLU):
                     bool(self.friends)
                     and self.should_hold_cover_role()
                 )
-                self.push(routines.grid_defense(goalie=goalie_role))
+                self.push(routines.tactical_rotation(goalie=goalie_role))
                 return
 
             if ball_depth > 2500 or distance_to_ball < 1100:
@@ -1883,7 +1604,7 @@ class Bot(VirxERLU):
                     bool(self.friends)
                     and self.should_hold_cover_role()
                 )
-                self.push(routines.grid_defense(goalie=goalie_role))
+                self.push(routines.tactical_rotation(goalie=goalie_role))
 
             return
 
@@ -2404,7 +2125,7 @@ class Bot(VirxERLU):
                 attacker, goalie, transition = self.get_grid_team_roles()
                 goalie_role = self.should_hold_cover_role()
 
-            self.push(routines.grid_defense(goalie=goalie_role))
+            self.push(routines.tactical_rotation(goalie=goalie_role))
             return
 
         # If we get here, then we are doing our kickoff, nor can we shoot, nor can we retreat or shadow - so let's just wait!
