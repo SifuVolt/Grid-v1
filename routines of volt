@@ -202,6 +202,254 @@ class wave_dash:
                 agent.controller.roll = -1 if self.direction == 1 else 1
                 agent.controller.pitch = 0
 
+class wall_approach:
+    WALL_X = 4050
+    WALL_Y = 5070
+    MIN_BALL_HEIGHT = 190
+    MAX_BALL_HEIGHT = 2200
+    MAX_WALL_GAP = 1800
+
+    def __init__(self, intercept_time, targets=None):
+        self.intercept_time = intercept_time
+        self.targets = targets
+        self.ball_location = None
+        self.start_time = -1
+        self.last_debug_time = -1
+        self.wall_axis = None
+        self.wall_side = 0
+
+    def update(self, shot):
+        self.intercept_time = shot.intercept_time
+        self.targets = getattr(shot, "targets", self.targets)
+
+    def wall_surface_for_ball(self, ball, team=None):
+        radius = 92.75
+        # Only the two side walls are valid setup surfaces.
+        # Ignore both back walls, including the opponent's.
+        candidates = [
+            ("x", 1 if ball.x >= 0 else -1, 4096.0 - abs(ball.x) - radius),
+        ]
+        candidates.sort(key=lambda item: item[2])
+        for axis, wall_side, gap in candidates:
+            if gap < -5 or gap > self.MAX_WALL_GAP:
+                continue
+            # The low central back-wall opening is the goal interior.
+            if axis == "y" and abs(ball.x) < 900 and ball.z < 700:
+                continue
+            # Exclude our own back wall from attacking wall-drive routes.
+            if axis == "y" and team is not None and wall_side == side(team):
+                continue
+            return axis, wall_side, max(0.0, gap)
+        return None
+
+    def car_wall_surface(self, car, team=None):
+        if (
+            abs(car.location.x) > 3500
+            and abs(car.up.x) > 0.65
+            and car.up.x * car.location.x < 0
+        ):
+            return "x", (1 if car.location.x >= 0 else -1)
+        # Back walls are deliberately excluded from wall routines.
+        return None
+
+    def run(self, agent: VirxERLU, manual=False):
+        if self.start_time < 0:
+            self.start_time = agent.time
+            print("[WALL DRIVE] START", flush=True)
+
+        agent.shooting = True
+        T = self.intercept_time - agent.time
+        prediction = agent.ball_prediction_struct
+        if prediction is None or not prediction.slices:
+            print("[WALL DRIVE] STOP: no prediction", flush=True)
+            agent.pop()
+            agent.shooting = False
+            return
+
+        predicted_time = agent.time + max(0.0, T)
+        slice_n = min(
+            range(len(prediction.slices)),
+            key=lambda i: abs(
+                prediction.slices[i].game_seconds - predicted_time
+            )
+        )
+        physics = prediction.slices[slice_n].physics
+        ball = Vector(
+            physics.location.x, physics.location.y, physics.location.z
+        )
+        ball_velocity = Vector(
+            physics.velocity.x, physics.velocity.y, physics.velocity.z
+        )
+        self.ball_location = ball
+        car = agent.me
+
+        if T <= -0.25:
+            print("[WALL DRIVE] STOP: contact window passed", flush=True)
+            agent.pop()
+            agent.shooting = False
+            return
+
+        surface = self.wall_surface_for_ball(ball, agent.team)
+        if (
+            surface is None
+            or ball.z < self.MIN_BALL_HEIGHT
+            or ball.z > self.MAX_BALL_HEIGHT
+        ):
+            print(
+                f"[WALL DRIVE] STOP: left wall window "
+                f"ball=({ball.x:.0f},{ball.y:.0f},{ball.z:.0f})",
+                flush=True
+            )
+            agent.pop()
+            agent.shooting = False
+            return
+
+        axis, wall_side, wall_gap = surface
+        wall_velocity = (
+            ball_velocity.x if axis == "x" else ball_velocity.y
+        )
+        if wall_gap > 260 and wall_velocity * wall_side < 260:
+            print("[WALL DRIVE] STOP: ball not approaching wall", flush=True)
+            agent.pop()
+            agent.shooting = False
+            return
+
+        goal_direction = (
+            agent.foe_goal.location - ball
+        ).flatten().normalize()
+        if goal_direction.magnitude() < 0.01:
+            goal_direction = Vector(0, -side(agent.team), 0)
+
+        if axis == "x":
+            contact_target = Vector(
+                wall_side * self.WALL_X,
+                ball.y - goal_direction.y * 185,
+                max(110, ball.z - goal_direction.z * 185)
+            )
+        else:
+            contact_target = Vector(
+                ball.x - goal_direction.x * 185,
+                wall_side * self.WALL_Y,
+                max(110, ball.z - goal_direction.z * 185)
+            )
+
+        attached_wall = self.car_wall_surface(car, agent.team)
+        if attached_wall is not None and attached_wall != (axis, wall_side):
+            print(
+                f"[WALL DRIVE] STOP: different wall "
+                f"car_wall={attached_wall} ball_wall={(axis, wall_side)}",
+                flush=True
+            )
+            agent.pop()
+            agent.shooting = False
+            return
+
+        on_wall = attached_wall == (axis, wall_side)
+        if on_wall:
+            drive_target = contact_target
+            drive_phase = "WALL CLIMB"
+        else:
+            # Start from the floor, reach the chosen wall at the current
+            # lane/height, then climb toward the predicted contact point.
+            if axis == "x":
+                drive_target = Vector(
+                    wall_side * self.WALL_X,
+                    ball.y,
+                    max(100, car.location.z)
+                )
+            else:
+                drive_target = Vector(
+                    ball.x,
+                    wall_side * self.WALL_Y,
+                    max(100, car.location.z)
+                )
+            drive_phase = "GROUND TO WALL"
+
+        if on_wall:
+            distance = car.location.dist(drive_target)
+        elif axis == "x":
+            distance = (
+                abs(drive_target.x - car.location.x)
+                + abs(drive_target.y - car.location.y)
+                + abs(contact_target.z - car.location.z)
+            )
+        else:
+            distance = (
+                abs(drive_target.y - car.location.y)
+                + abs(drive_target.x - car.location.x)
+                + abs(contact_target.z - car.location.z)
+            )
+
+        local_target = car.local_location(drive_target)
+        time_left = max(0.12, min(T, 3.0))
+        speed_required = min(2200, max(900, distance / time_left))
+
+        # Slow down before sharp turns instead of asking for full speed
+        # while the nose is pointed away from the wall route.
+        local_angle = abs(math.atan2(local_target.y, local_target.x))
+        turn_speed_cap = (
+            950 if local_angle > 1.65 else
+            1250 if local_angle > 1.20 else
+            1650 if local_angle > 0.75 else
+            2200
+        )
+        speed_required = min(speed_required, turn_speed_cap)
+        speed = car.velocity.magnitude()
+        if self.last_debug_time < 0 or agent.time - self.last_debug_time >= 0.35:
+            self.last_debug_time = agent.time
+            print(
+                f"[WALL DRIVE] {drive_phase} surface={axis}{wall_side:+d} "
+                f"target=({drive_target.x:.0f},{drive_target.y:.0f},{drive_target.z:.0f}) "
+                f"distance={distance:.0f} T={T:.2f} speed={speed_required:.0f} "
+                f"boost={car.boost:.0f} controller={controller_mode} "
+                f"steer={agent.controller.steer:.2f} yaw={agent.controller.yaw:.2f} "
+                f"throttle={agent.controller.throttle:.2f}",
+                flush=True
+            )
+
+        if on_wall:
+            # On a vertical wall, world-up is wrong: it rolls the car away
+            # from the surface. Keep the car's roof normal aligned with the
+            # wall normal while steering toward the contact point.
+            wall_up = (
+                Vector(-wall_side, 0, 0)
+                if axis == "x"
+                else Vector(0, -wall_side, 0)
+            )
+            target_angles = defaultPD(
+                agent, local_target, up=car.local(wall_up)
+            )
+            defaultThrottle(
+                agent, speed_required, target_angles, local_target
+            )
+            controller_mode = "SURFACE PD"
+        else:
+            defaultDrive(agent, speed_required, local_target)
+            controller_mode = "GROUND PD"
+
+        # Keep VirxERLU's speed controller, but add a wall-shot urgency
+        # override when there is a genuine acceleration deficit.
+        yaw_error = abs(target_angles[1]) if on_wall else local_angle
+        needs_boost = (
+            car.boost > 0
+            and distance > 550
+            and speed_required > speed + 140
+            and yaw_error < 0.85
+            and not agent.controller.handbrake
+        )
+        if needs_boost:
+            agent.controller.throttle = 1
+            agent.controller.boost = True
+        elif yaw_error > 1.15 or agent.controller.handbrake:
+            agent.controller.boost = False
+
+        if on_wall and car.location.dist(ball) < 190:
+            print(
+                f"[WALL DRIVE] CONTACT RANGE surface={axis}{wall_side:+d} "
+                f"ball=({ball.x:.0f},{ball.y:.0f},{ball.z:.0f}) T={T:.2f}",
+                flush=True
+            )
+
 class wall_dash:
     JUMP_TIME = 0.07
     RELEASE_TIME = 0.05
@@ -842,8 +1090,8 @@ class Aerial:
         self.jump_time = -1
         self.counter = 0
         self.double_jump_complete = False
-        self.ground_setup_start = None
-        self.last_ground_setup_debug = -999.0
+        self.side_wall_route = False
+        self.side_wall_launched = False
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -981,6 +1229,149 @@ class Aerial:
 
         return boost_estimate
 
+    def _run_side_wall_takeoff(self, agent, time_remaining):
+        """
+        Internally route an aerial up a side wall before launching.
+
+        The car may begin on the floor or already be attached to the matching
+        side wall. Back walls are never considered. Returns True while this
+        method owns the controller; returns False once the aerial can proceed.
+        """
+        car = agent.me
+        ball = self.ball
+
+        # A side-wall aerial only makes sense when the predicted contact is
+        # genuinely close to one of the two side walls and above the floor.
+        wall_side = 1 if ball.x >= 0 else -1
+        wall_gap = 4096.0 - abs(ball.x) - 92.75
+        if not (-5 <= wall_gap <= 700) or ball.z < 300:
+            self.side_wall_route = False
+            return False
+
+        attached_wall = None
+        if (
+            abs(car.location.x) > 3500
+            and abs(car.up.x) > 0.65
+            and car.up.x * car.location.x < 0
+        ):
+            attached_wall = 1 if car.location.x >= 0 else -1
+
+        # A free-flight car or a car attached to the opposite side wall
+        # should keep using the ordinary aerial controller.
+        if car.airborne and attached_wall is None:
+            return False
+        if attached_wall is not None and attached_wall != wall_side:
+            return False
+
+        # A late intercept is better handled by the normal aerial than by
+        # trying to climb a wall that cannot be reached in time.
+        if time_remaining <= 0.35 and not self.jumping:
+            return False
+
+        goal_direction = (
+            _relative_goal_aim_point(agent, self.targets) - ball
+        ).flatten().normalize()
+        if goal_direction.magnitude() < 0.01:
+            goal_direction = Vector(0, -side(agent.team), 0)
+
+        # Keep the car just inside the wall, with its nose lane aligned to
+        # the hitbox contact target already calculated by Aerial.
+        wall_x = wall_side * 3850.0
+        lane_y = self.target.y if self.target is not None else ball.y
+        climb_z = max(180.0, min(ball.z - 185.0, 1900.0))
+        if attached_wall is not None:
+            drive_target = Vector(wall_x, lane_y, climb_z)
+            phase = "CLIMB"
+        else:
+            # From the floor, first reach the wall at the ball's lane.
+            drive_target = Vector(wall_x, ball.y, max(100.0, car.location.z))
+            phase = "TO WALL"
+
+        local_target = car.local_location(drive_target)
+        distance = car.location.dist(drive_target)
+        time_for_drive = max(0.18, time_remaining - 0.20)
+        speed_required = cap(distance / time_for_drive, 900, 2300)
+
+        # Turn-aware speed: preserve speed on a clean line, but don't boost
+        # blindly while the nose is pointed across the field.
+        local_angle = abs(math.atan2(local_target.y, local_target.x))
+        turn_cap = (
+            900 if local_angle > 1.75 else
+            1200 if local_angle > 1.30 else
+            1650 if local_angle > 0.80 else
+            2300
+        )
+        speed_required = min(speed_required, turn_cap)
+        speed = car.velocity.magnitude()
+
+        if attached_wall is None:
+            # defaultDrive performs VirxERLU's speed-aware throttle control;
+            # unlike a fixed throttle=1, it can ease off before overspeeding.
+            defaultDrive(agent, speed_required, local_target)
+            boost_angle = local_angle
+        else:
+            wall_up = Vector(-wall_side, 0, 0)
+            target_angles = defaultPD(
+                agent, local_target, up=car.local(wall_up)
+            )
+            defaultThrottle(
+                agent, speed_required, target_angles, local_target
+            )
+            boost_angle = abs(target_angles[1])
+
+        agent.controller.boost = (
+            car.boost > 0
+            and distance > 550
+            and speed < speed_required - 100
+            and boost_angle < 0.65
+            and not agent.controller.handbrake
+        )
+
+        if (
+            not hasattr(self, "side_wall_debug_time")
+            or agent.time - self.side_wall_debug_time >= 0.35
+        ):
+            self.side_wall_debug_time = agent.time
+            print(
+                f"[AERIAL SIDE WALL] {phase} side={wall_side:+d} "
+                f"gap={wall_gap:.0f} distance={distance:.0f} "
+                f"T={time_remaining:.2f} speed={speed:.0f}/"
+                f"{speed_required:.0f} boost={car.boost:.0f}",
+                flush=True
+            )
+
+        if attached_wall is None:
+            return True
+
+        # Start the aerial only once the car has climbed into the ball's
+        # height/lane. If the intercept becomes urgent, launch from the
+        # closest reachable point rather than continuing to drive past it.
+        height_error = abs(car.location.z - climb_z)
+        lane_error = abs(car.location.y - lane_y)
+        launch_ready = (
+            (height_error < 190 and lane_error < 420)
+            or (distance < 330)
+            or (time_remaining < 0.55 and distance < 650)
+        )
+        if not launch_ready:
+            return True
+
+        self.side_wall_route = False
+        self.side_wall_launched = True
+        self.jump_type_fast = self.fast_aerial
+        self.jumping = True
+        self.jump_time = agent.time
+        self.counter = 0
+        self.double_jump_complete = False
+        agent.controller.jump = True
+        print(
+            f"[AERIAL SIDE WALL] LAUNCH side={wall_side:+d} "
+            f"height_error={height_error:.0f} lane_error={lane_error:.0f} "
+            f"T={time_remaining:.2f}",
+            flush=True
+        )
+        return False
+
     def run(self, agent: VirxERLU):
         if not agent.shooting:
             agent.shooting = True
@@ -1020,27 +1411,6 @@ class Aerial:
         self.shot_vector = self._party_cannon_shot_direction(
             agent, self.ball, aerial_ball_velocity, T
         )
-
-        # Party Cannon does not drive to a wall. It adjusts the contact
-        # direction only when the planned car target is close to the nearest
-        # arena surface.
-        self.shot_vector, aerial_wall_normal, aerial_wall_clearance = (
-            ShotSurfaceGeometry.adjust_aerial(
-                self.ball, self.shot_vector,
-                92.75 + float(getattr(agent.me.hitbox, "length", 118.01)) * 0.5
-            )
-        )
-        if aerial_wall_normal is not None and (
-            not hasattr(self, "last_wall_aerial_debug")
-            or agent.time - self.last_wall_aerial_debug >= 0.5
-        ):
-            self.last_wall_aerial_debug = agent.time
-            print(
-                f"[WALL AERIAL CONTACT] clearance={aerial_wall_clearance:.1f} "
-                f"normal=({aerial_wall_normal.x:.0f},"
-                f"{aerial_wall_normal.y:.0f},{aerial_wall_normal.z:.0f})",
-                flush=True
-            )
 
         
         # Detect a useful backboard rebound for an already-airborne car.
@@ -1112,92 +1482,10 @@ class Aerial:
         if self.ceiling:
             self.target -= Vector(z=92)
 
-        # Build useful launch speed on the ground before beginning the
-        # aerial, but never delay a tight intercept or an already-fast car.
-        # This gives the car momentum before the jump instead of spending
-        # most of its boost accelerating from a slow airborne start.
-        if not self.jumping and not agent.me.airborne:
-            launch_direction = (
-                self.target - agent.me.location
-            ).flatten().normalize()
-            if launch_direction.magnitude() < 0.001:
-                launch_direction = (
-                    self.ball - agent.me.location
-                ).flatten().normalize()
-
-            flat_forward = agent.me.forward.flatten().normalize()
-            flat_velocity = agent.me.velocity.flatten()
-            ground_speed = flat_velocity.magnitude()
-            forward_speed = (
-                flat_velocity.dot(launch_direction)
-                if launch_direction.magnitude() > 0.001 else 0.0
-            )
-            alignment = (
-                flat_forward.dot(launch_direction)
-                if flat_forward.magnitude() > 0.001
-                and launch_direction.magnitude() > 0.001 else -1.0
-            )
-
-            if self.ground_setup_start is None:
-                self.ground_setup_start = agent.time
-
-            setup_elapsed = agent.time - self.ground_setup_start
-            setup_budget = min(0.38, max(0.0, T - 0.90))
-            enough_launch_speed = (
-                forward_speed >= 1150
-                and alignment >= 0.88
-            )
-            can_build_ground_speed = (
-                T > 1.05
-                and setup_elapsed < setup_budget
-                and not enough_launch_speed
-                and (
-                    agent.boost_amount == "unlimited"
-                    or agent.me.boost > 0
-                )
-            )
-
-            if can_build_ground_speed:
-                local_launch_direction = agent.me.local(launch_direction)
-                defaultPD(
-                    agent,
-                    local_launch_direction,
-                    up=agent.me.up
-                )
-                agent.controller.throttle = 1
-                agent.controller.boost = (
-                    alignment >= 0.72
-                    and ground_speed < 1900
-                    and (
-                        agent.boost_amount == "unlimited"
-                        or agent.me.boost > 0
-                    )
-                )
-                agent.controller.jump = False
-
-                if agent.time - self.last_ground_setup_debug >= 0.25:
-                    self.last_ground_setup_debug = agent.time
-                    print(
-                        f"[AERIAL GROUND BUILD] speed={ground_speed:.0f} "
-                        f"forward={forward_speed:.0f} "
-                        f"align={alignment:.2f} "
-                        f"boost={agent.me.boost:.0f} "
-                        f"T={T:.2f} elapsed={setup_elapsed:.2f}",
-                        flush=True
-                    )
-                return
-
-            if self.ground_setup_start is not None:
-                if agent.time - self.last_ground_setup_debug >= 0.25:
-                    print(
-                        f"[AERIAL LAUNCH] speed={ground_speed:.0f} "
-                        f"forward={forward_speed:.0f} "
-                        f"align={alignment:.2f} T={T:.2f} "
-                        f"reason={'speed ready' if enough_launch_speed else 'time/setup limit'}",
-                        flush=True
-                    )
-                    self.last_ground_setup_debug = agent.time
-                self.ground_setup_start = None
+        # Side-wall setup is part of Aerial itself. It can drive up from the
+        # floor or continue climbing when already attached to that side wall.
+        if not self.jumping and self._run_side_wall_takeoff(agent, T):
+            return
 
         if self.jumping or not agent.me.airborne:
             agent.dbg_2d("Jumping")
@@ -3344,7 +3632,7 @@ class shot_patience:
         return intercept_time
 
 
-class ShotSurfaceGeometry:
+class WallShot:
     """
     Party Cannon-style wall contact geometry shared by jump shots and aerials.
     The arena wall planes are used only to identify nearby vertical surfaces;
@@ -3354,9 +3642,6 @@ class ShotSurfaceGeometry:
     @staticmethod
     def nearest_wall(point):
         candidates = [
-            # Party Cannon's default NearestSurface excludes the ceiling but
-            # includes the floor, side walls and back walls.
-            (abs(point.z), "z", 0.0, Vector(0, 0, 1)),
             (abs(4096 - point.x), "x", 4096.0, Vector(-1, 0, 0)),
             (abs(-4096 - point.x), "x", -4096.0, Vector(1, 0, 0)),
             (abs(5120 - point.y), "y", 5120.0, Vector(0, -1, 0)),
@@ -3368,142 +3653,35 @@ class ShotSurfaceGeometry:
     def surface_point(point, axis, plane):
         if axis == "x":
             return Vector(plane, point.y, point.z)
-        if axis == "y":
-            return Vector(point.x, plane, point.z)
-        return Vector(point.x, point.y, plane)
-
-    @staticmethod
-    def _time_to_jump(normal, height, gravity_vector):
-        gravity = normal.dot(gravity_vector)
-        if abs(gravity) < 0.000001:
-            gravity = -0.001
-
-        jump_time = jump_max_duration
-        height_after_jump = (
-            jump_speed * jump_time
-            + jump_acc * jump_time * jump_time / 2
-            - 325 * 0.05 * (jump_time - 0.025)
-            + gravity * jump_time * jump_time / 2
-        )
-        initial_velocity = (
-            jump_speed - 16.25
-            + (gravity + jump_acc) * jump_time
-        )
-        if height < height_after_jump:
-            final_velocity = math.sqrt(max(
-                (jump_speed - 16.25) ** 2
-                + 2 * (gravity + jump_acc) * height,
-                0
-            ))
-            return (
-                final_velocity - jump_speed + 16.25
-            ) / (gravity + jump_acc)
-
-        final_velocity = math.sqrt(max(
-            initial_velocity ** 2
-            + 2 * gravity * (height - height_after_jump),
-            0
-        ))
-        return jump_time + (final_velocity - initial_velocity) / gravity
-
-    @staticmethod
-    def _predict_rotation(acceleration, time):
-        max_angular_velocity = 5.5
-        if acceleration * time > max_angular_velocity:
-            time_to_max = max_angular_velocity / acceleration
-            return (
-                acceleration * time_to_max * time_to_max / 2
-                + max_angular_velocity * (time - time_to_max)
-            )
-        return acceleration * time * time / 2
+        return Vector(point.x, plane, point.z)
 
     @classmethod
-    def adjust_jump(cls, ball_location, shot_direction, gravity_vector):
+    def adjust_jump(cls, ball_location, shot_direction):
         """
-        Port of Party Cannon JumpShot.SetTargetLocation:
-        derive the shot and pre-dodge directions from the nearest surface,
-        then correct the approach if the contact point is too close to it.
+        Party Cannon JumpShot rule: if the 165-unit approach point would be
+        less than 40 units from a wall, flatten the shot against that wall.
         """
-        _, axis, plane, normal = cls.nearest_wall(ball_location)
+        distance, axis, plane, normal = cls.nearest_wall(ball_location)
         target = ball_location - shot_direction * 165
-        target_surface = cls.surface_point(target, axis, plane)
-        height = (target - target_surface).dot(normal)
-
-        jump_time = cls._time_to_jump(
-            normal, max(height, 50) - 17, gravity_vector
-        )
-        angle = math.asin(cap(shot_direction.dot(normal), -1, 1))
-        dodge_angle = min(
-            min(angle + 0.25, math.pi * 0.4),
-            max(
-                cls._predict_rotation(12.46, jump_time) + 0.2,
-                0.6
-            )
-        )
-        angle = dodge_angle - 0.25
-
-        tangent = shot_direction - normal * shot_direction.dot(normal)
-        if tangent.magnitude() < 0.001:
-            tangent = shot_direction
-        else:
-            tangent = tangent.normalize()
-
-        shot_direction = (
-            tangent * math.cos(angle) + normal * math.sin(angle)
-        ).normalize()
-        dodge_direction = (
-            tangent * math.cos(dodge_angle)
-            + normal * math.sin(dodge_angle)
-        ).normalize()
-        target = ball_location - shot_direction * 165
-
-        ball_surface = cls.surface_point(ball_location, axis, plane)
-        ball_height = (ball_location - ball_surface).dot(normal)
-        height = (target - cls.surface_point(target, axis, plane)).dot(normal)
-        if height < 40:
-            angle = math.asin(cap((ball_height - 40) / 165, -1, 1))
-            shot_direction = (
-                tangent * math.cos(angle) + normal * math.sin(angle)
-            ).normalize()
-            target = ball_location - shot_direction * 165
-
-        jump_time = cls._time_to_jump(
-            normal,
-            max((target - cls.surface_point(target, axis, plane)).dot(normal), 40) - 17,
-            gravity_vector
-        )
-        return shot_direction, dodge_direction, normal, jump_time
-
-    @classmethod
-    def adjust_ground(cls, ball_location, shot_direction, approach_distance):
-        """
-        Party Cannon GroundShot surface correction. Keep the normal ground
-        approach unless its contact target would intersect the nearest
-        surface; then flatten the shot along that surface.
-        """
-        _, axis, plane, normal = cls.nearest_wall(ball_location)
-        target = ball_location - shot_direction * approach_distance
         target_surface = cls.surface_point(target, axis, plane)
         target_height = (target - target_surface).dot(normal)
-        ball_surface = cls.surface_point(ball_location, axis, plane)
-        ball_height = (ball_location - ball_surface).dot(normal)
 
-        if target_height >= 20:
+        if target_height >= 40:
             return shot_direction, None, target_height
 
+        ball_surface = cls.surface_point(ball_location, axis, plane)
+        ball_height = (ball_location - ball_surface).dot(normal)
         tangent = shot_direction - normal * shot_direction.dot(normal)
+
         if tangent.magnitude() < 0.001:
             return shot_direction, None, target_height
 
-        angle = math.asin(cap(
-            (ball_height - 20) / max(approach_distance, 1),
-            -1,
-            1
-        ))
+        angle = math.asin(cap((ball_height - 40) / 165, -1, 1))
         adjusted = (
             tangent.normalize() * math.cos(angle)
             + normal * math.sin(angle)
         ).normalize()
+
         return adjusted, normal, target_height
 
     @classmethod
@@ -3557,8 +3735,6 @@ class jump_shot:
         self.patience = shot_patience()
         self.wall_shot_active = False
         self.wall_shot_normal = None
-        self.wall_dodge_direction = None
-        self.wall_jump_time = None
         self.contact_point = None
 
     def update(self, shot):
@@ -3656,23 +3832,14 @@ class jump_shot:
         # the corrected shot direction.
         self.wall_shot_active = False
         self.wall_shot_normal = None
-        self.wall_dodge_direction = None
-        self.wall_jump_time = None
-        (
-            self.shot_vector,
-            wall_dodge_direction,
-            wall_normal,
-            wall_jump_time
-        ) = ShotSurfaceGeometry.adjust_jump(
-            self.ball_location, self.shot_vector, agent.gravity
+        self.shot_vector, wall_normal, wall_clearance = WallShot.adjust_jump(
+            self.ball_location, self.shot_vector
         )
-        if abs(wall_normal.z) < 0.95:
+        if wall_normal is not None:
             self.wall_shot_active = True
             self.wall_shot_normal = wall_normal
-            self.wall_dodge_direction = wall_dodge_direction
-            self.wall_jump_time = wall_jump_time
             print(
-                f"[WALL JUMP SHOT] jump_time={wall_jump_time:.3f} "
+                f"[WALL JUMP SHOT] clearance={wall_clearance:.1f} "
                 f"normal=({wall_normal.x:.0f},{wall_normal.y:.0f},"
                 f"{wall_normal.z:.0f})",
                 flush=True
@@ -3759,7 +3926,7 @@ class jump_shot:
                     )
                 )
                 self.offset_target -= agent.gravity * (
-                    0.5 * self.wall_jump_time ** 2
+                    0.5 * self.needed_jump_time ** 2
                 )
             self.contact_approach_target = self.offset_target.copy()
 
@@ -3981,25 +4148,7 @@ class jump_shot:
             # existing counter-3 dodge trigger intact.
             if self.counter < 3 and not self.dodging:
                 local_ball = agent.me.local_location(self.ball_location)
-                if (
-                    self.wall_shot_active
-                    and self.wall_dodge_direction is not None
-                ):
-                    # Party Cannon's wall orientation: aim along its
-                    # pre-dodge direction and align the roof from the
-                    # wall normal, rather than trying to stand upright.
-                    wall_up = self.wall_dodge_direction.cross(
-                        self.wall_dodge_direction.cross(
-                            -self.wall_shot_normal
-                        )
-                    ).normalize()
-                    defaultPD(
-                        agent,
-                        agent.me.local(self.wall_dodge_direction),
-                        up=agent.me.local(wall_up)
-                    )
-                else:
-                    defaultPD(agent, local_ball.flatten())
+                defaultPD(agent, local_ball.flatten())
 
                 ball_is_airborne = self.ball_location.z > 130
                 ball_is_above_car = self.ball_location.z > agent.me.location.z + 65
@@ -4402,34 +4551,7 @@ class ground_shot:
         self.shot_vector = (
             self.goal_aim_point - self.ball_location
         ).flatten().normalize()
-
-        # Party Cannon GroundShot: use the nearest arena surface to correct
-        # only contacts whose approach point would sit inside that surface.
-        self.shot_vector, ground_surface_normal, ground_clearance = (
-            ShotSurfaceGeometry.adjust_ground(
-                self.ball_location,
-                self.shot_vector,
-                float(agent.best_shot_value)
-            )
-        )
-        if ground_surface_normal is not None:
-            self.contact_normal = ground_surface_normal
-            self.offset_target = (
-                self.ball_location
-                - self.shot_vector * agent.best_shot_value
-            )
-            print(
-                f"[GROUND SURFACE SHOT] clearance={ground_clearance:.1f} "
-                f"normal=({ground_surface_normal.x:.0f},"
-                f"{ground_surface_normal.y:.0f},"
-                f"{ground_surface_normal.z:.0f})",
-                flush=True
-            )
-        else:
-            self.offset_target = (
-                self.ball_location
-                - self.shot_vector * agent.best_shot_value
-            )
+        self.offset_target = self.ball_location - (self.shot_vector * agent.best_shot_value)
         contact_label = getattr(self, "contact_label", None)
         refreshed_contact = _contact_approach_from_label(
             self.ball_location,
@@ -5227,6 +5349,136 @@ class short_shot:
             agent.push(speed_gain_routine(agent.me.local_location(self.target)))
         elif agent.boost_amount != 'unlimited' and agent.me.location.z < 50 and direction == -1 and velocity < 200 and time >= T + 1.5:
             agent.push(flip(agent.me.local_location(self.target), True))
+
+class wall_shot:
+    def __init__(self, aerial):
+        self.aerial = aerial
+        self.intercept_time = aerial.intercept_time
+        self.targets = getattr(aerial, "targets", None)
+        self.fast_aerial = getattr(aerial, "fast_aerial", True)
+        self.start_time = None
+        self.last_debug_time = -1
+
+    def update(self, shot):
+        # The finder supplies a new wall_shot wrapper each evaluation.
+        # Keep this active routine instance, but refresh its intercept.
+        self.aerial = getattr(shot, "aerial", shot)
+        self.intercept_time = self.aerial.intercept_time
+        self.targets = getattr(self.aerial, "targets", self.targets)
+        self.fast_aerial = getattr(
+            self.aerial, "fast_aerial", self.fast_aerial
+        )
+
+    def run(self, agent: VirxERLU):
+        if not agent.shooting:
+            agent.shooting = True
+
+        self.intercept_time = self.aerial.intercept_time
+        if self.start_time is None:
+            self.start_time = agent.time
+
+        car = agent.me
+        T = self.aerial.intercept_time - agent.time
+        prediction = agent.ball_prediction_struct
+
+        # Fail safely if the interception is no longer usable.
+        if (
+            prediction is None
+            or not prediction.slices
+            or T <= 0.2
+            or T > 6
+            or agent.time - self.start_time > 2.5
+        ):
+            agent.pop()
+            agent.shooting = False
+            print("[WALL SHOT] Aborted; returning to normal shot selection",
+                  flush=True)
+            return
+
+        # Match the prediction indexing used by the existing Aerial routine.
+        slice_n = math.ceil(T * 120) - 1
+
+        if slice_n < 0 or slice_n >= len(prediction.slices):
+            agent.pop()
+            agent.shooting = False
+            print("[WALL SHOT] Invalid prediction slice", flush=True)
+            return
+
+        predicted = prediction.slices[slice_n].physics.location
+        ball = Vector(predicted.x, predicted.y, predicted.z)
+
+        # Only continue while the ball still qualifies as a wall shot.
+        if abs(ball.x) < 2800 or ball.z < 250 or abs(ball.y) > 5000:
+            agent.pop()
+            agent.shooting = False
+            print("[WALL SHOT] Ball no longer qualifies", flush=True)
+            return
+
+        distance = car.location.dist(ball)
+        wall_side = 1 if ball.x >= 0 else -1
+
+        # A car is on the side wall when its roof orientation points
+        # approximately toward the field centre.
+        on_wall = (
+            abs(car.location.x) > 3450
+            and abs(car.up.x) > 0.65
+            and car.up.x * car.location.x < 0
+        )
+
+        # Approach the wall first. Once there, move along it toward
+        # the predicted ball position.
+        if not on_wall:
+            world_target = Vector(
+                wall_side * 3850,
+                ball.y,
+                car.location.z
+            )
+        else:
+            world_target = Vector(
+                wall_side * 3850,
+                ball.y,
+                max(100, ball.z)
+            )
+
+        local_target = car.local_location(world_target)
+
+        # Avoid demanding an impossible speed when little time remains.
+        time_left = max(0.35, min(T, 3.0))
+        speed_required = min(
+            2200,
+            max(900, distance / time_left)
+        )
+
+        defaultDrive(agent, speed_required, local_target)
+        # Let defaultDrive steer and throttle. Boost only when it can
+        # meaningfully help the approach.
+        agent.controller.boost = (
+            car.boost > 0
+            and distance > 300
+            and speed_required > 1200
+        )
+
+        # Hand off only when we're on the wall and close enough that
+        # the existing aerial can take over.
+        if on_wall and distance < 200 and T < 1.5:
+            agent.pop()
+            agent.push(self.aerial)
+            print(
+                f"[WALL SHOT] Aerial handoff | "
+                f"distance={distance:.0f} T={T:.2f}",
+                flush=True
+            )
+            return
+
+        # Throttle debug output so the console remains readable.
+        if agent.time - self.last_debug_time >= 0.5:
+            self.last_debug_time = agent.time
+            print(
+                f"[WALL SHOT] approaching | "
+                f"on_wall={on_wall} distance={distance:.0f} "
+                f"ball_z={ball.z:.0f} T={T:.2f}",
+                flush=True
+            )
 
 class boost_down:
     def __init__(self):
