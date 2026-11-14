@@ -1408,8 +1408,6 @@ class Aerial:
             aerial_physics.velocity.y,
             aerial_physics.velocity.z
         )
-        if getattr(self, "redirect_mode", False):
-            self.redirect_ball_velocity = aerial_ball_velocity
         self.shot_vector = self._party_cannon_shot_direction(
             agent, self.ball, aerial_ball_velocity, T
         )
@@ -1561,17 +1559,7 @@ class Aerial:
                 and 0 < T <= 0.45
             )
 
-            if getattr(self, "redirect_mode", False):
-                # Keep the underside aligned with the ball's existing travel
-                # direction while the tilted underside supplies only a small
-                # lateral correction toward goal.
-                defaultPD(
-                    agent,
-                    agent.me.local(self.redirect_forward),
-                    up=self.redirect_up
-                )
-
-            elif final_double_jump_approach:
+            if final_double_jump_approach:
                 if delta_x.magnitude() <= 50:
                     defaultPD(agent, agent.me.local(self.shot_vector))
                 else:
@@ -1713,113 +1701,12 @@ class Aerial:
             agent.pop()
             agent.shooting = False
             agent.push(ball_recovery())
-        elif (
-            not getattr(self, "redirect_mode", False)
-            and (
-                (
-                    self.ceiling
-                    and self.target.dist(agent.me.location) < 92 + agent.me.hitbox.length
-                    and not agent.me.doublejumped
-                    and agent.me.location.z < agent.ball.location.z + 92
-                    and self.target.y * side(agent.team) > -4240
-                )
-                or (
-                    not self.ceiling
-                    and not agent.me.doublejumped
-                    and T < 0.1
-                )
-            )
-        ):
+        elif (self.ceiling and self.target.dist(agent.me.location) < 92 + agent.me.hitbox.length and not agent.me.doublejumped and agent.me.location.z < agent.ball.location.z + 92 and self.target.y * side(agent.team) > -4240) or (not self.ceiling and not agent.me.doublejumped and T < 0.1):
             agent.dbg_2d("Flipping")
             local_target = agent.me.local_location(self.target).flatten().normalize()
             agent.controller.pitch = -local_target.x
             agent.controller.yaw = local_target.y
             agent.controller.jump = True
-
-class Redirect(Aerial):
-    """
-    Shallow underside redirect for an airborne ball behind the car.
-
-    The car meets the ball from above with its underside. Its forward axis
-    follows the ball's current travel direction, while a small underside
-    tilt supplies the lateral impulse needed to steer the ball toward goal.
-    No final dodge is used, so the touch does not become a power shot.
-    """
-
-    def __init__(self, intercept_time, targets=None, fast_aerial=True):
-        super().__init__(intercept_time, targets, fast_aerial)
-        self.redirect_mode = True
-        self.redirect_ball_velocity = Vector()
-        self.redirect_forward = Vector(y=1)
-        self.redirect_up = Vector(z=1)
-
-    def _party_cannon_hitbox_target(self, agent, ball, shot_direction):
-        velocity = self.redirect_ball_velocity.flatten()
-        goal_center = _relative_goal_aim_point(agent, self.targets)
-        goal_direction = (goal_center - ball).flatten().normalize()
-
-        if velocity.magnitude() < 100:
-            incoming = goal_direction
-        else:
-            incoming = velocity.normalize()
-
-        # The correction is perpendicular to the ball's current motion.
-        # This changes its heading without deliberately removing its speed.
-        alignment = cap(incoming.dot(goal_direction), -1, 1)
-        correction = (
-            goal_direction - incoming * alignment
-        ).flatten()
-
-        if correction.magnitude() < 0.001:
-            correction = Vector(-incoming.y, incoming.x, 0).normalize()
-        else:
-            correction = correction.normalize()
-
-        # Keep the underside normal mostly downward. The smaller horizontal
-        # component points toward the desired change in ball direction.
-        contact_normal = (
-            Vector(z=-0.82) + correction * 0.57
-        ).normalize()
-
-        self.redirect_forward = incoming
-        self.redirect_up = -contact_normal
-
-        # Keep the desired up vector perpendicular to the forward axis.
-        self.redirect_up = (
-            self.redirect_up
-            - incoming * self.redirect_up.dot(incoming)
-        ).normalize()
-
-        if self.redirect_up.magnitude() < 0.001:
-            self.redirect_up = Vector(z=1)
-        elif self.redirect_up.z < 0:
-            self.redirect_up = -self.redirect_up
-
-        hitbox = agent.me.hitbox
-        half_height = float(getattr(hitbox, "height", 36.16)) * 0.5
-        ball_radius = 92.75
-
-        local_offset = getattr(agent.me, "hitbox_offset", None)
-        if local_offset is None:
-            local_offset = getattr(hitbox, "offset", None)
-
-        world_offset = Vector()
-        if local_offset is not None:
-            offset_x = float(getattr(local_offset, "x", 0.0))
-            offset_y = float(getattr(local_offset, "y", 0.0))
-            offset_z = float(getattr(local_offset, "z", 0.0))
-            world_offset = (
-                agent.me.forward * offset_x
-                + agent.me.forward.cross(agent.me.up) * offset_y
-                + agent.me.up * offset_z
-            )
-
-        return (
-            ball
-            - contact_normal * (ball_radius + half_height)
-            - world_offset
-        )
-
 
 class half_flip:
     """
