@@ -1173,23 +1173,6 @@ class Bot(VirxERLU):
                         flush=True
                     )
 
-        # If the deepest player is also elected to challenge because
-        # it is already facing the ball, promote the next-deepest teammate
-        # into the fallback role. Never leave the team without a goal-side
-        # player just because the goalie took first man.
-        if goalie.index == attacker.index:
-            fallback_candidates = [
-                car for car in cars if car.index != attacker.index
-            ]
-            if fallback_candidates:
-                goalie = min(
-                    fallback_candidates,
-                    key=lambda car: (
-                        min(car.location.dist(own_goal), 900.0)
-                        + abs(car.location.y - own_goal.y)
-                    )
-                )
-
         transition = next(
             (
                 car for car in cars
@@ -1334,7 +1317,7 @@ class Bot(VirxERLU):
                 if friend.index == attacker:
                     return False
 
-            if status not in {"SHOT_FOUND", "ANY_SHOT_FOUND", "RISK_CHALLENGE"}:
+            if status not in {"SHOT_FOUND", "ANY_SHOT_FOUND"}:
                 continue
 
             # A teammate already executing a shot owns the challenge.
@@ -1446,35 +1429,8 @@ class Bot(VirxERLU):
         score = self.teamplay_score
         contact_time = self.teamplay_contact_time
 
-        # A challenger using the deliberately low-confidence short-shot
-        # routine is still committing to pressure. Tell teammates explicitly
-        # that this is a risk challenge, not a predicted winning touch.
-        active_risk_challenge = (
-            self.friends
-            and self.get_grid_active_challenger() == self.me.index
-            and any(
-                routine.__class__.__name__ == "short_shot"
-                for routine in self.stack
-            )
-            and not self.defensive_emergency()
-        )
-        if active_risk_challenge:
-            status = "RISK_CHALLENGE"
-            score = 0.0
-            contact_time = max(
-                0.12,
-                min(
-                    1.5,
-                    self.me.location.dist(self.ball.location)
-                    / max(
-                        900.0,
-                        self.me.velocity.flatten().magnitude() + 700.0
-                    )
-                )
-            )
-        elif status == "NO_SHOT" and self.me.boost < 18:
+        if status == "NO_SHOT" and self.me.boost < 18:
             status = "LOW_BOOST"
-
         self.send_teamplay_comm(
             status,
             score,
@@ -1652,16 +1608,11 @@ class Bot(VirxERLU):
                 attacker, max_age=0.65
             ) if attacker is not None else None
 
-            attacker_status = (
-                attacker_message.get("status")
-                if attacker_message is not None else None
-            )
-            risk_challenge = attacker_status == "RISK_CHALLENGE"
             active_attack = (
                 attacker_message is not None
                 and attacker_message.get("cover_released", False)
-                and attacker_status in {
-                    "SHOT_FOUND", "ANY_SHOT_FOUND", "RISK_CHALLENGE"
+                and attacker_message.get("status") in {
+                    "SHOT_FOUND", "ANY_SHOT_FOUND"
                 }
                 and ball_depth < 1280
                 and not self.defensive_emergency()
@@ -1676,11 +1627,7 @@ class Bot(VirxERLU):
             # When the attacker is actively playing the ball, use the
             # transition player to remove a defender screening the direct
             # route to goal. Never trade away an urgent defensive recovery.
-            if (
-                active_attack
-                and not risk_challenge
-                and not self.defensive_emergency()
-            ):
+            if active_attack and not self.defensive_emergency():
                 bump_target = self.get_transition_bump_target(attacker)
 
                 if current_name == "transition_bump":
@@ -2180,9 +2127,6 @@ class Bot(VirxERLU):
             "Redirect"
         }
 
-        # Keep the cached candidate available on ticks where the full
-        # finder is not rerun; the risk-challenge fallback reads this below.
-        shot = self.teamplay_shot
         if self.is_clear() or self.odd_tick == 0:
             shot = self.teamplay_shot
 
@@ -2431,35 +2375,6 @@ class Bot(VirxERLU):
 
 
 
-
-
-        # A first man must not wait for a high-confidence touch while the
-        # whole team holds back. If no predicted shot/intercept exists, make
-        # a low-confidence direct challenge and explicitly label it as risk.
-        # The elected goalie remains the fallback; in 3v3 the transition
-        # player prepares for the loose ball instead of attempting a bump.
-        if (
-            shot is None
-            and self.friends
-            and self.get_grid_active_challenger() == self.me.index
-            and current_name in {
-                None, "grid_defense", "goto_boost",
-                "cover_followup_wait"
-            }
-            and not self.defensive_emergency()
-        ):
-            # Replace passive positioning/boost collection with pressure,
-            # but never override a teammate's already-committed shot.
-            if current_name is not None:
-                self.clear()
-            print(
-                f"[RISK CHALLENGE] player={self.me.index} "
-                f"no reliable intercept; committing to pressure",
-                flush=True
-            )
-            self.push(routines.short_shot(self.foe_goal.location))
-            return
-
         # TODO this setup is far from ideal - a custom shadow/retreat routine is probably best for the bot...
         # Make sure to put custom routines in a separate file from VirxERLU routines, so you can easily update VirxERLU to newer versions.
         # If the stack is still clear
@@ -2546,7 +2461,6 @@ class Bot(VirxERLU):
             if status not in {
                 "SHOT_FOUND",
                 "ANY_SHOT_FOUND",
-                "RISK_CHALLENGE",
                 "SHOT_ABANDONED",
                 "LOW_BOOST",
                 "NO_SHOT",
@@ -2663,7 +2577,7 @@ class Bot(VirxERLU):
         message = {
             "protocol": "volt_teamplay_v1",
             "status": status,
-            "shot_type": status if status in {"SHOT_FOUND", "ANY_SHOT_FOUND", "RISK_CHALLENGE"} else "NO_SHOT",
+            "shot_type": status if status in {"SHOT_FOUND", "ANY_SHOT_FOUND"} else "NO_SHOT",
             "score": round(max(0, min(100, score)), 1),
             "contact_time": round(max(0, min(10, contact_time)), 2),
             "cover_owner": self.get_cover_role_owner(),
