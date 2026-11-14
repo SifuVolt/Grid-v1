@@ -4174,6 +4174,18 @@ class jump_shot:
 
         if not self.jumping:
             self._update_timer += dt
+            if (
+                self._last_planned_ball is not None
+                and self._last_planned_ball.dist(self.ball_location) >= 60
+            ):
+                print(
+                    f"[PARTY JUMP ABORT] prediction shifted "
+                    f"{self._last_planned_ball.dist(self.ball_location):.1f} units",
+                    flush=True
+                )
+                self._finish(agent)
+                return
+
             if self.offset_target is None:
                 self._calculate_party_cannon_target(agent, initial=True)
                 self._update_timer = 0.0
@@ -4277,6 +4289,10 @@ class jump_shot:
 
         if T < -0.1:
             self._finish(agent)
+            return
+        if self.dodging:
+            # The dodge is a one-frame jump edge. Do not retrigger it while
+            # waiting for the predicted contact/recovery window to pass.
             return
 
         if T > 0.075 or self._jump_elapsed < 0.05:
