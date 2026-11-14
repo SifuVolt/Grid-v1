@@ -124,6 +124,11 @@ class Bot(VirxERLU):
         """Return (our_contact_time, foe_eta, foe_index) if an opponent is likely to beat our active shot."""
         if self.is_clear() or not self.foes:
             return None
+        if (
+            self.friends
+            and self.get_grid_active_challenger() != self.me.index
+        ):
+            return None
 
         routine = self.stack[0]
         shot_names = {
