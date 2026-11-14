@@ -1736,6 +1736,18 @@ class Bot(VirxERLU):
                 and not self.ball_in_goal_danger()
             )
 
+            if (
+                getattr(self, "_goalie_fallback_active", False)
+                and (
+                    self.is_clear()
+                    or self.stack[0] is not getattr(
+                        self, "_goalie_fallback_routine", None
+                    )
+                )
+            ):
+                self._goalie_fallback_active = False
+                self._goalie_fallback_routine = None
+
             if current_name == "goalie_followup_wait" and not contested_message:
                 self.clear()
                 current_name = None
@@ -1794,6 +1806,7 @@ class Bot(VirxERLU):
                             self.push(followup)
                             self._goalie_fallback_contact_key = contact_key
                             self._goalie_fallback_completed_key = contact_key
+                            self._goalie_fallback_routine = followup
                             self._goalie_fallback_active = True
                             print(
                                 f"[GOALIE LATE INTERCEPT] player={self.me.index} "
