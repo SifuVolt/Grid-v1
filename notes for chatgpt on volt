@@ -83,12 +83,7 @@ This file is the project handoff and change checklist. Read it before every code
 - It predicts the ball at `intercept_time`, derives `self.shot_vector`, applies `ShotSurfaceGeometry.adjust_aerial`, then computes a hitbox-aware `self.target`.
 - Its current launch condition is in the `if self.jumping or not agent.me.airborne:` block. On the first grounded tick it sets `self.jumping = True` and starts the jump immediately; this is why it currently launches from the floor without a distinct ground acceleration phase.
 - Current jump simulation adds first jump impulse/hold acceleration and optional second jump impulse; fast aerial holds the first jump then pulses the second jump. It then orients toward the predicted hitbox target and uses Party Cannon-style boost estimation / forward-projection boost control.
-- Implemented 2026-11-14 in commit `03b7a2b`: Aerial now has a short conditional ground-speed build phase before takeoff. It steers toward the current hitbox-aware aerial target, uses throttle and boost while aligned, and then enters the existing jump sequence.
-- The setup is capped at 0.38 s and leaves at least 0.90 s for the aerial; it only runs when T > 1.05, boost is available, and the car has not yet met both launch thresholds (at least 1150 projected speed toward the target and at least 0.88 heading alignment). If the car already has at least 1150 forward speed and 0.88 alignment, it launches immediately. If time or setup budget runs out, it launches rather than waiting.
-- Debug logs: `[AERIAL GROUND BUILD]` reports speed, projected forward speed, alignment, boost and time; `[AERIAL LAUNCH]` reports launch speed and whether the speed threshold or time/setup limit ended preparation.
-- The ground phase returns before the jump simulation, so ground acceleration is naturally reflected in the next tick's actual car velocity; the existing fast-aerial jump impulses, orientation logic, and Party Cannon boost-budget logic remain intact.
-- This change is committed but not compiled or tested in-game yet. Tune the 1150 speed threshold, 0.88 heading alignment, and 0.38 s cap only after observing slow-start and already-fast approaches.
-- Add debug showing whether aerial launched immediately or used ground acceleration, with initial speed, target-direction speed, and remaining time. Keep logs rate-limited.
+- The current live branch does not contain the earlier proposed ground-speed build phase. The first grounded tick enters the existing jump sequence immediately. Do not assume the old 0.38 s ground setup, 1150 forward-speed threshold, or 0.88 alignment threshold are present unless they are re-added and verified in the live file.
 
 ## 7. Known regressions / pitfalls to avoid
 
@@ -120,9 +115,9 @@ This file is the project handoff and change checklist. Read it before every code
 
 ## 9. Current work queue
 
-- Test the new pre-aerial ground acceleration in two cases: a slow approach (should build ground speed before takeoff) and an already-fast approach (should not wait).
-- Check that the ground setup does not steer away from the ball, consume excessive boost while misaligned, or delay a short intercept.
-- After the user reports results, tune thresholds from observed in-game behavior rather than guessing.
+- Test Redirect with the ball airborne and behind the car: verify selection, upside-down orientation, front-wheel contact point, and whether the ball travels toward the goal.
+- Test ordinary goal-directed aerials with the ball in front of the car to ensure they still use the unchanged Aerial routine.
+- Tune the initial front-axle and inverted-wheel offsets only from in-game observations.
 
 
 
