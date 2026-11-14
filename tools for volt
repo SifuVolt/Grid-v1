@@ -1,4 +1,4 @@
-from util.routines import Aerial, Redirect, double_jump, ground_shot, jump_shot, side_shot, virxrlcu, wall_approach
+from util.routines import Aerial, double_jump, ground_shot, jump_shot, side_shot, virxrlcu, wall_approach
 from util.utils import Vector, math, side, cap
 from util.grid_double_jump import find_double_jump as grid_find_double_jump
 
@@ -1328,24 +1328,11 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
     )
 
     if best_shot["shot_type"] == 3:
-        local_ball = agent.me.local_location(best_ball_location)
-        use_redirect = (
-            best_ball_location.z > 120
-            and local_ball.y < -100
-        )
-        aerial_class = Redirect if use_redirect else Aerial
-        routine = aerial_class(
+        routine = Aerial(
             best_intercept_time,
             best_targets,
             best_shot["fast"]
         )
-        if use_redirect:
-            print(
-                f"[REDIRECT SELECTED] ball behind car "
-                f"local=({local_ball.x:.0f}, {local_ball.y:.0f}, "
-                f"{local_ball.z:.0f}) height={best_ball_location.z:.0f}",
-                flush=True
-            )
     elif best_shot["shot_type"] in (0, 1) and can_jump:
         # A side shot is a goal-line correction, not a half-field choice.
         # Project the rolling ball to the opponent goal line and only use
