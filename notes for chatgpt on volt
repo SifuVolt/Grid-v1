@@ -133,3 +133,10 @@ This file is the project handoff and change checklist. Read it before every code
 - The geometry is an initial model, not a validated collision simulation. In-game tests must establish whether the car actually contacts with its underside and whether the ball retains enough speed.
 - Untargeted aerial selection remains normal Aerial. Redirect is only selected in the goal-directed `find_shot` path.
 - The live branch still contains `wall_approach` and wall-drive selection logic; inspect the live code before any wall-related edit.
+
+## 11. Fast aerial takeoff adjustment (2026-11-14)
+
+- The Aerial launch now forces boost immediately during the first 0.25 seconds after the first jump begins, provided boost is available and the routine is not in its dodge phase.
+- The car briefly pitches back for the first 0.10 seconds of takeoff, then the existing target-tracking orientation resumes.
+- The existing held first-jump duration, second-jump pulse/counter sequence, predicted jump physics, and post-launch Party Cannon boost controller remain unchanged.
+- This is a launch responsiveness adjustment, not a rewrite of aerial steering or shot/contact selection. It has not yet been compiled or tested in-game.
