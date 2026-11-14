@@ -1173,6 +1173,23 @@ class Bot(VirxERLU):
                         flush=True
                     )
 
+        # If the deepest player is also elected to challenge because
+        # it is already facing the ball, promote the next-deepest teammate
+        # into the fallback role. Never leave the team without a goal-side
+        # player just because the goalie took first man.
+        if goalie.index == attacker.index:
+            fallback_candidates = [
+                car for car in cars if car.index != attacker.index
+            ]
+            if fallback_candidates:
+                goalie = min(
+                    fallback_candidates,
+                    key=lambda car: (
+                        min(car.location.dist(own_goal), 900.0)
+                        + abs(car.location.y - own_goal.y)
+                    )
+                )
+
         transition = next(
             (
                 car for car in cars
