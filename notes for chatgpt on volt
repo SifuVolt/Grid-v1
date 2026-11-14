@@ -183,3 +183,23 @@ This file is the project handoff and change checklist. Read it before every code
 - `RISK_CHALLENGE` is an accepted teamplay status and is included in the message's `shot_type` field. Teammates recognize it as an active commitment rather than interpreting it as `NO_SHOT`.
 - Emergency defence remains higher priority and is not replaced by this risk-first behaviour.
 - This uses the existing `short_shot` routine and message protocol. Its boost/speed-gain branch previously referenced undefined `T` and `time` names; those checks now use the routine's elapsed time. It has not been compiled or tested in-game.
+
+
+## 16. Contested shot message and goalie late-intercept fallback (2026-11-14)
+
+- Added `SHOT_CONTESTED`: the challenger keeps executing its active shot, but estimates whether the nearest opponent can reach the predicted contact point at least 0.15s before its own intercept. It broadcasts the expected contact time instead of abandoning the shot.
+- The race estimate uses the active routine's `intercept_time`, the corresponding predicted ball slice, and a lightweight opponent ETA using distance, facing, horizontal speed and height.
+- Only the elected goalie reacts to `SHOT_CONTESTED`, and only while the ball is in our half (`ball_depth > 0`). It holds its goal-side `goalie_followup_wait` position until 0.10s after the challenger's expected contact, then calls `fast_intercept_finder.find` with that later earliest time to select the first reachable follow-up touch from the refreshed ball prediction.
+- If the ball is on the opponent half, the goalie ignores the contested message and continues its normal role. If the message expires or the ball crosses midfield before the follow-up, the waiting routine is cleared. Immediate goal danger remains higher priority.
+- In 2v2/3v3, if the deepest player is also elected challenger due to its facing angle, the next-deepest teammate is promoted to goalie so the fallback is always a different car.
+- The 3v3 transition player does not treat `SHOT_CONTESTED` as a normal offensive shot announcement; its existing transition behaviour remains separate.
+- This uses the existing `goalie_followup_wait` and `fast_intercept_finder` routines. The opponent ETA is an approximation, not a full opponent physics simulation. No compile or in-game test has been run.
+
+## 17. Party Cannon JumpShot reference (pinned commit)
+
+- Source: `RedUtils/Actions/JumpShot.cs` at `ea84e4325ddb60565bbac6fb9766dc45f38b58cb`.
+- It predicts the post-hit ball velocity and travel time toward the target, derives a shot direction, places the car target about 165 units behind the ball along that direction, adjusts for surface normal/jump height, then subtracts another 25 units of horizontal shot direction for contact power/reliability.
+- It updates target and shot direction every 0.2s while approaching with a timed `Arrive` action. It only jumps when the predicted jump position is within roughly 50 units of the target and the remaining time matches the required jump time.
+- In the air it aims along `DodgeDirection`, rolls its roof away from the dodge direction relative to the contact surface, holds jump until close to contact, releases for at least three frames, then dodges in the flattened shot direction about 0.05s before contact.
+- The timed `Arrive` creates `Drive(..., wasteBoost: true)`; boost is still gated by required target speed, forward alignment and speed. The jump-shot's airborne phase itself does not continuously boost.
+- Party Cannon uses `BoostAccel=991.667`, `BoostConsumption=33.3/s`, `AirThrottleAccel=66.667`, and `MaxSpeed=2300`. Its ETA model assumes the available boost can be spent to reach maximum speed; it does not enforce a fixed reserve for every action.
