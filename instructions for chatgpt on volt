@@ -851,6 +851,43 @@ class Bot(VirxERLU):
         dot = forward.normalize().dot(to_ball.normalize())
         return math.acos(max(-1.0, min(1.0, dot)))
 
+    def _challenge_is_lost(self):
+        """Return True when this challenger can no longer win the next touch."""
+        if not self.foes or self.defensive_emergency():
+            return False
+
+        my_eta = self._eta_to_ball(self.me)
+        active_names = {
+            "ground_shot", "jump_shot", "double_jump",
+            "Aerial", "Redirect", "wall_approach", "short_shot"
+        }
+        if not self.is_clear():
+            for routine in self.stack:
+                if routine.__class__.__name__ in active_names:
+                    intercept_time = getattr(routine, "intercept_time", None)
+                    if intercept_time is not None:
+                        remaining = intercept_time - self.time
+                        if 0.0 <= remaining <= 5.0:
+                            my_eta = min(5.0, max(0.0, remaining))
+                    break
+
+        enemy_eta = min(self._eta_to_ball(foe) for foe in self.foes)
+        teammate_etas = [
+            self._eta_to_ball(friend)
+            for friend in self.friends
+            if not getattr(friend, "demolished", False)
+        ]
+        best_teammate_eta = min(teammate_etas, default=float("inf"))
+
+        # Hand over if a teammate has a clearly earlier route, or if an
+        # opponent is clearly going to reach the ball before this challenge.
+        teammate_can_take_over = (
+            best_teammate_eta + 0.12 < my_eta
+            and best_teammate_eta <= enemy_eta + 0.35
+        )
+        opponent_wins_race = enemy_eta + 0.20 < my_eta
+        return teammate_can_take_over or opponent_wins_race
+
     def get_grid_team_roles(self):
         """
         Noob Black's rotating 3s role selection.
@@ -870,6 +907,14 @@ class Bot(VirxERLU):
             if not getattr(car, "demolished", False)
         ]
         cars.sort(key=lambda car: car.index)
+
+        released_indices = set()
+        if self.time < getattr(self, "_challenge_released_until", -999.0):
+            released_indices.add(self.me.index)
+        for friend in self.friends:
+            message = self.get_teammate_comm(friend.index, max_age=1.25)
+            if message is not None and message.get("status") == "CHALLENGE_RELEASED":
+                released_indices.add(friend.index)
 
         if not cars:
             result = (None, None, None)
@@ -1062,6 +1107,11 @@ class Bot(VirxERLU):
                 deepest_score = furthest_score
                 deepest_player = car
 
+            # A released player rotates back but cannot immediately reclaim
+            # first man while the handoff is active.
+            if car.index in released_indices:
+                continue
+
             post_x = 900 if location.x >= 0 else -900
             own_goal_post = Vector(
                 x=post_x, y=side * 5050, z=0
@@ -1137,6 +1187,17 @@ class Bot(VirxERLU):
                 best_challenger_score = closest_score
                 best_dependency = bool(dependency)
 
+        # If every teammate has just released, allow the best current
+        # player to contest rather than leaving the team with no challenger.
+        if best_challenger is None:
+            best_challenger = min(
+                cars,
+                key=lambda car: car.location.dist(ball)
+                + (0 if car.forward.flatten().dot(
+                    (ball - car.location).flatten().normalize()
+                ) > 0 else 500)
+            )
+
         attacker = best_challenger
         goalie = deepest_player
 
@@ -1150,6 +1211,7 @@ class Bot(VirxERLU):
 
         if (
             goalie.index != attacker.index
+            and goalie.index not in released_indices
             and ball_depth > 0.0
         ):
             goalie_angle = self._car_ball_facing_angle(goalie)
@@ -1396,6 +1458,47 @@ class Bot(VirxERLU):
             )
             return
 
+        # Release first-man responsibility immediately when the ball is
+        # no longer reachable before a teammate/opponent. A fresh release
+        # message causes every teammate to elect the next player this tick.
+        if self.friends:
+            attacker, _, _ = self.get_grid_team_roles()
+            recent_handoff = any(
+                message.get("status") == "CHALLENGE_RELEASED"
+                and self.time - message.get("received_at", -999.0) <= 0.75
+                for message in self.teammate_comms.values()
+            )
+            if (
+                attacker == self.me.index
+                and self.time >= getattr(self, "_challenge_released_until", -999.0)
+                and self.time >= getattr(self, "_challenge_takeover_until", -999.0)
+                and not recent_handoff
+                and self._challenge_is_lost()
+            ):
+                self._challenge_released_until = self.time + 1.25
+                self._noob_black_roles_time = None
+                self.cover_role_released = False
+                self.teamplay_status = "CHALLENGE_RELEASED"
+                print(
+                    f"[CHALLENGE HANDOFF] player={self.me.index} "
+                    f"enemy_eta={min(self._eta_to_ball(foe) for foe in self.foes):.2f} "
+                    f"my_eta={self._eta_to_ball(self.me):.2f}; releasing first man",
+                    flush=True
+                )
+                self.send_teamplay_comm(
+                    "CHALLENGE_RELEASED", 0.0, 0.0
+                )
+                return
+
+            # Give the newly elected challenger a short takeover window so
+            # the same opponent advantage does not cause an instant chain
+            # of releases before the next player can contest.
+            if attacker == self.me.index and recent_handoff:
+                self._challenge_takeover_until = max(
+                    getattr(self, "_challenge_takeover_until", -999.0),
+                    self.time + 0.65
+                )
+
         # These names must match the actual routine class names.
         shot_names = {
             "ground_shot",
@@ -1598,6 +1701,25 @@ class Bot(VirxERLU):
         attacker = goalie = transition = None
         if self.friends:
             attacker, goalie, transition = self.get_grid_team_roles()
+
+            # A player who has yielded first man must stop pursuing its old
+            # shot and begin the ordinary defensive/rotation routine.
+            shot_names = {
+                "ground_shot", "jump_shot", "double_jump",
+                "Aerial", "Redirect", "wall_approach", "short_shot"
+            }
+            if (
+                self.me.index != attacker
+                and current_name in shot_names
+                and self.time < getattr(self, "_challenge_released_until", -999.0)
+            ):
+                self.clear()
+                current_name = None
+                print(
+                    f"[CHALLENGE ROTATE BACK] player={self.me.index} "
+                    f"new_challenger={attacker}",
+                    flush=True
+                )
 
         # The third player in 3v3 is the non-goalie cover/transition
         # player. They do not join the attacker's first challenge; they wait
@@ -2465,7 +2587,8 @@ class Bot(VirxERLU):
                 "LOW_BOOST",
                 "NO_SHOT",
                 "DEFEND",
-                "SHADOW"
+                "SHADOW",
+                "CHALLENGE_RELEASED"
             }:
                 return
 
@@ -2594,6 +2717,7 @@ class Bot(VirxERLU):
             message["cover_owner"],
             message["cover_released"],
             message.get("receive_x"),
+            status,
             message.get("receive_y"),
             message.get("receive_dir_x"),
             message.get("receive_dir_y")
