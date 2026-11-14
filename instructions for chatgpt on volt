@@ -1317,7 +1317,7 @@ class Bot(VirxERLU):
                 if friend.index == attacker:
                     return False
 
-            if status not in {"SHOT_FOUND", "ANY_SHOT_FOUND"}:
+            if status not in {"SHOT_FOUND", "ANY_SHOT_FOUND", "RISK_CHALLENGE"}:
                 continue
 
             # A teammate already executing a shot owns the challenge.
@@ -2518,6 +2518,7 @@ class Bot(VirxERLU):
             if status not in {
                 "SHOT_FOUND",
                 "ANY_SHOT_FOUND",
+                "RISK_CHALLENGE",
                 "SHOT_ABANDONED",
                 "LOW_BOOST",
                 "NO_SHOT",
@@ -2634,7 +2635,7 @@ class Bot(VirxERLU):
         message = {
             "protocol": "volt_teamplay_v1",
             "status": status,
-            "shot_type": status if status in {"SHOT_FOUND", "ANY_SHOT_FOUND"} else "NO_SHOT",
+            "shot_type": status if status in {"SHOT_FOUND", "ANY_SHOT_FOUND", "RISK_CHALLENGE"} else "NO_SHOT",
             "score": round(max(0, min(100, score)), 1),
             "contact_time": round(max(0, min(10, contact_time)), 2),
             "cover_owner": self.get_cover_role_owner(),
