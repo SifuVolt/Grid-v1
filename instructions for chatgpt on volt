@@ -1391,7 +1391,10 @@ class Bot(VirxERLU):
                         return
                     self.clear()
                     current_name = None
-                elif current_name in {"grid_defense", "transition_receive", "transition_bump"}:
+                elif current_name not in {
+                    None, "recovery", "wave_dash", "flip",
+                    "half_flip", "speed_flip"
+                }:
                     self.clear()
                     current_name = None
 
