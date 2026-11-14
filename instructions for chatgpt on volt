@@ -1769,6 +1769,29 @@ class Bot(VirxERLU):
                 and self.stack[0] is getattr(
                     self, "_goalie_fallback_routine", None
                 )
+                and ball_depth <= 0
+                and not self.ball_in_goal_danger()
+            ):
+                # The play has moved to the opponent half. Cancel a fallback
+                # that has not launched; a jump/aerial already in flight is
+                # allowed to finish its committed movement.
+                fallback_routine = self.stack[0]
+                if not (
+                    getattr(fallback_routine, "jumping", False)
+                    or getattr(fallback_routine, "aerialing", False)
+                ):
+                    self.clear()
+                    self._goalie_fallback_active = False
+                    self._goalie_fallback_routine = None
+                    current_name = None
+
+            if (
+                getattr(self, "_goalie_fallback_active", False)
+                and not self.is_clear()
+                and self.stack[0] is getattr(
+                    self, "_goalie_fallback_routine", None
+                )
+                and ball_depth > 0
                 and not self.ball_in_goal_danger()
             ):
                 return
