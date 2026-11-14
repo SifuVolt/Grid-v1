@@ -1136,6 +1136,8 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
         # Check if we can make a shot at this slice
 
         # This operation is very expensive, so we use C to improve run time
+        # At zero boost, select the jump type from the predicted ball height:
+        # airborne ball -> double jump; grounded ball -> regular jump shot.
         slice_can_ground = can_ground
         slice_can_jump = can_jump
         slice_can_double_jump = can_double_jump
@@ -1150,6 +1152,14 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
         )
         if backwall_rebound:
             slice_can_jump = False
+
+        if agent.boost_amount != "unlimited" and agent.me.boost <= 0:
+            if ball_location[2] > 105.0:
+                slice_can_ground = False
+                slice_can_jump = False
+                slice_can_aerial = False
+            else:
+                slice_can_double_jump = False
 
         shot = _parse_shot_with_boost_budget(
             agent,
@@ -1266,7 +1276,11 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                 or agent.me.boost - grid_boost_reserve >= 0.0
             )
 
-            if grid_approach_budget_ok and useful_non_aerial_shot(
+            if grid_approach_budget_ok and not (
+                agent.boost_amount != "unlimited"
+                and agent.me.boost <= 0
+                and grid_ball_location.z <= 105.0
+            ) and useful_non_aerial_shot(
                 agent,
                 grid_ball_tuple,
                 grid_slice.physics.velocity,
@@ -1469,7 +1483,7 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
         else (
             150
             if agent.boost_amount == 'unlimited' or agent.me.airborne
-            else 450
+            else 350
         )
     )
 
@@ -1528,6 +1542,8 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
             )
         )
 
+        # At zero boost, airborne contacts must use a double jump;
+        # grounded contacts may use a regular jump shot instead.
         slice_can_ground = can_ground
         slice_can_jump = can_jump
         slice_can_double_jump = can_double_jump
@@ -1544,6 +1560,14 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
         )
         if backwall_rebound:
             slice_can_jump = False
+
+        if agent.boost_amount != "unlimited" and agent.me.boost <= 0:
+            if ball_location[2] > 105.0:
+                slice_can_ground = False
+                slice_can_jump = False
+                slice_can_aerial = False
+            else:
+                slice_can_double_jump = False
 
         shot = _parse_shot_with_boost_budget(
             agent,
@@ -1629,7 +1653,11 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
                 or agent.me.boost - grid_boost_reserve >= 0.0
             )
 
-            if grid_approach_budget_ok and useful_non_aerial_shot(
+            if grid_approach_budget_ok and not (
+                agent.boost_amount != "unlimited"
+                and agent.me.boost <= 0
+                and grid_ball_location.z <= 105.0
+            ) and useful_non_aerial_shot(
                 agent,
                 grid_ball_tuple,
                 grid_slice.physics.velocity,
