@@ -2091,12 +2091,24 @@ class Bot(VirxERLU):
         # RedUtils AerialShot becomes uninterruptible as soon as its launch
         # controller takes over. Keep that behaviour in Volt's strategy too.
         committed_aerial = False
+        aerial_race_lost = False
         if not self.is_clear():
             active_routine = self.stack[0]
-            committed_aerial = (
+            if (
                 active_routine.__class__.__name__ == "Aerial"
                 and getattr(active_routine, "aerialing", False)
-            )
+            ):
+                aerial_ball = getattr(active_routine, "ball", None)
+                if aerial_ball is None:
+                    aerial_ball = self.ball.location
+                aerial_time_remaining = (
+                    active_routine.intercept_time - self.time
+                )
+                aerial_race_lost = tools.airborne_opponent_beats_aerial(
+                    self, aerial_ball, aerial_time_remaining
+                )
+                committed_aerial = not aerial_race_lost
+
         committed_routine_lock = (
             committed_jump_under_pressure or committed_aerial
         )
@@ -2315,6 +2327,18 @@ class Bot(VirxERLU):
             ):
                 shot = tools.find_pass_shot(self)
 
+            # If an airborne opponent is genuinely beating the active
+            # aerial to its predicted contact, abandon it instead of locking
+            # Volt into a losing contest. Emergency clears were handled above.
+            if aerial_race_lost and shot is None:
+                print(
+                    "[AERIAL BACK DOWN] airborne opponent wins 3D contact race",
+                    flush=True
+                )
+                self.clear()
+                self.push(routines.recovery())
+                return
+
             # If we found a shot
             if shot is not None:
 
@@ -2349,6 +2373,10 @@ class Bot(VirxERLU):
                             current_shot_name in ordinary_shots
                             and new_shot_name in ordinary_shots
                             and new_shot_name != "wall_approach"
+                            and not (
+                                current_shot_name == "Aerial"
+                                and aerial_race_lost
+                            )
                         ):
                             current_intercept = getattr(
                                 self.stack[0], "intercept_time", float("inf")
