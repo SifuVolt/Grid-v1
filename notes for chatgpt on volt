@@ -140,3 +140,13 @@ This file is the project handoff and change checklist. Read it before every code
 - The car briefly pitches back for the first 0.10 seconds of takeoff, then the existing target-tracking orientation resumes.
 - The existing held first-jump duration, second-jump pulse/counter sequence, predicted jump physics, and post-launch Party Cannon boost controller remain unchanged.
 - This is a launch responsiveness adjustment, not a rewrite of aerial steering or shot/contact selection. It has not yet been compiled or tested in-game.
+
+## 12. Tactical strategy revamp — first implementation (2026-11-14)
+
+- Replaced the former Noob Black-inspired deepest-player/ball-dependency role calculation with Volt's dynamic first-man / last-man / support assignment.
+- First man is selected from predicted reachable ball slices using travel distance, turn delay, speed, boost and vertical reach. A short hysteresis window prevents role swapping when ETAs are nearly equal.
+- Last man is selected by estimated ability to cover the projected goal-mouth lane, not simply by deepest position. A separate support role is assigned in 3v3.
+- Retired the scripted 3v3 transition bump and guessed-contact receive sequence. The third player now continuously occupies a separated support lane and can respond to the actual next play.
+- Added a new `tactical_rotation` routine: 1v1 uses a moving shadow/goal-mouth target; 2v2 uses first-man pressure plus a goal-side anchor; 3v3 adds a separated support lane. It uses turn-aware speed and conservative boost so defensive players do not abandon their lane for boost.
+- Existing shot finding and shot-execution routines remain in place. This is a first strategic layer replacement, not a validated final balance pass.
+- No compile, simulation, or in-game tests have been run yet. Review the role assignments and defensive positioning in live matches before tuning the distances/weights.
