@@ -1243,6 +1243,22 @@ class Bot(VirxERLU):
                         flush=True
                     )
 
+        # If the deepest player is also the challenger, promote the
+        # next-deepest teammate into the goalie/fallback role. A challenge
+        # announcement must always have a different player responsible behind it.
+        if goalie.index == attacker.index:
+            fallback_candidates = [
+                car for car in cars if car.index != attacker.index
+            ]
+            if fallback_candidates:
+                goalie = min(
+                    fallback_candidates,
+                    key=lambda car: (
+                        min(car.location.dist(own_goal), 900.0)
+                        + abs(car.location.y - own_goal.y)
+                    )
+                )
+
         transition = next(
             (
                 car for car in cars
@@ -1732,7 +1748,7 @@ class Bot(VirxERLU):
                     + challenger_message["contact_time"]
                 )
                 fallback_at = contact_at + 0.10
-                contact_key = round(contact_at * 2.0) / 2.0
+                contact_key = round(contact_at * 10.0) / 10.0
 
                 if (
                     getattr(self, "_goalie_fallback_active", False)
