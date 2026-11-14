@@ -164,8 +164,9 @@ This file is the project handoff and change checklist. Read it before every code
 - This is a structural first pass. It has not been compiled or tested in-game.
 
 
-## 14. Immediate first-man challenge handoff (2026-11-14)
+## 14. Immediate first-man challenge handoff (2026-11-14) — historical/reverted
 
+- This earlier handoff experiment is not present in the current live `instructions for chatgpt on volt` file; do not assume its `CHALLENGE_RELEASED` status or handoff lock is active.
 - On the reverted live branch, first man was being held by role election even after its own intercept became unwinnable. Teammates could remain in cover/transition positions while an opponent took the ball.
 - Added a live lost-challenge check comparing the active routine's remaining intercept estimate, the car's ETA, teammate ETAs and opponent ETAs.
 - When the elected challenger is beaten to the ball, or a teammate has a clearly earlier viable route, it broadcasts `CHALLENGE_RELEASED` immediately.
@@ -175,8 +176,9 @@ This file is the project handoff and change checklist. Read it before every code
 - This is a timing/ETA handoff, not a guarantee of a successful touch. No compile or in-game test has been run.
 
 
-## 15. Risk-first challenger commitment (2026-11-14)
+## 15. Risk-first challenger commitment (2026-11-14) — historical/reverted
 
+- This earlier `RISK_CHALLENGE` experiment is not present in the current live `instructions for chatgpt on volt` file; do not assume that status is active.
 - The elected first man must not stop pressuring simply because the prediction system cannot find a likely winning touch. If no reliable shot/intercept is available, it replaces passive `grid_defense`, `goto_boost`, or `cover_followup_wait` positioning with the existing `short_shot` routine as a direct, low-confidence challenge toward the opponent goal. It does not override an active teammate-owned shot or emergency defence.
 - While that routine is active, the challenger broadcasts `RISK_CHALLENGE` with a low score and a rough contact-time estimate. This means "I am committing to pressure, but do not assume I will win or touch the ball."
 - The designated goalie remains the defensive fallback. If the goalie is itself elected as challenger because it is already facing the ball better, the next-deepest teammate is promoted to goalie so the fallback role is never left empty. In 3v3, the transition player treats `RISK_CHALLENGE` as an active commitment and prepares for the loose-ball follow-up; it does not start the transition bump play for a risk challenge.
