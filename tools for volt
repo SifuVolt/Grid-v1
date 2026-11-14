@@ -1330,7 +1330,7 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
     if best_shot["shot_type"] == 3:
         local_ball = agent.me.local_location(best_ball_location)
         use_redirect = (
-            best_ball_location.z > 350
+            best_ball_location.z > 120
             and local_ball.y < -100
         )
         aerial_class = Redirect if use_redirect else Aerial
