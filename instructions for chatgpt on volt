@@ -119,6 +119,76 @@ class Bot(VirxERLU):
         turn_penalty = (1.0 - facing) * 0.28
         height_penalty = max(0.0, self.ball.location.z - car.location.z) / 5000.0
         return distance / effective_speed + turn_penalty + height_penalty
+
+    def _active_shot_race_info(self):
+        """Return (our_contact_time, foe_eta, foe_index) if an opponent is likely to beat our active shot."""
+        if self.is_clear() or not self.foes:
+            return None
+
+        routine = self.stack[0]
+        shot_names = {
+            "ground_shot", "jump_shot", "double_jump",
+            "Aerial", "Redirect", "wall_approach", "short_shot"
+        }
+        if routine.__class__.__name__ not in shot_names:
+            return None
+
+        intercept_time = getattr(routine, "intercept_time", None)
+        if intercept_time is None or not math.isfinite(intercept_time):
+            return None
+
+        contact_time = intercept_time - self.time
+        if contact_time <= 0.05 or contact_time > 6.0:
+            return None
+
+        prediction = getattr(self, "ball_prediction_struct", None)
+        slices = getattr(prediction, "slices", None) if prediction is not None else None
+        if not slices:
+            return None
+
+        slice_index = max(
+            0, min(len(slices) - 1, round(contact_time * 120))
+        )
+        physics = slices[slice_index].physics
+        contact_ball = Vector(
+            physics.location.x,
+            physics.location.y,
+            physics.location.z
+        )
+
+        best_eta = float("inf")
+        best_foe = None
+        for foe in self.foes:
+            delta = contact_ball - foe.location
+            distance = delta.magnitude()
+            flat_delta = delta.flatten()
+            forward = foe.forward.flatten()
+            facing = 0.0
+            if flat_delta.magnitude() > 1 and forward.magnitude() > 1:
+                facing = max(
+                    -1.0,
+                    min(1.0, forward.normalize().dot(flat_delta.normalize()))
+                )
+
+            speed = self._flat_speed(foe)
+            effective_speed = max(850.0, min(2100.0, speed + 650.0))
+            turn_penalty = (1.0 - facing) * 0.28
+            height_penalty = max(
+                0.0, contact_ball.z - foe.location.z
+            ) / 5000.0
+            foe_eta = (
+                distance / effective_speed
+                + turn_penalty
+                + height_penalty
+            )
+            if foe_eta < best_eta:
+                best_eta = foe_eta
+                best_foe = foe
+
+        if best_foe is not None and best_eta + 0.15 < contact_time:
+            return contact_time, best_eta, best_foe.index
+        return None
+
     def should_take_kickoff(self):
         # 1v1: always take the kickoff
         if len(self.friends) == 0:
@@ -1389,11 +1459,28 @@ class Bot(VirxERLU):
                         min(2.0, distance / max(900.0, speed + 1000.0))
                     )
 
-            # Announce that we're taking defensive action.
+            # If we are executing a shot and an opponent is likely to reach
+            # its predicted contact first, tell the goalie to prepare a later
+            # interception. Otherwise keep the normal DEFEND signal.
+            race_info = self._active_shot_race_info()
             self.cover_role_released = True
-            self.send_teamplay_comm(
-                "DEFEND", 100.0, self.teamplay_contact_time
-            )
+            if race_info is not None and self.friends:
+                self.teamplay_contact_time = race_info[0]
+                self.send_teamplay_comm(
+                    "SHOT_CONTESTED", 0.0, self.teamplay_contact_time
+                )
+                if self.time - getattr(self, "_last_contested_debug", -999.0) >= 0.75:
+                    self._last_contested_debug = self.time
+                    print(
+                        f"[SHOT CONTESTED] player={self.me.index} "
+                        f"foe={race_info[2]} foe_eta={race_info[1]:.2f} "
+                        f"our_contact={race_info[0]:.2f}",
+                        flush=True
+                    )
+            else:
+                self.send_teamplay_comm(
+                    "DEFEND", 100.0, self.teamplay_contact_time
+                )
             return
 
         # These names must match the actual routine class names.
@@ -1429,8 +1516,22 @@ class Bot(VirxERLU):
         score = self.teamplay_score
         contact_time = self.teamplay_contact_time
 
-        if status == "NO_SHOT" and self.me.boost < 18:
+        race_info = self._active_shot_race_info()
+        if race_info is not None and self.friends:
+            status = "SHOT_CONTESTED"
+            score = 0.0
+            contact_time = race_info[0]
+            if self.time - getattr(self, "_last_contested_debug", -999.0) >= 0.75:
+                self._last_contested_debug = self.time
+                print(
+                    f"[SHOT CONTESTED] player={self.me.index} "
+                    f"foe={race_info[2]} foe_eta={race_info[1]:.2f} "
+                    f"our_contact={race_info[0]:.2f}",
+                    flush=True
+                )
+        elif status == "NO_SHOT" and self.me.boost < 18:
             status = "LOW_BOOST"
+
         self.send_teamplay_comm(
             status,
             score,
@@ -1598,6 +1699,103 @@ class Bot(VirxERLU):
         attacker = goalie = transition = None
         if self.friends:
             attacker, goalie, transition = self.get_grid_team_roles()
+
+        # A contested shot is still being taken by first man. Only the
+        # designated goalie reacts, and only while the ball is on our half.
+        # Wait until just after the challenger's expected contact, then find
+        # the first later reachable interception from the updated prediction.
+        if (
+            self.friends
+            and attacker is not None
+            and goalie == self.me.index
+            and attacker != self.me.index
+        ):
+            challenger_message = self.get_teammate_comm(
+                attacker, max_age=0.75
+            )
+            contested_message = (
+                challenger_message is not None
+                and challenger_message.get("status") == "SHOT_CONTESTED"
+                and ball_depth > 0
+                and not self.ball_in_goal_danger()
+            )
+
+            if current_name == "goalie_followup_wait" and not contested_message:
+                self.clear()
+                current_name = None
+                self._goalie_fallback_contact_key = None
+                self._goalie_fallback_active = False
+
+            if contested_message:
+                contact_at = (
+                    challenger_message["received_at"]
+                    + challenger_message["contact_time"]
+                )
+                fallback_at = contact_at + 0.10
+                contact_key = round(contact_at * 2.0) / 2.0
+
+                if (
+                    getattr(self, "_goalie_fallback_active", False)
+                    and current_name in {
+                        "ground_shot", "jump_shot", "double_jump",
+                        "Aerial", "Redirect"
+                    }
+                ):
+                    return
+
+                if getattr(self, "_goalie_fallback_completed_key", None) == contact_key:
+                    pass
+                elif current_name in {
+                    None, "grid_defense", "goto_boost",
+                    "cover_followup_wait", "goalie_followup_wait"
+                }:
+                    if self.time < fallback_at:
+                        if current_name != "goalie_followup_wait":
+                            if current_name is not None:
+                                self.clear()
+                            self.push(
+                                routines.goalie_followup_wait(
+                                    fallback_at, contact_key
+                                )
+                            )
+                        return
+
+                    last_search = getattr(
+                        self, "_goalie_fallback_last_search", -999.0
+                    )
+                    if self.time - last_search >= 0.18:
+                        self._goalie_fallback_last_search = self.time
+                        followup = routines.fast_intercept_finder().find(
+                            self,
+                            earliest_time=max(
+                                self.time + 1 / 120,
+                                fallback_at
+                            ),
+                            cap_=4.0
+                        )
+                        if followup is not None:
+                            self.clear()
+                            self.push(followup)
+                            self._goalie_fallback_contact_key = contact_key
+                            self._goalie_fallback_completed_key = contact_key
+                            self._goalie_fallback_active = True
+                            print(
+                                f"[GOALIE LATE INTERCEPT] player={self.me.index} "
+                                f"challenger={attacker} "
+                                f"intercept_in={followup.intercept_time - self.time:.2f}",
+                                flush=True
+                            )
+                            return
+
+                    if current_name != "goalie_followup_wait":
+                        if current_name is not None:
+                            self.clear()
+                        self.push(
+                            routines.goalie_followup_wait(
+                                fallback_at, contact_key
+                            )
+                        )
+                    return
 
         # The third player in 3v3 is the non-goalie cover/transition
         # player. They do not join the attacker's first challenge; they wait
@@ -2462,6 +2660,7 @@ class Bot(VirxERLU):
                 "SHOT_FOUND",
                 "ANY_SHOT_FOUND",
                 "SHOT_ABANDONED",
+                "SHOT_CONTESTED",
                 "LOW_BOOST",
                 "NO_SHOT",
                 "DEFEND",
@@ -2528,7 +2727,7 @@ class Bot(VirxERLU):
         receive_plan = {}
         planned_shot = getattr(self, "teamplay_shot", None)
         if (
-            status in {"SHOT_FOUND", "ANY_SHOT_FOUND"}
+            status in {"SHOT_FOUND", "ANY_SHOT_FOUND", "SHOT_CONTESTED"}
             and planned_shot is not None
             and getattr(planned_shot, "intercept_time", None) is not None
         ):
@@ -2577,7 +2776,7 @@ class Bot(VirxERLU):
         message = {
             "protocol": "volt_teamplay_v1",
             "status": status,
-            "shot_type": status if status in {"SHOT_FOUND", "ANY_SHOT_FOUND"} else "NO_SHOT",
+            "shot_type": status if status in {"SHOT_FOUND", "ANY_SHOT_FOUND", "SHOT_CONTESTED"} else "NO_SHOT",
             "score": round(max(0, min(100, score)), 1),
             "contact_time": round(max(0, min(10, contact_time)), 2),
             "cover_owner": self.get_cover_role_owner(),
