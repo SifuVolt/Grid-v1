@@ -1470,8 +1470,26 @@ class Aerial:
                 flush=True
             )
 
-        # Find the car reference position that places the front of its
-        # actual hitbox against the ball's rear surface along ShotDirection.
+        # Party Cannon AerialShot wall correction: flatten the outgoing
+        # direction when the hitbox standoff target is too close to a wall.
+        hitbox_length = float(getattr(agent.me.hitbox, "length", 118.01))
+        wall_standoff = 92.75 + hitbox_length * 0.5
+        self.shot_vector, aerial_wall_normal, aerial_wall_clearance = (
+            WallShot.adjust_aerial(self.ball, self.shot_vector, wall_standoff)
+        )
+        if aerial_wall_normal is not None and (
+            not hasattr(self, "_wall_aerial_logged")
+            or agent.time - self._wall_aerial_logged >= 0.5
+        ):
+            self._wall_aerial_logged = agent.time
+            print(
+                f"[WALL AERIAL] clearance={aerial_wall_clearance:.1f} "
+                f"normal=({aerial_wall_normal.x:.0f},"
+                f"{aerial_wall_normal.y:.0f},{aerial_wall_normal.z:.0f})",
+                flush=True
+            )
+
+        # Position the actual hitbox against the ball's rear surface.
         self.target = self._party_cannon_hitbox_target(
             agent, self.ball, self.shot_vector
         )
@@ -3778,7 +3796,7 @@ class WallShot:
         # Party Cannon performs its dodge-angle calculation even when the
         # initial standoff is more than 40 units from the wall.
         if target_height > 250 or abs(normal.z) >= 0.95:
-            return shot_direction, None, target_height, jump_time
+            return shot_direction, None, target_height, jump_time, None
 
         # Party Cannon's achievable dodge-angle calculation. Its jump
         # estimate is measured along the contacted surface normal, not world Z.
@@ -3807,9 +3825,14 @@ class WallShot:
         angle = dodge_angle - 0.25
         tangent = shot_direction - normal * shot_direction.dot(normal)
         if tangent.magnitude() < 0.001:
-            return shot_direction, None, target_height, jump_time
+            return shot_direction, None, target_height, jump_time, None
+        tangent = tangent.normalize()
+        dodge_direction = (
+            tangent * math.cos(dodge_angle)
+            + normal * math.sin(dodge_angle)
+        ).normalize()
         shot_direction = (
-            tangent.normalize() * math.cos(angle)
+            tangent * math.cos(angle)
             + normal * math.sin(angle)
         ).normalize()
 
@@ -3832,7 +3855,7 @@ class WallShot:
             normal, max(target_height, 40) - 17, gravity
         ) if gravity is not None else max(0.0, jump_time)
 
-        return shot_direction, normal, target_height, jump_time
+        return shot_direction, normal, target_height, jump_time, dodge_direction
 
     @classmethod
     def adjust_aerial(cls, ball_location, shot_direction, approach_distance=155):
@@ -3886,6 +3909,7 @@ class jump_shot:
         self.wall_shot_active = False
         self.wall_shot_normal = None
         self.wall_jump_time = None
+        self.wall_dodge_direction = None
         self.ball_velocity = Vector()
         self.contact_point = None
 
@@ -3988,11 +4012,13 @@ class jump_shot:
         # the corrected shot direction.
         self.wall_shot_active = False
         self.wall_shot_normal = None
+        self.wall_dodge_direction = None
         (
             self.shot_vector,
             wall_normal,
             wall_clearance,
-            wall_jump_time
+            wall_jump_time,
+            wall_dodge_direction
         ) = WallShot.adjust_jump(
             self.ball_location,
             self.shot_vector,
@@ -4007,6 +4033,7 @@ class jump_shot:
             self.wall_shot_active = True
             self.wall_shot_normal = wall_normal
             self.wall_jump_time = wall_jump_time
+            self.wall_dodge_direction = wall_dodge_direction
             print(
                 f"[WALL JUMP SHOT] clearance={wall_clearance:.1f} "
                 f"normal=({wall_normal.x:.0f},{wall_normal.y:.0f},"
@@ -4316,19 +4343,33 @@ class jump_shot:
             # and above the car. This adds no waiting phase and leaves the
             # existing counter-3 dodge trigger intact.
             if self.counter < 3 and not self.dodging:
-                local_ball = agent.me.local_location(self.ball_location)
-                defaultPD(agent, local_ball.flatten())
+                if self.wall_shot_active and self.wall_dodge_direction is not None:
+                    # Party Cannon aims along its computed DodgeDirection,
+                    # with the roof orientation derived from the wall normal.
+                    dodge_direction = self.wall_dodge_direction
+                    wall_up = dodge_direction.cross(
+                        dodge_direction.cross(-self.wall_shot_normal)
+                    ).normalize()
+                    defaultPD(
+                        agent,
+                        agent.me.local(dodge_direction),
+                        up=agent.me.local(wall_up)
+                    )
+                    hold_s = False
+                else:
+                    local_ball = agent.me.local_location(self.ball_location)
+                    defaultPD(agent, local_ball.flatten())
 
-                ball_is_airborne = self.ball_location.z > 130
-                ball_is_above_car = self.ball_location.z > agent.me.location.z + 65
-                hold_s = (
-                    ball_is_airborne
-                    and ball_is_above_car
-                    and not self.quick_shot
-                )
+                    ball_is_airborne = self.ball_location.z > 130
+                    ball_is_above_car = self.ball_location.z > agent.me.location.z + 65
+                    hold_s = (
+                        ball_is_airborne
+                        and ball_is_above_car
+                        and not self.quick_shot
+                    )
 
-                if hold_s:
-                    agent.controller.pitch = 1
+                    if hold_s:
+                        agent.controller.pitch = 1
 
                 if not self._orientation_logged:
                     print(
