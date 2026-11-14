@@ -1791,7 +1791,11 @@ class Bot(VirxERLU):
                 and self.stack[0] is getattr(
                     self, "_goalie_fallback_routine", None
                 )
-                and ball_depth > 0
+                and (
+                    ball_depth > 0
+                    or getattr(self.stack[0], "jumping", False)
+                    or getattr(self.stack[0], "aerialing", False)
+                )
                 and not self.ball_in_goal_danger()
             ):
                 return
