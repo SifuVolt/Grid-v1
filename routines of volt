@@ -1075,8 +1075,6 @@ class double_jump:
 
 
 class Aerial:
-    redirect_mode = False
-
     def __init__(self, intercept_time, targets=None, fast_aerial=True):
         self.intercept_time = intercept_time
         self.fast_aerial = fast_aerial
@@ -1114,7 +1112,6 @@ class Aerial:
     def _party_cannon_shot_direction(self, agent, ball, ball_velocity, time_remaining):
         # Port of Party Cannon's SetTargetLocation shot prediction.
         shot_target = _relative_goal_aim_point(agent, self.targets)
-
         safe_time = max(time_remaining, dt)
         car_final_velocity = (
             (ball - agent.me.location) / safe_time
@@ -1552,102 +1549,98 @@ class Aerial:
             target = delta_x if delta_x.magnitude() > 50 else self.shot_vector
             target = agent.me.local(target)
 
-            if self.redirect_mode:
-                # Reuse Aerial's PD orientation controller, but keep the
-                # chassis inverted so the front wheel pair faces the ball.
-                defaultPD(agent, target, upside_down=True)
-            else:
-                # After Volt's fast double-jump, copy Grid's final aerial
-                # orientation: face the ball's horizontal direction, or for
-                # balls above double-jump height, pitch vertically and roll
-                # the roof toward the ball. Switch to the shot direction once
-                # the predicted contact error is within 50 units.
-                final_double_jump_approach = (
-                    self.double_jump_complete
-                    and 0 < T <= 0.45
-                )
+            # After Volt's fast double-jump, copy Grid's final aerial
+            # orientation: face the ball's horizontal direction, or for
+            # balls above double-jump height, pitch vertically and roll
+            # the roof toward the ball. Switch to the shot direction once
+            # the predicted contact error is within 50 units.
+            final_double_jump_approach = (
+                self.double_jump_complete
+                and 0 < T <= 0.45
+            )
 
-                if final_double_jump_approach:
-                    if delta_x.magnitude() <= 50:
-                        defaultPD(agent, agent.me.local(self.shot_vector))
-                    else:
-                        ball_flat = (
-                            self.ball - agent.me.location
-                        ).flatten()
+            if final_double_jump_approach:
+                if delta_x.magnitude() <= 50:
+                    defaultPD(agent, agent.me.local(self.shot_vector))
+                else:
+                    ball_flat = (
+                        self.ball - agent.me.location
+                    ).flatten()
 
-                        if ball_flat.magnitude() > 1:
-                            if self.ball.z > new_max_jump_height(True):
-                                # Grid's prev_wait branch: nose vertical,
-                                # then roll the roof toward the ball.
-                                vertical_target = agent.me.local(Vector(z=1))
-                                defaultPD(
-                                    agent,
-                                    vertical_target,
-                                    up=Vector(z=1)
+                    if ball_flat.magnitude() > 1:
+                        if self.ball.z > new_max_jump_height(True):
+                            # Grid's prev_wait branch: nose vertical,
+                            # then roll the roof toward the ball.
+                            vertical_target = agent.me.local(Vector(z=1))
+                            defaultPD(
+                                agent,
+                                vertical_target,
+                                up=Vector(z=1)
+                            )
+
+                            right_direction = agent.me.up.cross(agent.me.forward)
+                            if right_direction.magnitude() > 1:
+                                alignment = cap(
+                                    ball_flat.normalize().dot(
+                                        right_direction.normalize()
+                                    ),
+                                    -1,
+                                    1
                                 )
-
-                                right_direction = agent.me.up.cross(agent.me.forward)
-                                if right_direction.magnitude() > 1:
-                                    alignment = cap(
-                                        ball_flat.normalize().dot(
-                                            right_direction.normalize()
-                                        ),
-                                        -1,
-                                        1
-                                    )
-                                    roll_angle = math.acos(alignment)
-                                    agent.controller.roll = sign(
-                                        math.pi / 2 - roll_angle
-                                    )
-                            else:
-                                # Grid's normal double-jump branch: keep the
-                                # nose aimed along the ball's flat direction.
-                                defaultPD(
-                                    agent,
-                                    agent.me.local(ball_flat),
-                                    up=Vector(z=1)
+                                roll_angle = math.acos(alignment)
+                                agent.controller.roll = sign(
+                                    math.pi / 2 - roll_angle
                                 )
                         else:
-                            defaultPD(agent, target)
-
-                elif agent.controller.jump and not self.dodging:
-                    if T > 0.45 and abs(delta_x.z) > 80:
-                        # Party Cannon aims in 3D while the aerial is launching.
-                        # Preserve the quick double-jump path for near contacts.
-                        defaultPD(
-                            agent,
-                            target,
-                            up=Vector(z=1)
-                        )
+                            # Grid's normal double-jump branch: keep the
+                            # nose aimed along the ball's flat direction.
+                            defaultPD(
+                                agent,
+                                agent.me.local(ball_flat),
+                                up=Vector(z=1)
+                            )
                     else:
-                        defaultPD(agent, target.flatten(), up=agent.me.up)
+                        defaultPD(agent, target)
 
-                elif backboard_mode:
-                    # If the ball is below the car, invert to expose the
-                    # underside. If it is above the car, keep the roof facing it.
-                    ball_below_car = (
-                        self.ball.z < agent.me.location.z - 80
-                    )
-
+            elif agent.controller.jump and not self.dodging:
+                if T > 0.45 and abs(delta_x.z) > 80:
+                    # Party Cannon aims in 3D while the aerial is launching.
+                    # Preserve the quick double-jump path for near contacts.
                     defaultPD(
                         agent,
                         target,
-                        upside_down=ball_below_car
+                        up=Vector(z=1)
                     )
-
-                elif virxrlcu.find_landing_plane(
-                    tuple(agent.me.location),
-                    tuple(agent.me.velocity),
-                    agent.gravity.z
-                ) == 4:
-                    defaultPD(agent, target, upside_down=True)
-
                 else:
-                    defaultPD(
-                        agent,
-                        target,
-                        upside_down=self.shot_vector.z < 0
-                    )
+                    defaultPD(agent, target.flatten(), up=agent.me.up)
+
+            elif backboard_mode:
+                # If the ball is below the car, invert to expose the
+                # underside. If it is above the car, keep the roof facing it.
+                ball_below_car = (
+                    self.ball.z < agent.me.location.z - 80
+                )
+
+                defaultPD(
+                    agent,
+                    target,
+                    upside_down=ball_below_car
+                )
+
+            elif virxrlcu.find_landing_plane(
+                tuple(agent.me.location),
+                tuple(agent.me.velocity),
+                agent.gravity.z
+            ) == 4:
+                defaultPD(agent, target, upside_down=True)
+
+            else:
+                defaultPD(
+                    agent,
+                    target,
+                    upside_down=self.shot_vector.z < 0
+                )
+
         if self.dodging:
             # A neutral second-jump pulse avoids turning the fast aerial into
             # an unintended directional dodge. Boost remains enabled below.
@@ -1714,38 +1707,6 @@ class Aerial:
             agent.controller.pitch = -local_target.x
             agent.controller.yaw = local_target.y
             agent.controller.jump = True
-
-
-class Redirect(Aerial):
-    """
-    Upside-down aerial redirect for an airborne ball behind the car.
-
-    Reuses Aerial's Party Cannon trajectory prediction, jump simulation,
-    boost budgeting, and PD orientation controller. The contact target is
-    shifted so the two front wheels, rather than the nose/central hitbox,
-    meet the ball while the car is inverted.
-    """
-
-    redirect_mode = True
-
-    def _party_cannon_hitbox_target(self, agent, ball, shot_direction):
-        hitbox = agent.me.hitbox
-        front_axle_offset = float(
-            getattr(hitbox, "length", 118.01)
-        ) * 0.34
-        inverted_wheel_offset = float(
-            getattr(hitbox, "height", 36.16)
-        ) * 0.5
-
-        # With the car upside down, its wheels extend toward world +Z.
-        # Place the car centre below the ball so the front wheel pair
-        # reaches the intended contact point.
-        return (
-            ball
-            - shot_direction * (92.75 + front_axle_offset)
-            - Vector(z=inverted_wheel_offset)
-        )
-
 
 class half_flip:
     """
