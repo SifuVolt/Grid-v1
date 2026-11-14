@@ -5333,6 +5333,7 @@ class short_shot:
         if self.start_time is None:
             self.start_time = agent.time
 
+        elapsed = agent.time - self.start_time
         car_to_ball, distance = (agent.ball.location - agent.me.location).normalize(True)
         ball_to_target = (self.target - agent.ball.location).normalize()
 
@@ -5363,10 +5364,10 @@ class short_shot:
             agent.shot_weight = -1
             agent.shot_time = -1
             agent.push(flip(agent.me.local(car_to_ball)))
-        elif agent.boost_amount != 'unlimited' and agent.me.location.z < 50 and agent.me.boost < 48 and angle_to_target < 0.03 and velocity > 500 and T > 1 and time >= T + 1.5:
-            speed_gain_routine = wave_dash if agent.gravity.z < -450 and time < 3 and time > 1 else flip
+        elif agent.boost_amount != 'unlimited' and agent.me.location.z < 50 and agent.me.boost < 48 and angle_to_target < 0.03 and velocity > 500 and elapsed > 1.5:
+            speed_gain_routine = wave_dash if agent.gravity.z < -450 and elapsed < 3 else flip
             agent.push(speed_gain_routine(agent.me.local_location(self.target)))
-        elif agent.boost_amount != 'unlimited' and agent.me.location.z < 50 and direction == -1 and velocity < 200 and time >= T + 1.5:
+        elif agent.boost_amount != 'unlimited' and agent.me.location.z < 50 and direction == -1 and velocity < 200 and elapsed > 1.5:
             agent.push(flip(agent.me.local_location(self.target), True))
 
 class wall_shot:
