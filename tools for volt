@@ -1,6 +1,4 @@
-        # At zero boost, airborne contacts must use a double jump;
-        # grounded contacts may use a regular jump shot instead.
-        slice_can_ground = can_groundfrom util.routines import Aerial, double_jump, ground_shot, jump_shot, side_shot, virxrlcu, wall_approach
+from util.routines import Aerial, double_jump, ground_shot, jump_shot, side_shot, virxrlcu, wall_approach
 from util.utils import Vector, math, side, cap
 from util.grid_double_jump import find_double_jump as grid_find_double_jump
 
