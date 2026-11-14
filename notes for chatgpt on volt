@@ -162,3 +162,14 @@ This file is the project handoff and change checklist. Read it before every code
 - Removed the old scripted transition bump/receive sequence from the active run path.
 - Teammates outside the challenger role are blocked from normal shot selection; emergency defence remains higher priority.
 - This is a structural first pass. It has not been compiled or tested in-game.
+
+
+## 14. Immediate first-man challenge handoff (2026-11-14)
+
+- On the reverted live branch, first man was being held by role election even after its own intercept became unwinnable. Teammates could remain in cover/transition positions while an opponent took the ball.
+- Added a live lost-challenge check comparing the active routine's remaining intercept estimate, the car's ETA, teammate ETAs and opponent ETAs.
+- When the elected challenger is beaten to the ball, or a teammate has a clearly earlier viable route, it broadcasts `CHALLENGE_RELEASED` immediately.
+- Teammates exclude that released player from first-man selection for a short handoff window, while still considering the player for the normal deepest/cover/transition rotation. The next eligible teammate becomes challenger.
+- The former challenger cancels its stale shot and returns to the existing defensive/rotation routine. A short takeover grace period prevents every teammate from immediately releasing in sequence against the same opponent.
+- Emergency defence remains higher priority and is not released by this logic.
+- This is a timing/ETA handoff, not a guarantee of a successful touch. No compile or in-game test has been run.
