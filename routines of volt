@@ -1487,7 +1487,6 @@ class Aerial:
         if not self.jumping and self._run_side_wall_takeoff(agent, T):
             return
 
-        launch_elapsed = None
         if self.jumping or not agent.me.airborne:
             agent.dbg_2d("Jumping")
 
@@ -1499,7 +1498,6 @@ class Aerial:
                 self.double_jump_complete = False
 
             jump_elapsed = agent.time - self.jump_time
-            launch_elapsed = jump_elapsed
 
             # how much of the jump acceleration time is left
             tau = max(0.0, jump_max_duration - jump_elapsed)
@@ -1643,13 +1641,6 @@ class Aerial:
                     upside_down=self.shot_vector.z < 0
                 )
 
-        # Fast-aerial launch: boost from the very first jump frame and
-        # briefly pitch back to build upward takeoff speed before resuming
-        # the normal target-tracking orientation. The existing held first
-        # jump and second-jump pulse timing remain intact.
-        if launch_elapsed is not None and 0 <= launch_elapsed < 0.10:
-            agent.controller.pitch = -1
-
         if self.dodging:
             # A neutral second-jump pulse avoids turning the fast aerial into
             # an unintended directional dodge. Boost remains enabled below.
@@ -1705,16 +1696,6 @@ class Aerial:
                 -1,
                 1
             )
-
-        # Do not let the flight-budget controller delay boost during takeoff.
-        # The launch is already modelled by the jump predictor above.
-        if (
-            launch_elapsed is not None
-            and 0 <= launch_elapsed <= 0.25
-            and agent.me.boost > 0
-            and not self.dodging
-        ):
-            agent.controller.boost = True
 
         if T <= -0.4 or (not self.jumping and T > 1.5 and not virxrlcu.aerial_shot_is_viable(T, agent.boost_accel, tuple(agent.gravity), agent.me.get_raw(agent), tuple(self.target))):
             agent.pop()
@@ -5333,7 +5314,6 @@ class short_shot:
         if self.start_time is None:
             self.start_time = agent.time
 
-        elapsed = agent.time - self.start_time
         car_to_ball, distance = (agent.ball.location - agent.me.location).normalize(True)
         ball_to_target = (self.target - agent.ball.location).normalize()
 
@@ -5364,10 +5344,10 @@ class short_shot:
             agent.shot_weight = -1
             agent.shot_time = -1
             agent.push(flip(agent.me.local(car_to_ball)))
-        elif agent.boost_amount != 'unlimited' and agent.me.location.z < 50 and agent.me.boost < 48 and angle_to_target < 0.03 and velocity > 500 and elapsed > 1.5:
-            speed_gain_routine = wave_dash if agent.gravity.z < -450 and elapsed < 3 else flip
+        elif agent.boost_amount != 'unlimited' and agent.me.location.z < 50 and agent.me.boost < 48 and angle_to_target < 0.03 and velocity > 500 and T > 1 and time >= T + 1.5:
+            speed_gain_routine = wave_dash if agent.gravity.z < -450 and time < 3 and time > 1 else flip
             agent.push(speed_gain_routine(agent.me.local_location(self.target)))
-        elif agent.boost_amount != 'unlimited' and agent.me.location.z < 50 and direction == -1 and velocity < 200 and elapsed > 1.5:
+        elif agent.boost_amount != 'unlimited' and agent.me.location.z < 50 and direction == -1 and velocity < 200 and time >= T + 1.5:
             agent.push(flip(agent.me.local_location(self.target), True))
 
 class wall_shot:
