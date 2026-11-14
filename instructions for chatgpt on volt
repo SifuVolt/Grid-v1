@@ -1402,6 +1402,7 @@ class Bot(VirxERLU):
             "jump_shot",
             "double_jump",
             "Aerial",
+            "Redirect",
             "wall_approach",
             "short_shot"
         }
@@ -1726,7 +1727,7 @@ class Bot(VirxERLU):
             return
 
         if self.should_defensive_aerial():
-            if current_name == "Aerial":
+            if current_name in ("Aerial", "Redirect"):
                 return
 
             # Don't interrupt an active flip or recovery.
@@ -2045,6 +2046,7 @@ class Bot(VirxERLU):
                 "speed_flip",
                 "speedflip_kickoff",
                 "Aerial",
+                "Redirect",
             }
 
             # Keep the existing power clear running.
@@ -2121,7 +2123,8 @@ class Bot(VirxERLU):
             "ground_shot",
             "jump_shot",
             "double_jump",
-            "Aerial"
+            "Aerial",
+            "Redirect"
         }
 
         if self.is_clear() or self.odd_tick == 0:
@@ -2173,6 +2176,7 @@ class Bot(VirxERLU):
                         "jump_shot",
                         "ground_shot",
                         "Aerial",
+                        "Redirect",
                         "wall_approach"
                     }
 
@@ -2212,7 +2216,8 @@ class Bot(VirxERLU):
                                 "ground_shot",
                                 "jump_shot",
                                 "double_jump",
-                                "Aerial"
+                                "Aerial",
+                                "Redirect"
                             }
 
                             # Don't cancel an ordinary shot just because a
@@ -2340,6 +2345,7 @@ class Bot(VirxERLU):
                             "jump_shot",
                             "double_jump",
                             "Aerial",
+                            "Redirect",
                             "wall_approach"
                         }
 
