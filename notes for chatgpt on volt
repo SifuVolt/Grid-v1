@@ -223,3 +223,12 @@ This file is the project handoff and change checklist. Read it before every code
   - `110f562`: prediction-shift validation and one-frame dodge-edge correction.
   - `e98f70b`: Party Cannon's 270-unit jump-shot contact-height limit.
 - Static source checks confirmed the new calculation paths, imports, preserved side-shot subclass, and removal of the old hitbox-dodge block. No Python compile, simulation, or in-game test has been performed. Pull the branch locally before testing.
+
+
+## 19. Single-jump fast aerial power shot (2026-11-16)
+
+- Added FastAerialPowerShot as a dedicated subclass of the existing Party Cannon-derived jump_shot controller.
+- It uses one held first jump only, boosts during the first 0.25 seconds of takeoff, and reserves its dodge for the inherited hitbox-based contact window.
+- Targeted and untargeted shot searches run a dedicated C-parser pass for airborne balls above 130 units, with only single-jump enabled. The parser must confirm the ball is reachable, boost must be available, and ETA must be at most 1.25 seconds.
+- When the single-jump parser cannot reach the ball, normal ground, double-jump and full-aerial candidates remain as fallbacks.
+- Static source checks only; no compile or in-game test has been performed.
