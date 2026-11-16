@@ -3929,7 +3929,7 @@ class jump_shot:
                     flush=True
                 )
 
-        if self.wall_shot_active and not self.side_mode and not self._airborne_aim:
+        if self.wall_shot_active and not self.side_mode:
             # Party Cannon adds a small tangential offset and compensates
             # the wall target for gravity during the required jump time.
             normal = self.wall_shot_normal
