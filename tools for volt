@@ -1,4 +1,4 @@
-from util.routines import Aerial, FastAerialPowerShot, double_jump, ground_shot, jump_shot, side_shot, virxrlcu, wall_approach
+from util.routines import Aerial, double_jump, ground_shot, jump_shot, side_shot, virxrlcu, wall_approach
 from util.utils import Vector, math, side, cap
 from util.grid_double_jump import find_double_jump as grid_find_double_jump
 
@@ -1161,51 +1161,22 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             else:
                 slice_can_double_jump = False
 
-        power_shot = None
-        if (
-            can_jump
-            and 130.0 < ball_location[2]
-            and 0 < time_remaining <= FastAerialPowerShot.MAX_ETA
-            and (agent.boost_amount == "unlimited" or agent.me.boost > 0)
-        ):
-            power_shot = _parse_shot_with_boost_budget(
-                agent,
-                virxrlcu.parse_slice_for_shot_with_target,
-                (False, True, False, False),
-                time_remaining,
-                game_info,
-                gravity,
-                ball_info,
-                me,
-                targets
-            )
-            if (
-                power_shot.get("found") == 1
-                and int(power_shot.get("shot_type", -1)) == 1
-            ):
-                power_shot["fast_aerial_power_shot"] = True
-            else:
-                power_shot = None
-
-        if power_shot is not None:
-            shot = power_shot
-        else:
-            shot = _parse_shot_with_boost_budget(
-                agent,
-                virxrlcu.parse_slice_for_shot_with_target,
-                (
-                    slice_can_ground,
-                    slice_can_jump,
-                    slice_can_double_jump,
-                    slice_can_aerial
-                ),
-                time_remaining,
-                game_info,
-                gravity,
-                ball_info,
-                me,
-                targets
-            )
+        shot = _parse_shot_with_boost_budget(
+            agent,
+            virxrlcu.parse_slice_for_shot_with_target,
+            (
+                slice_can_ground,
+                slice_can_jump,
+                slice_can_double_jump,
+                slice_can_aerial
+            ),
+            time_remaining,
+            game_info,
+            gravity,
+            ball_info,
+            me,
+            targets
+        )
         if shot['found'] == 1:
             # At very low boost, a single-jump shot must leave enough time
             # for the jump and the follow-up dodge impulse. Reject slices
@@ -1259,11 +1230,6 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                     time_remaining,
                     target
                 )
-
-            # A reachable fast aerial power shot is the preferred airborne
-            # touch inside its dodge window, not merely another shot option.
-            if shot.get("fast_aerial_power_shot"):
-                score -= 100.0
 
             if score < best_score:
                 best_score = score
@@ -1361,9 +1327,7 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
         best_targets
     )
 
-    if best_shot.get("fast_aerial_power_shot"):
-        routine = FastAerialPowerShot(best_intercept_time, best_targets)
-    elif best_shot["shot_type"] == 3:
+    if best_shot["shot_type"] == 3:
         routine = Aerial(
             best_intercept_time,
             best_targets,
@@ -1605,49 +1569,21 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
             else:
                 slice_can_double_jump = False
 
-        power_shot = None
-        if (
-            can_jump
-            and 130.0 < ball_location[2]
-            and 0 < time_remaining <= FastAerialPowerShot.MAX_ETA
-            and (agent.boost_amount == "unlimited" or agent.me.boost > 0)
-        ):
-            power_shot = _parse_shot_with_boost_budget(
-                agent,
-                virxrlcu.parse_slice_for_shot,
-                (False, True, False, False),
-                time_remaining,
-                game_info,
-                gravity,
-                ball_info,
-                me
-            )
-            if (
-                power_shot.get("found") == 1
-                and int(power_shot.get("shot_type", -1)) == 1
-            ):
-                power_shot["fast_aerial_power_shot"] = True
-            else:
-                power_shot = None
-
-        if power_shot is not None:
-            shot = power_shot
-        else:
-            shot = _parse_shot_with_boost_budget(
-                agent,
-                virxrlcu.parse_slice_for_shot,
-                (
-                    slice_can_ground,
-                    slice_can_jump,
-                    slice_can_double_jump,
-                    slice_can_aerial
-                ),
-                time_remaining,
-                game_info,
-                gravity,
-                ball_info,
-                me
-            )
+        shot = _parse_shot_with_boost_budget(
+            agent,
+            virxrlcu.parse_slice_for_shot,
+            (
+                slice_can_ground,
+                slice_can_jump,
+                slice_can_double_jump,
+                slice_can_aerial
+            ),
+            time_remaining,
+            game_info,
+            gravity,
+            ball_info,
+            me
+        )
 
         if shot['found'] != 1:
             continue
@@ -1670,8 +1606,6 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
             time_remaining,
             target=None
         )
-        if shot.get("fast_aerial_power_shot"):
-            score -= 100.0
 
         if score < best_score:
             best_score = score
@@ -1755,15 +1689,6 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
     if best_shot is None:
         return None
     time_to_intercept = best_intercept_time - agent.time
-    if best_shot.get("fast_aerial_power_shot"):
-        routine = FastAerialPowerShot(best_intercept_time)
-        contact = select_ball_contact(agent, best_ball_location, None)
-        routine.contact_label = contact["label"]
-        routine.contact_point = contact["contact_point"]
-        routine.contact_normal = contact["normal"]
-        routine.contact_approach_target = contact["approach_target"]
-        return routine
-
     if best_shot['shot_type'] == 3:
         routine = Aerial(
             best_intercept_time,
