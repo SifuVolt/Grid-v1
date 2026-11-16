@@ -1259,8 +1259,11 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                     time_remaining,
                     target
                 )
-                if shot.get("fast_aerial_power_shot"):
-                    score -= 1.0
+
+            # A reachable fast aerial power shot is the preferred airborne
+            # touch inside its dodge window, not merely another shot option.
+            if shot.get("fast_aerial_power_shot"):
+                score -= 100.0
 
             if score < best_score:
                 best_score = score
@@ -1668,7 +1671,7 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
             target=None
         )
         if shot.get("fast_aerial_power_shot"):
-            score -= 1.0
+            score -= 100.0
 
         if score < best_score:
             best_score = score
