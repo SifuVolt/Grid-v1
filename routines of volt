@@ -1727,6 +1727,681 @@ class Aerial:
             agent.controller.yaw = local_target.y
             agent.controller.jump = True
 
+
+class FastAerialPowerShot:
+    """Independent single-jump aerial power shot with a contact dodge."""
+
+    MAX_ETA = 1.25
+
+    def __init__(self, intercept_time, targets=None):
+        self.intercept_time = intercept_time
+        self.fast_aerial = False
+        self.targets = targets
+        self.shot_vector = None
+        self.target = None
+        self.ball = None
+
+        self.jump_type_fast = None
+        self.jumping = False
+        self.dodging = False
+        self.ceiling = False
+        self.jump_time = -1
+        self.counter = 0
+        self.jump_release_frames = 0
+        self.double_jump_complete = False
+        self.side_wall_route = False
+        self.side_wall_launched = False
+
+    def update(self, shot):
+        self.intercept_time = shot.intercept_time
+        self.targets = shot.targets
+
+    @staticmethod
+    def _party_cannon_shot_power_modifier(speed):
+        speed = cap(speed, 0, 4600)
+        if speed <= 500:
+            return 0.65
+        if speed <= max_speed:
+            blend = (speed - 500) / 1800
+            return 0.65 + (0.55 - 0.65) * blend
+        blend = (speed - max_speed) / 2300
+        return 0.55 + (0.3 - 0.55) * blend
+
+    def _party_cannon_shot_direction(self, agent, ball, ball_velocity, time_remaining):
+        # Port of Party Cannon's SetTargetLocation shot prediction.
+        shot_target = _relative_goal_aim_point(agent, self.targets)
+        safe_time = max(time_remaining, dt)
+        car_final_velocity = (
+            (ball - agent.me.location) / safe_time
+        ).cap(0, max_speed)
+
+        velocity_for_power = (
+            car_final_velocity * 6 + ball_velocity
+        ) / 7
+        direction_to_score = (
+            shot_target - ball
+        ).flatten().normalize()
+        velocity_difference = (
+            car_final_velocity - ball_velocity
+        ).magnitude()
+
+        score_speed = (
+            velocity_difference
+            * self._party_cannon_shot_power_modifier(velocity_difference)
+            + velocity_for_power.dot(direction_to_score)
+        )
+        time_to_score = (
+            ball.flatten().dist(shot_target.flatten())
+            / cap(score_speed, 500, 6000)
+        )
+
+        predicted_after_hit_velocity = (
+            car_final_velocity + ball_velocity * 2
+        ) / 3
+        predicted_ball_location = (
+            ball
+            + predicted_after_hit_velocity * time_to_score
+            + agent.gravity * (0.5 * time_to_score * time_to_score)
+        )
+        shot_direction = (
+            shot_target - predicted_ball_location
+        ).normalize()
+
+        if shot_direction.magnitude() < 0.001:
+            return direction_to_score
+        return shot_direction
+
+    def _party_cannon_hitbox_target(self, agent, ball, shot_direction):
+        # Party Cannon's 155-unit standoff is approximately ball radius +
+        # half the Octane hitbox length. Use Volt's actual hitbox dimensions.
+        hitbox = agent.me.hitbox
+        half_length = float(getattr(hitbox, "length", 118.01)) * 0.5
+        ball_radius = 92.75
+
+        # RLBot exposes the hitbox offset separately on some packet wrappers.
+        # If Volt's wrapper provides it, convert its local offset to world space.
+        local_offset = getattr(agent.me, "hitbox_offset", None)
+        if local_offset is None:
+            local_offset = getattr(hitbox, "offset", None)
+
+        world_offset = Vector()
+        if local_offset is not None:
+            offset_x = float(getattr(local_offset, "x", 0.0))
+            offset_y = float(getattr(local_offset, "y", 0.0))
+            offset_z = float(getattr(local_offset, "z", 0.0))
+            world_offset = (
+                agent.me.forward * offset_x
+                + agent.me.forward.cross(agent.me.up) * offset_y
+                + agent.me.up * offset_z
+            )
+
+        return (
+            ball
+            - shot_direction * (ball_radius + half_length)
+            - world_offset
+        )
+
+    def _party_cannon_boost_estimate(
+        self, agent, target, time_remaining, final_position, final_velocity
+    ):
+        # Port of Party Cannon's GetBoostEstimate, using Volt's already
+        # calculated jump prediction and VirxERLU acceleration constants.
+        if time_remaining <= dt:
+            return 0.0
+
+        offset = target - final_position
+        distance = offset.magnitude()
+        if distance <= 1:
+            return 0.0
+
+        direction = offset / distance
+        angle = math.acos(cap(direction.dot(agent.me.forward), -1, 1))
+        angle = max(0.0001, angle)
+        turn_time = 0.6 * (2 * math.sqrt(angle / 9))
+        turn_time = min(turn_time, max(0.0, time_remaining - dt))
+        tau1 = turn_time * cap(1 - 0.4 / angle, 0, 1)
+
+        usable_time = max(dt, time_remaining - tau1)
+        required_acceleration = 2 * distance / (usable_time * usable_time)
+        total_acceleration = agent.boost_accel + throttle_accel
+        ratio = required_acceleration / max(1.0, total_acceleration)
+
+        if abs(ratio) >= 0.9:
+            return None
+
+        tau2 = time_remaining - (
+            (time_remaining - tau1)
+            * math.sqrt(1 - cap(ratio, 0, 1))
+        )
+        boost_time = max(0.0, tau2 - tau1)
+        boost_estimate = boost_time * boost_per_second
+        velocity_estimate = (
+            final_velocity + direction * total_acceleration * boost_time
+        )
+
+        if (
+            velocity_estimate.magnitude() >= max_speed * 0.9
+            or boost_estimate >= max(0.0, float(agent.me.boost)) * 0.9
+        ):
+            return None
+
+        return boost_estimate
+
+    def _run_side_wall_takeoff(self, agent, time_remaining):
+        """
+        Internally route an aerial up a side wall before launching.
+
+        The car may begin on the floor or already be attached to the matching
+        side wall. Back walls are never considered. Returns True while this
+        method owns the controller; returns False once the aerial can proceed.
+        """
+        car = agent.me
+        ball = self.ball
+
+        # A side-wall aerial only makes sense when the predicted contact is
+        # genuinely close to one of the two side walls and above the floor.
+        wall_side = 1 if ball.x >= 0 else -1
+        wall_gap = 4096.0 - abs(ball.x) - 92.75
+        if not (-5 <= wall_gap <= 700) or ball.z < 300:
+            self.side_wall_route = False
+            return False
+
+        attached_wall = None
+        if (
+            abs(car.location.x) > 3500
+            and abs(car.up.x) > 0.65
+            and car.up.x * car.location.x < 0
+        ):
+            attached_wall = 1 if car.location.x >= 0 else -1
+
+        # A free-flight car or a car attached to the opposite side wall
+        # should keep using the ordinary aerial controller.
+        if car.airborne and attached_wall is None:
+            return False
+        if attached_wall is not None and attached_wall != wall_side:
+            return False
+
+        # A late intercept is better handled by the normal aerial than by
+        # trying to climb a wall that cannot be reached in time.
+        if time_remaining <= 0.35 and not self.jumping:
+            return False
+
+        goal_direction = (
+            _relative_goal_aim_point(agent, self.targets) - ball
+        ).flatten().normalize()
+        if goal_direction.magnitude() < 0.01:
+            goal_direction = Vector(0, -side(agent.team), 0)
+
+        # Keep the car just inside the wall, with its nose lane aligned to
+        # the hitbox contact target already calculated by Aerial.
+        wall_x = wall_side * 3850.0
+        lane_y = self.target.y if self.target is not None else ball.y
+        climb_z = max(180.0, min(ball.z - 185.0, 1900.0))
+        if attached_wall is not None:
+            drive_target = Vector(wall_x, lane_y, climb_z)
+            phase = "CLIMB"
+        else:
+            # From the floor, first reach the wall at the ball's lane.
+            drive_target = Vector(wall_x, ball.y, max(100.0, car.location.z))
+            phase = "TO WALL"
+
+        local_target = car.local_location(drive_target)
+        distance = car.location.dist(drive_target)
+        time_for_drive = max(0.18, time_remaining - 0.20)
+        speed_required = cap(distance / time_for_drive, 900, 2300)
+
+        # Turn-aware speed: preserve speed on a clean line, but don't boost
+        # blindly while the nose is pointed across the field.
+        local_angle = abs(math.atan2(local_target.y, local_target.x))
+        turn_cap = (
+            900 if local_angle > 1.75 else
+            1200 if local_angle > 1.30 else
+            1650 if local_angle > 0.80 else
+            2300
+        )
+        speed_required = min(speed_required, turn_cap)
+        speed = car.velocity.magnitude()
+
+        if attached_wall is None:
+            # defaultDrive performs VirxERLU's speed-aware throttle control;
+            # unlike a fixed throttle=1, it can ease off before overspeeding.
+            defaultDrive(agent, speed_required, local_target)
+            boost_angle = local_angle
+        else:
+            wall_up = Vector(-wall_side, 0, 0)
+            target_angles = defaultPD(
+                agent, local_target, up=car.local(wall_up)
+            )
+            defaultThrottle(
+                agent, speed_required, target_angles, local_target
+            )
+            boost_angle = abs(target_angles[1])
+
+        agent.controller.boost = (
+            car.boost > 0
+            and distance > 550
+            and speed < speed_required - 100
+            and boost_angle < 0.65
+            and not agent.controller.handbrake
+        )
+
+        if (
+            not hasattr(self, "side_wall_debug_time")
+            or agent.time - self.side_wall_debug_time >= 0.35
+        ):
+            self.side_wall_debug_time = agent.time
+            print(
+                f"[AERIAL SIDE WALL] {phase} side={wall_side:+d} "
+                f"gap={wall_gap:.0f} distance={distance:.0f} "
+                f"T={time_remaining:.2f} speed={speed:.0f}/"
+                f"{speed_required:.0f} boost={car.boost:.0f}",
+                flush=True
+            )
+
+        if attached_wall is None:
+            return True
+
+        # Start the aerial only once the car has climbed into the ball's
+        # height/lane. If the intercept becomes urgent, launch from the
+        # closest reachable point rather than continuing to drive past it.
+        height_error = abs(car.location.z - climb_z)
+        lane_error = abs(car.location.y - lane_y)
+        launch_ready = (
+            (height_error < 190 and lane_error < 420)
+            or (distance < 330)
+            or (time_remaining < 0.55 and distance < 650)
+        )
+        if not launch_ready:
+            return True
+
+        self.side_wall_route = False
+        self.side_wall_launched = True
+        self.jump_type_fast = self.fast_aerial
+        self.jumping = True
+        self.jump_time = agent.time
+        self.counter = 0
+        self.double_jump_complete = False
+        agent.controller.jump = True
+        print(
+            f"[AERIAL SIDE WALL] LAUNCH side={wall_side:+d} "
+            f"height_error={height_error:.0f} lane_error={lane_error:.0f} "
+            f"T={time_remaining:.2f}",
+            flush=True
+        )
+        return False
+
+    def run(self, agent: VirxERLU):
+        if not agent.shooting:
+            agent.shooting = True
+
+        T = self.intercept_time - agent.time
+        if T > self.MAX_ETA:
+            print(
+                f"[FAST AERIAL POWER SHOT ABORT] ETA={T:.3f} exceeds {self.MAX_ETA:.2f}s dodge window",
+                flush=True
+            )
+            agent.pop()
+            agent.shooting = False
+            agent.shot_weight = -1
+            agent.shot_time = -1
+            if agent.me.airborne:
+                agent.push(ball_recovery())
+            return
+
+        xf = agent.me.location + agent.me.velocity * T + 0.5 * agent.gravity * T * T
+        vf = agent.me.velocity + agent.gravity * T
+
+        prediction = agent.ball_prediction_struct
+        slices = prediction.slices
+        # Select the slice by its absolute game timestamp. The old ceil(T*120)
+        # index could drift from the intercept after prediction updates, and
+        # the previous 0.1s guard froze the ball at a stale position.
+        slice_n = min(
+            range(len(slices)),
+            key=lambda i: abs(
+                slices[i].game_seconds - self.intercept_time
+            )
+        )
+        agent.dbg_2d(f"Shot slice #: {slice_n}")
+
+        aerial_physics = slices[slice_n].physics
+        ball = aerial_physics.location
+        self.ball = Vector(ball.x, ball.y, ball.z)
+        self.ceiling = (
+            agent.me.location.z > 2044 - agent.me.hitbox.height * 2
+            and not agent.me.jumped
+        )
+
+        # Use the predicted ball velocity and Party Cannon's post-hit
+        # trajectory model to choose the outgoing shot direction.
+        aerial_ball_velocity = Vector(
+            aerial_physics.velocity.x,
+            aerial_physics.velocity.y,
+            aerial_physics.velocity.z
+        )
+        self.shot_vector = self._party_cannon_shot_direction(
+            agent, self.ball, aerial_ball_velocity, T
+        )
+
+        
+        # Detect a useful backboard rebound for an already-airborne car.
+        left_post, right_post = agent.foe_goal_shot
+
+        goal_center = Vector(
+            (left_post.x + right_post.x) / 2,
+            (left_post.y + right_post.y) / 2,
+            300
+        )
+
+        # Read the predicted ball velocity at this aerial's intercept.
+        prediction = agent.ball_prediction_struct
+        backboard_mode = False
+        goal_direction = (goal_center - self.ball).normalize()
+
+        if (
+            agent.me.airborne
+            and prediction is not None
+            and 0 <= slice_n < len(prediction.slices)
+        ):
+            physics = prediction.slices[slice_n].physics
+            ball_velocity = Vector(
+                physics.velocity.x,
+                physics.velocity.y,
+                physics.velocity.z
+            )
+
+            # Positive means moving towards goal; negative means away.
+            towards_goal = ball_velocity.dot(goal_direction)
+
+            near_backboard = (
+                abs(self.ball.y - goal_center.y) < 1100
+                and self.ball.z > 450
+                and abs(self.ball.x) < 3500
+            )
+
+            # Only take over for an actual rebound opportunity.
+            # Avoid activating for a ball simply travelling into the wall.
+            backboard_mode = (
+                near_backboard
+                and towards_goal < -150
+                and 0.15 < T < 2.0
+            )
+
+        if backboard_mode and (
+            not hasattr(self, "last_backboard_debug")
+            or agent.time - self.last_backboard_debug >= 0.5
+        ):
+            self.last_backboard_debug = agent.time
+            print(
+                f"[AERIAL BACKBOARD] Party Cannon trajectory | "
+                f"ball=({self.ball.x:.0f}, {self.ball.y:.0f}, "
+                f"{self.ball.z:.0f}) | car_z={agent.me.location.z:.0f} | "
+                f"shot_dir=({self.shot_vector.x:.2f}, "
+                f"{self.shot_vector.y:.2f}, {self.shot_vector.z:.2f})",
+                flush=True
+            )
+
+        # Find the car reference position that places the front of its
+        # actual hitbox against the ball's rear surface along ShotDirection.
+        self.target = self._party_cannon_hitbox_target(
+            agent, self.ball, self.shot_vector
+        )
+
+
+        agent.sphere(self.ball, 92.75)
+
+        if self.ceiling:
+            self.target -= Vector(z=92)
+
+        # Side-wall setup is part of Aerial itself. It can drive up from the
+        # floor or continue climbing when already attached to that side wall.
+        if not self.jumping and self._run_side_wall_takeoff(agent, T):
+            return
+
+        launch_elapsed = None
+        if self.jumping or not agent.me.airborne:
+            agent.dbg_2d("Jumping")
+
+            if not self.jumping or not agent.me.airborne:
+                self.jump_type_fast = False
+                self.jumping = True
+                self.jump_time = agent.time
+                self.counter = 0
+                self.jump_release_frames = 0
+                self.double_jump_complete = False
+
+            jump_elapsed = agent.time - self.jump_time
+            launch_elapsed = jump_elapsed
+
+            # how much of the jump acceleration time is left
+            tau = max(0.0, jump_max_duration - jump_elapsed)
+
+            # impulse from the first jump
+            if jump_elapsed == 0:
+                vf += agent.me.up * jump_speed
+                xf += agent.me.up * jump_speed * T
+
+            # acceleration from holding jump
+            vf += agent.me.up * jump_acc * tau
+            xf += agent.me.up * jump_acc * tau * (T - 0.5 * tau)
+
+            # Exactly one jump impulse: hold the first jump, then release.
+            # The only later jump press is the final directional contact dodge.
+            if jump_elapsed <= jump_max_duration:
+                agent.controller.jump = True
+                self.jump_release_frames = 0
+            else:
+                self.jump_release_frames += 1
+
+        if self.ceiling:
+            agent.dbg_2d(f"Ceiling shot")
+
+        delta_x = self.target - xf
+        direction = delta_x.normalize() if not self.jumping else delta_x.flatten().normalize()
+
+        agent.line(agent.me.location, agent.me.location + (direction * 250), agent.renderer.black)
+        c_vf = vf + agent.me.location
+        agent.line(c_vf - Vector(z=100), c_vf + Vector(z=100), agent.renderer.blue)
+        agent.line(xf - Vector(z=100), xf + Vector(z=100), agent.renderer.red)
+        agent.line(self.target - Vector(z=100), self.target + Vector(z=100), agent.renderer.green)
+
+        
+        if not self.dodging:
+            target = delta_x if delta_x.magnitude() > 50 else self.shot_vector
+            target = agent.me.local(target)
+
+            # After Volt's fast double-jump, copy Grid's final aerial
+            # orientation: face the ball's horizontal direction, or for
+            # balls above double-jump height, pitch vertically and roll
+            # the roof toward the ball. Switch to the shot direction once
+            # the predicted contact error is within 50 units.
+            final_double_jump_approach = (
+                self.double_jump_complete
+                and 0 < T <= 0.45
+            )
+
+            if final_double_jump_approach:
+                if delta_x.magnitude() <= 50:
+                    defaultPD(agent, agent.me.local(self.shot_vector))
+                else:
+                    ball_flat = (
+                        self.ball - agent.me.location
+                    ).flatten()
+
+                    if ball_flat.magnitude() > 1:
+                        if self.ball.z > new_max_jump_height(True):
+                            # Grid's prev_wait branch: nose vertical,
+                            # then roll the roof toward the ball.
+                            vertical_target = agent.me.local(Vector(z=1))
+                            defaultPD(
+                                agent,
+                                vertical_target,
+                                up=Vector(z=1)
+                            )
+
+                            right_direction = agent.me.up.cross(agent.me.forward)
+                            if right_direction.magnitude() > 1:
+                                alignment = cap(
+                                    ball_flat.normalize().dot(
+                                        right_direction.normalize()
+                                    ),
+                                    -1,
+                                    1
+                                )
+                                roll_angle = math.acos(alignment)
+                                agent.controller.roll = sign(
+                                    math.pi / 2 - roll_angle
+                                )
+                        else:
+                            # Grid's normal double-jump branch: keep the
+                            # nose aimed along the ball's flat direction.
+                            defaultPD(
+                                agent,
+                                agent.me.local(ball_flat),
+                                up=Vector(z=1)
+                            )
+                    else:
+                        defaultPD(agent, target)
+
+            elif agent.controller.jump and not self.dodging:
+                if T > 0.45 and abs(delta_x.z) > 80:
+                    # Party Cannon aims in 3D while the aerial is launching.
+                    # Preserve the quick double-jump path for near contacts.
+                    defaultPD(
+                        agent,
+                        target,
+                        up=Vector(z=1)
+                    )
+                else:
+                    defaultPD(agent, target.flatten(), up=agent.me.up)
+
+            elif backboard_mode:
+                # If the ball is below the car, invert to expose the
+                # underside. If it is above the car, keep the roof facing it.
+                ball_below_car = (
+                    self.ball.z < agent.me.location.z - 80
+                )
+
+                defaultPD(
+                    agent,
+                    target,
+                    upside_down=ball_below_car
+                )
+
+            elif virxrlcu.find_landing_plane(
+                tuple(agent.me.location),
+                tuple(agent.me.velocity),
+                agent.gravity.z
+            ) == 4:
+                defaultPD(agent, target, upside_down=True)
+
+            else:
+                defaultPD(
+                    agent,
+                    target,
+                    upside_down=self.shot_vector.z < 0
+                )
+
+        # Fast-aerial launch: boost from the very first jump frame and
+        # briefly pitch back to build upward takeoff speed before resuming
+        # the normal target-tracking orientation. The existing held first
+        # jump and second-jump pulse timing remain intact.
+        if launch_elapsed is not None and 0 <= launch_elapsed < 0.10:
+            agent.controller.pitch = -1
+
+        if self.dodging:
+            # A neutral second-jump pulse avoids turning the fast aerial into
+            # an unintended directional dodge. Boost remains enabled below.
+            agent.controller.pitch = 0
+            agent.controller.yaw = 0
+            agent.controller.roll = 0
+
+        # Check the remaining flight against Party Cannon's boost budget.
+        # The position/velocity supplied here are Volt's existing predicted
+        # values, including the current jump model above.
+        if (
+            T > 0.25
+            and agent.boost_amount != "unlimited"
+            and not self.dodging
+        ):
+            party_cannon_boost_estimate = self._party_cannon_boost_estimate(
+                agent, self.target, T, xf, vf
+            )
+            if party_cannon_boost_estimate is None:
+                if not getattr(self, "_boost_reject_logged", False):
+                    self._boost_reject_logged = True
+                    print(
+                        f"[AERIAL BOOST REJECT] insufficient flight budget "
+                        f"boost={agent.me.boost:.1f} T={T:.2f} "
+                        f"distance={delta_x.magnitude():.0f}",
+                        flush=True
+                    )
+                agent.pop()
+                agent.shooting = False
+                agent.push(ball_recovery())
+                return
+
+        # Party Cannon's forward-projection boost and air-throttle control.
+        if T > 0:
+            party_cannon_forward_need = delta_x.dot(agent.me.forward) / T
+            party_cannon_forward_angle = (
+                math.acos(cap(
+                    agent.me.forward.dot(direction),
+                    -1,
+                    1
+                ))
+            )
+            agent.controller.boost = (
+                party_cannon_forward_need
+                >= (agent.boost_accel + throttle_accel)
+                * max(dt, 13.0 / 120.0)
+                and party_cannon_forward_angle < 0.4
+                and agent.me.boost > 0
+            )
+            agent.controller.throttle = cap(
+                party_cannon_forward_need
+                / (throttle_accel * max(dt, 1.0 / 120.0)),
+                -1,
+                1
+            )
+
+        # Do not let the flight-budget controller delay boost during takeoff.
+        # The launch is already modelled by the jump predictor above.
+        if (
+            launch_elapsed is not None
+            and 0 <= launch_elapsed <= 0.25
+            and agent.me.boost > 0
+            and not self.dodging
+        ):
+            agent.controller.boost = True
+
+        if T <= -0.4 or (not self.jumping and T > 1.5 and not virxrlcu.aerial_shot_is_viable(T, agent.boost_accel, tuple(agent.gravity), agent.me.get_raw(agent), tuple(self.target))):
+            agent.pop()
+            agent.shooting = False
+            agent.push(ball_recovery())
+        elif (
+            not self.ceiling
+            and not self.dodging
+            and not agent.me.doublejumped
+            and self.jump_release_frames >= 3
+            and 0 < T <= 0.10
+            and self.target.dist(agent.me.location)
+            < 92 + agent.me.hitbox.length + 80
+        ):
+            agent.dbg_2d("Fast aerial power-shot dodge")
+            local_target = agent.me.local_location(self.target).flatten().normalize()
+            agent.controller.pitch = -local_target.x
+            agent.controller.yaw = local_target.y
+            agent.controller.roll = 0
+            agent.controller.jump = True
+            agent.last_flip_time = agent.time
+            self.dodging = True
+            print(
+                f"[FAST AERIAL POWER SHOT DODGE] T={T:.3f} release_frames={self.jump_release_frames} target_gap={self.target.dist(agent.me.location):.0f}",
+                flush=True
+            )
+
+
 class half_flip:
     """
     Performs a proper backwards dodge followed by a dodge cancel.
