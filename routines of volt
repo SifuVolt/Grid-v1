@@ -3721,6 +3721,7 @@ class jump_shot:
         self.wall_shot_active = False
         self.wall_shot_normal = None
         self.contact_point = None
+        self.fast_aerial_power_shot = False
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -3775,6 +3776,18 @@ class jump_shot:
         T = self.intercept_time - agent.time
         # Capping T above 0 to prevent division problems
         time_remaining = cap(T, 0.000001, 6)
+        if self.fast_aerial_power_shot and T > 1.25:
+            print(
+                f"[FAST AERIAL POWER SHOT ABORT] ETA={T:.3f} exceeds dodge window=1.25",
+                flush=True
+            )
+            agent.pop()
+            agent.shooting = False
+            agent.shot_weight = -1
+            agent.shot_time = -1
+            if agent.me.airborne:
+                agent.push(recovery())
+            return
 
         if not self.jumping or self._airborne_aim or self.ball_location is None:
             prediction = getattr(agent, "ball_prediction_struct", None)
@@ -4268,6 +4281,14 @@ class jump_shot:
                         agent.controller.throttle = cap(delta_v / (throttle_accel * min_boost_time), -1, 1)
 
             
+            if (
+                self.fast_aerial_power_shot
+                and 0 <= jump_elapsed <= 0.25
+                and agent.me.boost > 0
+                and not self.dodging
+            ):
+                agent.controller.boost = True
+
             # Advance through the jump sequence without getting stuck
             # indefinitely at counter == 3.
 
@@ -4543,6 +4564,16 @@ class jump_shot:
 
         l_vf = vf + agent.me.location
         agent.line(l_vf-Vector(z=100), l_vf+Vector(z=100), agent.renderer.red)
+
+
+class FastAerialPowerShot(jump_shot):
+    """Single-jump, boost-assisted power shot for low airborne balls."""
+
+    MAX_ETA = 1.25
+
+    def __init__(self, intercept_time, targets=None):
+        super().__init__(intercept_time, targets)
+        self.fast_aerial_power_shot = True
 
 class side_shot(jump_shot):
     """Jump shot that deliberately approaches from the side and dodges inward."""
