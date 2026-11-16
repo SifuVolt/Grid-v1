@@ -233,3 +233,12 @@ This file is the project handoff and change checklist. Read it before every code
 - Targeted and untargeted searches test airborne balls above 130 units with a dedicated C-parser pass that enables only single-jump reachability. ETA must be between 0.30 and 1.25 seconds, and the existing boost-budget parser must confirm the contact.
 - The new routine is selected ahead of ordinary shot types when its single-jump candidate is reachable. Otherwise, the existing ground, double-jump and full-aerial choices remain available.
 - Static source checks only; no compile, simulation or in-game test has been performed.
+
+
+## 20. Fast aerial power-shot opponent margin (2026-11-17)
+
+- The standalone `FastAerialPowerShot` is explicitly treated like `jump_shot` by the opponent-ETA filter in `useful_non_aerial_shot`.
+- Both receive the same 0.50-second safety margin after the opponent's estimated arrival time; other non-aerial shot types retain 0.35 seconds.
+- This prevents the fast aerial candidate from being evaluated with the smaller generic margin if its parser shot type is changed or missing while the dedicated fast-aerial flag is present.
+- This changes candidate rejection during shot selection only; it does not change jump-shot execution, the fast aerial routine's own timeout/viability checks, or opponent physics estimates.
+- Static source verification only; no compile or in-game test has been performed.
