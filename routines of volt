@@ -1979,6 +1979,7 @@ class goto:
         self.wall_dash_tick = 0
         self.wall_dash_lost_contact_time = -1
         self.allow_wall_dash = True
+        self.speedflip_used = False
     def on_side_wall(self, agent):
         car = agent.me
 
@@ -2023,6 +2024,42 @@ class goto:
         angle_to_target = abs(Vector(x=1).angle2D(local_target))
         angle_to_target = abs(Vector(x=1).angle2D(local_target))
         agent.dbg_2d(f"Angle to target: {round(angle_to_target, 1)}")
+
+        # Use one speedflip on a long, forward-aligned navigation run.
+        # Do not trigger during manual steering (shadow/defence), braking,
+        # close approaches, or while already moving near supersonic speed.
+        forward_speed = agent.me.local_velocity().x
+        if (
+            not manual
+            and not self.brake
+            and not self.speedflip_used
+            and not agent.me.airborne
+            and local_target.x > 0
+            and angle_to_target < 0.14
+            and distance_remaining > 3000
+            and 600 < forward_speed < 1600
+            and agent.me.boost >= 20
+            and not half_flip_manager.active(agent)
+        ):
+            right_handed = (
+                agent.me.location.x * -side(agent.team) > 0
+            )
+            self.speedflip_used = True
+            print(
+                f"[SPEEDFLIP] navigation "
+                f"distance={distance_remaining:.0f} "
+                f"speed={forward_speed:.0f} "
+                f"angle={angle_to_target:.3f} "
+                f"boost={agent.me.boost:.0f}",
+                flush=True
+            )
+            agent.push(
+                speed_flip(
+                    right_handed=right_handed,
+                    use_boost=True
+                )
+            )
+            return
 
         # Wall dash only when already driving on a side wall.
         
@@ -3699,13 +3736,10 @@ class jump_shot:
     # Hits a target point at a target time towards a target direction
     def __init__(self, intercept_time, targets=None):
         self.ball_location = None
-        self.ball_velocity = None
         self.shot_vector = None
         self.offset_target = None
         self.intercept_time = intercept_time
         self.targets = targets
-        self._aerial_aim = Aerial(intercept_time, targets, fast_aerial=False)
-        self._airborne_aim = False
         self.goal_aim_point = None
         # Flags for what part of the routine we are in
         self.jumping = False
@@ -3725,8 +3759,6 @@ class jump_shot:
     def update(self, shot):
         self.intercept_time = shot.intercept_time
         self.targets = shot.targets
-        self._aerial_aim.intercept_time = shot.intercept_time
-        self._aerial_aim.targets = shot.targets
     def needs_half_flip(self, agent):
         if self.targets is None:
             return False
@@ -3776,7 +3808,7 @@ class jump_shot:
         # Capping T above 0 to prevent division problems
         time_remaining = cap(T, 0.000001, 6)
 
-        if not self.jumping or self._airborne_aim or self.ball_location is None:
+        if not self.jumping or self.ball_location is None:
             prediction = getattr(agent, "ball_prediction_struct", None)
             slices = getattr(prediction, "slices", None) if prediction is not None else None
 
@@ -3789,37 +3821,19 @@ class jump_shot:
                     agent.push(recovery())
                 return
 
-            if self._airborne_aim:
-                slice_n = min(
-                    range(len(slices)),
-                    key=lambda i: abs(
-                        slices[i].game_seconds - self.intercept_time
-                    )
-                )
-            else:
-                slice_n = round(T * 120) - 1
-                slice_n = max(0, min(slice_n, len(slices) - 1))
+            slice_n = round(T * 120) - 1
+            slice_n = max(0, min(slice_n, len(slices) - 1))
 
             agent.dbg_2d(f"Shot slice #: {slice_n}")
 
             ball = slices[slice_n].physics.location
-            velocity = slices[slice_n].physics.velocity
             self.ball_location = Vector(ball.x, ball.y, ball.z)
-            self.ball_velocity = Vector(
-                velocity.x, velocity.y, velocity.z
+
+            self.needed_jump_time = virxrlcu.get_jump_time(
+                ball.z - agent.me.location.z,
+                agent.me.velocity.z,
+                agent.gravity.z
             )
-
-            if not self.jumping:
-                # Keep all grounded-ball shot planning on its existing path.
-                # Only intercepts clearly above the floor use Aerial's 3D aim.
-                self._airborne_aim = self.ball_location.z > 130
-
-            if not self._airborne_aim:
-                self.needed_jump_time = virxrlcu.get_jump_time(
-                    ball.z - agent.me.location.z,
-                    agent.me.velocity.z,
-                    agent.gravity.z
-                )
 
         # Always aim the contact toward the opponent's goal.
         # Never use car-to-ball direction as the shot direction:
@@ -3828,17 +3842,9 @@ class jump_shot:
             self.goal_aim_point = _relative_goal_aim_point(agent, self.targets)
         target_center = self.goal_aim_point
 
-        if self._airborne_aim:
-            self.shot_vector = self._aerial_aim._party_cannon_shot_direction(
-                agent,
-                self.ball_location,
-                self.ball_velocity if self.ball_velocity is not None else Vector(),
-                T
-            )
-        else:
-            self.shot_vector = (
-                target_center - self.ball_location
-            ).flatten().normalize()
+        self.shot_vector = (
+            target_center - self.ball_location
+        ).flatten().normalize()
 
         # Apply Party Cannon's wall-shot contact-angle correction before
         # building the approach target, so all existing contact choices use
@@ -3859,19 +3865,10 @@ class jump_shot:
             )
 
         # Approach from behind the ball relative to the opponent's goal.
-        if self._airborne_aim:
-            self.offset_target = self._aerial_aim._party_cannon_hitbox_target(
-                agent, self.ball_location, self.shot_vector
-            )
-            self.contact_point = (
-                self.ball_location
-                + (self.offset_target - self.ball_location).normalize() * 92.75
-            )
-        else:
-            self.offset_target = (
-                self.ball_location
-                - self.shot_vector * agent.best_shot_value
-            )
+        self.offset_target = (
+            self.ball_location
+            - self.shot_vector * agent.best_shot_value
+        )
         contact_label = getattr(self, "contact_label", None)
         refreshed_contact = _contact_approach_from_label(
             self.ball_location,
@@ -3879,7 +3876,7 @@ class jump_shot:
             contact_label,
             agent.best_shot_value
         )
-        if refreshed_contact is not None and not self._airborne_aim:
+        if refreshed_contact is not None:
             self.offset_target = refreshed_contact
             self.contact_point = (
                 self.ball_location
@@ -3892,7 +3889,7 @@ class jump_shot:
                 flush=True
             )
 
-        if self.side_mode and not (self._airborne_aim and self.jumping):
+        if self.side_mode:
             # Rebuild the lateral setup from the latest predicted intercept
             # every frame. The car approaches from the side opposite the goal.
             left_of_shot = Vector(
@@ -3961,16 +3958,6 @@ class jump_shot:
             flush=True
         )
         agent.sphere(self.ball_location, 92.75)
-
-        if self._airborne_aim and not self.jumping:
-            # Launch height follows Aerial's car-centre hitbox target.
-            target_jump_time = virxrlcu.get_jump_time(
-                self.offset_target.z - agent.me.location.z,
-                agent.me.velocity.z,
-                agent.gravity.z
-            )
-            if target_jump_time is not None and target_jump_time >= 0:
-                self.needed_jump_time = target_jump_time
 
         car_to_ball = self.ball_location - agent.me.location
         final_target = self.offset_target.copy().flatten()
@@ -4173,99 +4160,44 @@ class jump_shot:
             delta_x = self.offset_target - xf
             d_direction = delta_x.normalize()
 
-            if self._airborne_aim:
-                # Match Aerial's target tracking for airborne contacts.
-                orientation_target = (
-                    delta_x if delta_x.magnitude() > 50 else self.shot_vector
+            # ORIENT THE NOSE DURING THE EXISTING JUMP WINDOW.
+            # First steer toward the ball's horizontal position, then use S
+            # (positive pitch) to raise the nose when the ball is airborne
+            # and above the car. This adds no waiting phase and leaves the
+            # existing counter-3 dodge trigger intact.
+            if self.counter < 3 and not self.dodging:
+                local_ball = agent.me.local_location(self.ball_location)
+                defaultPD(agent, local_ball.flatten())
+
+                ball_is_airborne = self.ball_location.z > 130
+                ball_is_above_car = self.ball_location.z > agent.me.location.z + 65
+                hold_s = (
+                    ball_is_airborne
+                    and ball_is_above_car
+                    and not self.quick_shot
                 )
-                orientation_target = agent.me.local(orientation_target)
 
-                if self.counter < 3 and not self.dodging:
-                    if agent.controller.jump:
-                        if T > 0.45 and abs(delta_x.z) > 80:
-                            defaultPD(
-                                agent,
-                                orientation_target,
-                                up=Vector(z=1)
-                            )
-                        else:
-                            defaultPD(
-                                agent,
-                                orientation_target.flatten(),
-                                up=agent.me.up
-                            )
-                    elif virxrlcu.find_landing_plane(
-                        tuple(agent.me.location),
-                        tuple(agent.me.velocity),
-                        agent.gravity.z
-                    ) == 4:
-                        defaultPD(agent, orientation_target, upside_down=True)
-                    else:
-                        defaultPD(
-                            agent,
-                            orientation_target,
-                            upside_down=self.shot_vector.z < 0
-                        )
+                if hold_s:
+                    agent.controller.pitch = 1
 
-                # Aerial's forward projection controller accounts for the
-                # actual 3D displacement while only boosting when the nose is
-                # close to the required flight direction.
-                if T > 0:
-                    forward_need = delta_x.dot(agent.me.forward) / T
-                    forward_angle = math.acos(cap(
-                        agent.me.forward.dot(d_direction.flatten().normalize()),
-                        -1,
-                        1
-                    ))
-                    agent.controller.boost = (
-                        forward_need
-                        >= (agent.boost_accel + throttle_accel)
-                        * max(dt, 13.0 / 120.0)
-                        and forward_angle < 0.4
-                        and agent.me.boost > 0
+                if not self._orientation_logged:
+                    print(
+                        f"[JUMP SHOT ORIENT] T={T:.3f} "
+                        f"ball_z={self.ball_location.z:.0f} "
+                        f"car_z={agent.me.location.z:.0f} "
+                        f"hold_S={hold_s} counter={self.counter}",
+                        flush=True
                     )
-                    agent.controller.throttle = cap(
-                        forward_need
-                        / (throttle_accel * max(dt, 1.0 / 120.0)),
-                        -1,
-                        1
-                    )
-            else:
-                # Keep the established grounded jump-shot orientation and
-                # boost timing unchanged.
-                if self.counter < 3 and not self.dodging:
-                    local_ball = agent.me.local_location(self.ball_location)
-                    defaultPD(agent, local_ball.flatten())
+                    self._orientation_logged = True
 
-                    ball_is_airborne = self.ball_location.z > 130
-                    ball_is_above_car = self.ball_location.z > agent.me.location.z + 65
-                    hold_s = (
-                        ball_is_airborne
-                        and ball_is_above_car
-                        and not self.quick_shot
-                    )
+            if direction == 1 and abs(agent.me.forward.dot(d_direction)) > 0.5 and self.counter < 3:
+                delta_v = delta_x.dot(agent.me.forward) / T
+                if agent.me.boost > 0 and delta_v >= agent.boost_accel * min_boost_time:
+                    agent.controller.boost = True
+                    delta_v -= agent.boost_accel * min_boost_time
 
-                    if hold_s:
-                        agent.controller.pitch = 1
-
-                    if not self._orientation_logged:
-                        print(
-                            f"[JUMP SHOT ORIENT] T={T:.3f} "
-                            f"ball_z={self.ball_location.z:.0f} "
-                            f"car_z={agent.me.location.z:.0f} "
-                            f"hold_S={hold_s} counter={self.counter}",
-                            flush=True
-                        )
-                        self._orientation_logged = True
-
-                if direction == 1 and abs(agent.me.forward.dot(d_direction)) > 0.5 and self.counter < 3:
-                    delta_v = delta_x.dot(agent.me.forward) / T
-                    if agent.me.boost > 0 and delta_v >= agent.boost_accel * min_boost_time:
-                        agent.controller.boost = True
-                        delta_v -= agent.boost_accel * min_boost_time
-
-                    if abs(delta_v) > throttle_accel * min_boost_time:
-                        agent.controller.throttle = cap(delta_v / (throttle_accel * min_boost_time), -1, 1)
+                if abs(delta_v) > throttle_accel * min_boost_time:
+                    agent.controller.throttle = cap(delta_v / (throttle_accel * min_boost_time), -1, 1)
 
             
             # Advance through the jump sequence without getting stuck
@@ -5580,3 +5512,5 @@ class boost_down:
         defaultPD(agent, target)
         if not agent.me.airborne:
             agent.pop()
+        elif abs(Vector(x=1).angle(target)) < 0.5:
+            agent.controller.boost = True
