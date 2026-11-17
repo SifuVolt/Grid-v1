@@ -291,3 +291,12 @@ This file is the project handoff and change checklist. Read it before every code
   - `1af5bf8`: reapply jump-shot contact orientation/directional flip and aerial far-side aim to the reverted routines.
   - `d308b34`: prefer jump shot over double jump when boost is available in both shot finders.
 - Static fetch verification only. No Python compile, simulation, or in-game test has been performed. Pull the branch locally before testing.
+
+
+## Correction — aerial goal-side aim follows ball side (2026-11-17)
+
+- Corrected the normal Aerial side-bias direction: when the predicted ball is to the right of the opponent goal centre, aim toward the right side of the goal; when it is left, aim left.
+- The previous implementation incorrectly aimed across goal to the opposite/far side. The user wants the aerial to preserve the ball's lateral side because the aerial contact is accurate enough to target that side directly.
+- Balls within 180 units of the goal centre's lateral line still aim directly at goal centre. The existing capped in-post offset and aerial-only scope remain unchanged.
+- Commit: `fe5e80c`.
+- Static fetch verification only; no compile or in-game test has been performed.
