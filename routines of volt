@@ -1109,9 +1109,36 @@ class Aerial:
         blend = (speed - max_speed) / 2300
         return 0.55 + (0.3 - 0.55) * blend
 
-    def _party_cannon_shot_direction(self, agent, ball, ball_velocity, time_remaining):
+    def _party_cannon_shot_direction(self, agent, ball, ball_velocity, time_remaining, side_bias=False):
         # Port of Party Cannon's SetTargetLocation shot prediction.
         shot_target = _relative_goal_aim_point(agent, self.targets)
+
+        # Normal aerials aim for the far side of goal: ball right -> aim
+        # left, ball left -> aim right. A centred ball keeps the direct aim.
+        if side_bias:
+            posts = (
+                self.targets
+                if self.targets is not None and len(self.targets) >= 2
+                else agent.foe_goal_shot
+            )
+            post_a = (
+                posts[0] if isinstance(posts[0], Vector)
+                else Vector(*posts[0])
+            )
+            post_b = (
+                posts[1] if isinstance(posts[1], Vector)
+                else Vector(*posts[1])
+            )
+            goal_center_x = (post_a.x + post_b.x) * 0.5
+            half_goal_width = abs(post_a.x - post_b.x) * 0.5
+            ball_lateral = ball.x - goal_center_x
+
+            if abs(ball_lateral) > 180:
+                side_offset = cap(half_goal_width - 150, 0, 450)
+                shot_target.x = (
+                    goal_center_x - sign(ball_lateral) * side_offset
+                )
+
         safe_time = max(time_remaining, dt)
         car_final_velocity = (
             (ball - agent.me.location) / safe_time
@@ -1409,7 +1436,7 @@ class Aerial:
             aerial_physics.velocity.z
         )
         self.shot_vector = self._party_cannon_shot_direction(
-            agent, self.ball, aerial_ball_velocity, T
+            agent, self.ball, aerial_ball_velocity, T, side_bias=True
         )
 
         
@@ -4160,35 +4187,14 @@ class jump_shot:
             delta_x = self.offset_target - xf
             d_direction = delta_x.normalize()
 
-            # ORIENT THE NOSE DURING THE EXISTING JUMP WINDOW.
-            # First steer toward the ball's horizontal position, then use S
-            # (positive pitch) to raise the nose when the ball is airborne
-            # and above the car. This adds no waiting phase and leaves the
-            # existing counter-3 dodge trigger intact.
+            # Match double_jump's post-first-jump orientation:
+            # track the planned contact/approach point in full 3D rather
+            # than flattening the ball-centre direction and forcing S.
             if self.counter < 3 and not self.dodging:
-                local_ball = agent.me.local_location(self.ball_location)
-                defaultPD(agent, local_ball.flatten())
-
-                ball_is_airborne = self.ball_location.z > 130
-                ball_is_above_car = self.ball_location.z > agent.me.location.z + 65
-                hold_s = (
-                    ball_is_airborne
-                    and ball_is_above_car
-                    and not self.quick_shot
+                local_contact = agent.me.local_location(
+                    self.offset_target
                 )
-
-                if hold_s:
-                    agent.controller.pitch = 1
-
-                if not self._orientation_logged:
-                    print(
-                        f"[JUMP SHOT ORIENT] T={T:.3f} "
-                        f"ball_z={self.ball_location.z:.0f} "
-                        f"car_z={agent.me.location.z:.0f} "
-                        f"hold_S={hold_s} counter={self.counter}",
-                        flush=True
-                    )
-                    self._orientation_logged = True
+                defaultPD(agent, local_contact)
 
             if direction == 1 and abs(agent.me.forward.dot(d_direction)) > 0.5 and self.counter < 3:
                 delta_v = delta_x.dot(agent.me.forward) / T
@@ -4335,12 +4341,15 @@ class jump_shot:
                     or defensive_backflip
                     or pure_backflip
                 ):
-                    # A normal dodge aims from the nearest front hitbox
-                    # corner. If the predicted contact is genuinely behind
-                    # the car, use a straight backflip: no yaw and no diagonal
-                    # pitch/yaw combination.
-                    if nose_to_contact.magnitude() > 1:
-                        dodge_direction = nose_to_contact.normalize()
+                    # Aim the dodge along the outgoing shot direction.
+                    # This produces W for a straight shot or W+A / W+D
+                    # when a diagonal correction is needed. Rear-contact
+                    # emergency cases below retain their explicit backflip.
+                    local_shot_direction = agent.me.local(
+                        self.shot_vector
+                    ).flatten().normalize()
+                    if local_shot_direction.x > 0.05:
+                        dodge_direction = local_shot_direction
                     else:
                         dodge_direction = Vector(x=1)
 
