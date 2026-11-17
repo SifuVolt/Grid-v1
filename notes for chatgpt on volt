@@ -311,3 +311,18 @@ This file is the project handoff and change checklist. Read it before every code
 - The existing contact-distance check, front-of-target gate, side-mode exception, jump timing, quick-shot behavior, S-tilt/orientation, jump hold/release, counters, and recovery/abort paths are unchanged.
 - Commit: `b93e4ab`.
 - Static source verification only; no Python compile, simulation, or in-game test has been performed.
+
+
+
+## Jump-shot relative aim and hitbox geometry upgrade (2026-11-17)
+
+- Updated the live Party Cannon-derived `jump_shot` to reuse the existing Aerial post-hit shot-direction prediction. It now uses the predicted ball velocity at the selected intercept, relative goal aim point, Party Cannon's shot-power modifier, predicted outgoing ball velocity, and gravity-adjusted ball travel toward goal.
+- Jump-shot contact positioning now reuses Aerial's actual hitbox-centre target calculation, including the car hitbox length and any exposed local hitbox offset.
+- Preserved the jump shot's existing `agent.best_shot_value` approach standoff. If the actual hitbox standoff is shorter, the target is extended so the new geometry does not intentionally bring the car closer to the ball or reduce its existing approach/power distance.
+- Existing centre/left/right/high/low contact labels are retained and receive the same hitbox-centre correction. The side-shot lateral setup also retains its chosen side and lateral distance while applying the hitbox correction.
+- Existing `WallShot.adjust_jump`, wall gravity compensation, jump-time calculation, drive/boost management, jump hold/release, final dodge window, and recovery logic were left unchanged.
+- This is a shared-calculation port, not a line-for-line replacement of the jump-shot routine with Aerial. It changes the predicted outgoing direction and car-reference contact point; it does not add Aerial's continuous airborne boost controller to jump shots.
+- Commits:
+  - `0b6d000`: add predicted shot direction and hitbox-aware contact geometry.
+  - `aff3817`: make the ball-velocity fallback explicit.
+- Static fetch checks confirm the Aerial calculations are reused, the existing standoff is preserved, contact labels/side mode remain, and the jump/wall/dodge paths remain present. No Python compile, simulation, or in-game test has been performed.
