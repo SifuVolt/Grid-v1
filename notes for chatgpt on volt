@@ -386,3 +386,8 @@ This file is the project handoff and change checklist. Read it before every code
   - `8a1a5e6`: prevent the predicted second-jump impulse from being added twice.
   - `ff39a82`: include the second-jump request timestamp in the duplicate-impulse guard.
 - Static source verification only. No Python compile, simulation, or in-game test has been performed. Pull the branch locally before testing.
+
+- The neutral directional-input frame during the fast second-jump pulse also zeros steer, pitch, yaw and roll, but does not suppress boost: the Party Cannon forward-projection gate may still boost on that pulse if the car is aligned and forward acceleration is needed.
+- Follow-up commits:
+  - `ff39a82`: prevent duplicate second-jump impulse prediction.
+  - `68e4324`: allow aligned boost during the second-jump pulse and neutralize all directional controls.
