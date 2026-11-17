@@ -3849,7 +3849,12 @@ class jump_shot:
         )
         target_center = self.goal_aim_point
         if self.ball_velocity is None:
-            self.ball_velocity = agent.ball.velocity.copy()
+            current_ball_velocity = agent.ball.velocity
+            self.ball_velocity = Vector(
+                current_ball_velocity.x,
+                current_ball_velocity.y,
+                current_ball_velocity.z
+            )
 
         self.shot_vector = Aerial._party_cannon_shot_direction(
             self, agent, self.ball_location,
