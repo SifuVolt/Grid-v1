@@ -770,7 +770,7 @@ class double_jump:
 
         direction = (ball_location - agent.me.location).normalize()
         if self.goal_aim_point is None:
-            self.goal_aim_point = self._goal_aim_for_ball(agent, ball_location)
+            self.goal_aim_point = _relative_goal_aim_point(agent, self.targets)
         shot_vector = (
             self.goal_aim_point - ball_location
         ).flatten().normalize()
@@ -3860,29 +3860,6 @@ class jump_shot:
         self._contact_aim.intercept_time = shot.intercept_time
         self._contact_aim.targets = shot.targets
 
-    def _goal_aim_for_ball(self, agent, ball_location):
-        # Keep side-directed shots safely inside the post rather than
-        # targeting the post/corner itself. Central approaches stay central.
-        goal_aim = _relative_goal_aim_point(agent, self.targets)
-        if self.targets is not None and len(self.targets) >= 2:
-            post_a, post_b = self.targets[0], self.targets[1]
-        else:
-            post_a, post_b = agent.foe_goal_shot
-
-        post_a_x = float(post_a.x if hasattr(post_a, "x") else post_a[0])
-        post_b_x = float(post_b.x if hasattr(post_b, "x") else post_b[0])
-        goal_center_x = (post_a_x + post_b_x) * 0.5
-        half_width = abs(post_a_x - post_b_x) * 0.5
-        lateral_offset = ball_location.x - goal_center_x
-
-        # Ignore small lateral differences so central shots do not get
-        # pulled toward a post. Otherwise leave 180 units of clearance.
-        if abs(lateral_offset) > 180:
-            side_sign = 1 if lateral_offset > 0 else -1
-            goal_aim.x = goal_center_x + side_sign * max(0.0, half_width - 180)
-
-        return goal_aim
-
     def needs_half_flip(self, agent):
         if self.targets is None:
             return False
@@ -3970,9 +3947,7 @@ class jump_shot:
         # Never use car-to-ball direction as the shot direction:
         # that can put the approach point on the wrong side of the ball.
         if self.goal_aim_point is None:
-            self.goal_aim_point = self._goal_aim_for_ball(
-                agent, self.ball_location
-            )
+            self.goal_aim_point = _relative_goal_aim_point(agent, self.targets)
         target_center = self.goal_aim_point
 
         goal_shot_vector = (
