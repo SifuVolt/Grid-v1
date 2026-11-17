@@ -404,3 +404,6 @@ This file is the project handoff and change checklist. Read it before every code
   - `31868a5`: normal-aerial-first scan in fast_intercept_finder.
   - `2e7394f`, `a15dbae`, `f0dfadb`: allow aerial-only normal candidates and ensure an existing normal aerial wins over fast aerial in both shot finders.
 - Static fetch verification only. No Python compile, simulation, or in-game test has been performed.
+
+- Follow-up: applied the same strict height gate to the kickoff and general fallback paths in `fast_intercept_finder`, so no later fallback can return a fast aerial for a ball at or below 350 units.
+- Follow-up commit: `73bcb1c`.
