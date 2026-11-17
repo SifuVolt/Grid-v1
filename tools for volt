@@ -1771,6 +1771,61 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
             best_intercept_time = intercept_time
             best_ball_z = ball_location[2]
             best_ball_location = Vector(*ball_location)
+    # Apply the same Noob Black earliest-reachable single-jump scan when
+    # the caller has not supplied a specific goal target.
+    best_noob_candidate = None
+    if can_jump:
+        noob_candidate = _noob_black_single_jump_candidate(
+            agent, None, min(cap_, 5.0)
+        )
+        if noob_candidate is not None and (
+            best_shot is None
+            or int(best_shot.get("shot_type", 0)) == 1
+        ):
+            noob_time_remaining = (
+                noob_candidate["time"] - agent.time - (1 / 120)
+            )
+            noob_slice = min(
+                slices,
+                key=lambda item: abs(
+                    item.game_seconds - noob_candidate["time"]
+                )
+            )
+            noob_ball_tuple = (
+                noob_candidate["ball_location"].x,
+                noob_candidate["ball_location"].y,
+                noob_candidate["ball_location"].z
+            )
+            noob_shot = {
+                "found": 1,
+                "shot_type": 1,
+                "fast": False
+            }
+            if (
+                noob_time_remaining > 0
+                and useful_non_aerial_shot(
+                    agent,
+                    noob_ball_tuple,
+                    noob_slice.physics.velocity,
+                    noob_shot,
+                    noob_candidate["time"]
+                )
+            ):
+                best_shot = noob_shot
+                best_intercept_time = noob_candidate["time"]
+                best_ball_z = noob_candidate["ball_location"].z
+                best_ball_location = noob_candidate["ball_location"]
+                best_score = noob_time_remaining + 0.12
+                best_noob_candidate = noob_candidate
+                print(
+                    f"[NOOB BLACK JUMP FIND] untargeted earliest reachable | "
+                    f"T={noob_time_remaining:.3f} "
+                    f"jump={noob_candidate['jump_time']:.3f} "
+                    f"distance={noob_candidate['distance']:.0f} "
+                    f"reachable={noob_candidate['reachable']:.0f}",
+                    flush=True
+                )
+
     if grid_candidate is not None:
         grid_time = grid_candidate["time"]
         grid_time_remaining = grid_time - agent.time - (1 / 120)
@@ -1967,9 +2022,12 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
         double_jump
     ]
 
-    return shot_switch[best_shot['shot_type']](
+    routine = shot_switch[best_shot['shot_type']](
         best_intercept_time
     )
+    if best_noob_candidate is not None and routine.__class__ is jump_shot:
+        routine.wait_for_fall = best_noob_candidate["wait_for_fall"]
+    return routine
 
 
 def find_pass_shot(agent, cap_=4):
