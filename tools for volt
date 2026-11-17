@@ -308,6 +308,16 @@ def useful_non_aerial_shot(agent, ball_location, ball_velocity, shot, intercept_
     if agent.in_post_kickoff_contest_window():
         return True
 
+    # The elected attacker owns the first challenge in team games. Do not
+    # discard their reachable shot because an opponent is closer; 1v1 keeps
+    # the opponent ETA filter since there is no team role to assign.
+    if (
+        agent.friends
+        and getattr(agent, "get_grid_active_challenger", lambda: None)()
+        == agent.me.index
+    ):
+        return True
+
     closest_foe = min(
         agent.foes,
         key=lambda foe: foe.location.flat_dist(ball_pos)
@@ -397,6 +407,7 @@ def useful_non_aerial_shot(agent, ball_location, ball_velocity, shot, intercept_
     # other non-aerial shot type.
     enemy_safety_margin = 0.5 if shot.get('shot_type') == 1 else 0.35
     if enemy_time + enemy_safety_margin < time_remaining:
+        agent._opponent_rejected_shot = True
         return False
 
     return True
