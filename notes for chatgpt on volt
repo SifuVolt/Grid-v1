@@ -391,3 +391,16 @@ This file is the project handoff and change checklist. Read it before every code
 - Follow-up commits:
   - `ff39a82`: prevent duplicate second-jump impulse prediction.
   - `68e4324`: allow aligned boost during the second-jump pulse and neutralize all directional controls.
+
+
+## Fast-aerial height and normal-aerial priority (2026-11-17)
+
+- Fast aerial candidates are eligible only when the predicted ball location at the candidate intercept is strictly above 350 units.
+- In both `find_shot` and `find_any_shot`, the aerial-only parser result is also allowed to supply a normal (non-fast) aerial touch. A fast aerial cannot replace a normal aerial already found for the same predicted slice.
+- In `fast_intercept_finder`, the scan checks the full requested window for both aerial types. If any reachable normal aerial is found, the earliest normal aerial is returned before considering a fast aerial. Only when no normal aerial is available does it return the earliest reachable fast aerial above 350 units.
+- The normal Aerial controller and its existing contact, orientation, boost, and jump logic are unchanged. This is selection-only.
+- Commits:
+  - `4a043e6`: initial height/normal-aerial gate in shot selection.
+  - `31868a5`: normal-aerial-first scan in fast_intercept_finder.
+  - `2e7394f`, `a15dbae`, `f0dfadb`: allow aerial-only normal candidates and ensure an existing normal aerial wins over fast aerial in both shot finders.
+- Static fetch verification only. No Python compile, simulation, or in-game test has been performed.
