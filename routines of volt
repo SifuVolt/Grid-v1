@@ -2909,9 +2909,14 @@ class fast_intercept_finder:
                     me
                 )
 
-                if aerial_result.get("found") == 1 and int(
-                    aerial_result["shot_type"]
-                ) == 3:
+                if (
+                    aerial_result.get("found") == 1
+                    and int(aerial_result.get("shot_type", -1)) == 3
+                    and (
+                        not bool(aerial_result.get("fast", False))
+                        or location.z > 350
+                    )
+                ):
                     print(
                         f"[KICKOFF AERIAL BIAS] reachable aerial "
                         f"at {intercept_time - agent.time:.2f}s",
@@ -2967,9 +2972,12 @@ class fast_intercept_finder:
             shot_type = int(result["shot_type"])
 
             if shot_type == 3:
+                result_is_fast = bool(result.get("fast", True))
+                if result_is_fast and location.z <= 350:
+                    continue
                 return Aerial(
                     intercept_time,
-                    fast_aerial=bool(result.get("fast", True)),
+                    fast_aerial=result_is_fast,
                 )
 
             constructors = {
