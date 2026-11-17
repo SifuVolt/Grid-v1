@@ -1564,20 +1564,10 @@ class Aerial:
                     # controller will send it, and never add it again after
                     # the live car packet already contains that impulse.
                     if jump_elapsed <= jump_max_duration:
-                        # Quantize the remaining hold to the next controller
-                        # tick, then include three full release frames.
-                        frames_to_release = (
-                            math.floor(
-                                max(0.0, jump_max_duration - jump_elapsed) / dt
-                            ) + 1
-                        )
-                        second_jump_delay = (
-                            frames_to_release + 3
-                        ) * dt
+                        second_jump_delay = tau + 3 * dt
                     else:
-                        # counter is the number of completed release frames.
                         second_jump_delay = (
-                            max(0, 3 - self.counter) * dt
+                            max(0, 2 - self.counter) * dt
                         )
 
                     if T >= second_jump_delay:
@@ -1586,32 +1576,18 @@ class Aerial:
                             T - second_jump_delay
                         )
 
-                if self.double_jump_complete or bool(
-                    getattr(agent.me, "doublejumped", False)
-                ):
-                    # A contact dodge or another jump may have consumed the
-                    # second jump already. Never send a stale extra pulse.
-                    agent.controller.jump = False
-                    self.counter = 4
-                    self.dodging = False
-                    self.jumping = False
-                    self.double_jump_complete = True
-                elif jump_elapsed <= jump_max_duration:
+                if jump_elapsed <= jump_max_duration:
                     agent.controller.jump = True
-                elif self.counter < 3:
-                    # Explicitly release for three full controller frames.
-                    agent.controller.jump = False
+                elif self.counter < 4:
                     self.counter += 1
-                elif self.counter == 3:
-                    # One-frame neutral second-jump pulse after the release.
+
+                if self.counter == 3:
+                    if self.double_jump_time is None:
+                        self.double_jump_time = agent.time
                     agent.controller.jump = True
-                    self.double_jump_time = agent.time
-                    self.counter = 4
                     self.dodging = True
-                else:
-                    agent.controller.jump = False
-                    self.dodging = False
-                    self.jumping = False
+                elif self.counter == 4:
+                    self.dodging = self.jumping = False
                     self.double_jump_complete = True
             elif jump_elapsed <= jump_max_duration:
                 agent.controller.jump = True
