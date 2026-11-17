@@ -348,3 +348,18 @@ This file is the project handoff and change checklist. Read it before every code
   - `c39a815`: add predictive surface-directed recovery boost.
   - `8ae5697`: keep the nose aimed at the correction target while the predictive phase is active, then return to landing alignment.
 - Static source verification only. No Python compile, simulation, or in-game test has been performed. Pull the branch locally before testing.
+
+
+
+## Untargeted fast-aerial touch preference (2026-11-17)
+
+- The shot finders now run a separate aerial-only reachability check using `virxrlcu.parse_slice_for_shot(False, False, False, True, ...)`. It is independent of the goal-targeted parser, so a reachable fast aerial is not discarded just because that contact cannot produce a direct shot on the goal target.
+- In `find_shot` and `find_any_shot`, a confirmed `shot_type == 3` candidate is accepted only when the parser explicitly reports `fast == True`. It is passed to the existing `Aerial` routine with `targets=None`, preserving the Aerial controller and its normal default goal-centre aim rather than inventing a separate touch controller.
+- These untargeted fast-aerial candidates receive a 0.45 score preference in normal attacking selection so they can beat a weaker ground/jump option. In urgent save mode, selection remains time-first and the fast aerial gets only a tiny tie preference.
+- `fast_intercept_finder` now searches for the earliest reachable fast aerial before its ordinary earliest-touch scan, not only during the kickoff contest window. The existing kickoff preference for a regular aerial remains as a fallback when no fast aerial is available.
+- All new candidates still pass through Volt's boost-budget reachability check in the normal shot finders. The fast-intercept finder retains its existing parser reachability behaviour. No new teammate-specific pass target was added: an untargeted Aerial uses the existing default goal-centre aim and can still create a useful pop/clear touch.
+- Commits:
+  - `5dfcf7e`: prioritize fast aerial touches in the fast-intercept finder.
+  - `ff70640`: add untargeted fast-aerial candidates to goal-directed shot selection.
+  - `010359d`: add the same candidate preference to general/untargeted shot selection.
+- Static fetch verification only. No Python compile, simulation, or in-game test has been performed. Pull the branch locally before testing.
