@@ -1635,7 +1635,9 @@ class Aerial:
 
         if self.dodging:
             # A neutral second-jump pulse avoids turning the fast aerial into
-            # an unintended directional dodge. Boost remains enabled below.
+            # an unintended directional dodge, matching Party Cannon's
+            # neutral directional controls during its double-jump pulse.
+            agent.controller.steer = 0
             agent.controller.pitch = 0
             agent.controller.yaw = 0
             agent.controller.roll = 0
@@ -1684,7 +1686,6 @@ class Aerial:
                 * max(dt, 13.0 / 120.0)
                 and party_cannon_forward_angle < 0.4
                 and agent.me.boost > 0
-                and not self.dodging
             )
             agent.controller.throttle = cap(
                 party_cannon_forward_need
