@@ -335,3 +335,16 @@ This file is the project handoff and change checklist. Read it before every code
 - No change to the formula, shot power, contact geometry, jump timing, or dodge logic.
 - Commit: `8a18604`.
 - Static source verification only; no Python compile or in-game test has been performed.
+
+
+## Party Cannon predictive recovery boost (2026-11-17)
+
+- Updated the existing `recovery` class rather than adding a separate routine. After a flip, the normal recovery now briefly uses Party Cannon's `AerialShot.Run` predictive correction pattern to rotate the nose toward the required surface-directed correction and boost when the correction is forward-aligned.
+- The recovery predicts the car's unboosted future position from current location, velocity and gravity, then computes the remaining offset to a fixed point 180 units toward the selected landing surface. It uses Party Cannon's required-acceleration calculation, forward projection, 0.4-radian boost alignment gate, boost-plus-air-throttle threshold, and air-throttle scaling.
+- This applies to floor, side-wall and back-wall recoveries. Ceiling recovery deliberately keeps the original orientation/throttle behaviour and does not use the new boost phase.
+- The predictive nose-aim phase is temporary: when the correction is completed, its one-second horizon expires, or the correction is no longer feasible, the routine returns to the existing landing-orientation controller. The existing `ball_recovery` target semantics and the recovery call sites are unchanged.
+- This is an adaptation of Party Cannon's predictive controller to Volt's recovery target, not a literal copy of the entire AerialShot action (which has a known ball contact target and intercept time).
+- Commits:
+  - `c39a815`: add predictive surface-directed recovery boost.
+  - `8ae5697`: keep the nose aimed at the correction target while the predictive phase is active, then return to landing alignment.
+- Static source verification only. No Python compile, simulation, or in-game test has been performed. Pull the branch locally before testing.
