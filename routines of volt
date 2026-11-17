@@ -2786,10 +2786,11 @@ class fast_intercept_finder:
             slices[-1].game_seconds
         )
 
-        # Prefer a reachable fast aerial touch before settling for a
-        # ground/jump touch. This search is deliberately untargeted: the
-        # aerial is still useful as a pop, clear, or midfield touch even when
-        # the ball cannot be hit directly onto the goal target.
+        # Search the whole window for both aerial types. A reachable
+        # normal aerial always takes priority; fast aerials are only a
+        # fallback for predicted ball contacts above 350 units.
+        fast_aerial_candidate = None
+        normal_aerial_candidate = None
         fast_aerial_available = (
             agent.boost_amount == "unlimited" or agent.me.boost > 0
         )
@@ -2832,19 +2833,38 @@ class fast_intercept_finder:
                 )
 
                 if (
-                    aerial_result.get("found") == 1
-                    and int(aerial_result.get("shot_type", -1)) == 3
-                    and bool(aerial_result.get("fast", False))
+                    aerial_result.get("found") != 1
+                    or int(aerial_result.get("shot_type", -1)) != 3
                 ):
-                    print(
-                        f"[FAST AERIAL TOUCH BIAS] reachable untargeted "
-                        f"touch at {intercept_time - agent.time:.2f}s",
-                        flush=True
-                    )
-                    return Aerial(
-                        intercept_time,
-                        fast_aerial=True,
-                    )
+                    continue
+
+                if bool(aerial_result.get("fast", False)):
+                    if location.z > 350 and fast_aerial_candidate is None:
+                        fast_aerial_candidate = intercept_time
+                elif normal_aerial_candidate is None:
+                    normal_aerial_candidate = intercept_time
+
+            if normal_aerial_candidate is not None:
+                print(
+                    f"[NORMAL AERIAL TOUCH BIAS] reachable touch at "
+                    f"{normal_aerial_candidate - agent.time:.2f}s",
+                    flush=True
+                )
+                return Aerial(
+                    normal_aerial_candidate,
+                    fast_aerial=False,
+                )
+
+            if fast_aerial_candidate is not None:
+                print(
+                    f"[FAST AERIAL TOUCH BIAS] reachable high-ball touch "
+                    f"at {fast_aerial_candidate - agent.time:.2f}s",
+                    flush=True
+                )
+                return Aerial(
+                    fast_aerial_candidate,
+                    fast_aerial=True,
+                )
 
         # Preserve the existing kickoff-only preference for a regular
         # reachable aerial when no fast aerial candidate was found.
