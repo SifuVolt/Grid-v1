@@ -5271,37 +5271,46 @@ class recovery:
             Vector(z=1)
         ]
 
-        defaultPD(agent, agent.me.local(t_switch[landing_plane]), up=agent.me.local(r_switch[landing_plane]))
+        # Never let boost carry over from another routine or frame.
+        agent.controller.boost = False
         agent.controller.throttle = 1
 
-        if self.boost_to_surface and agent.me.boost > 0:
-            # find_landing_plane selects the first surface on the car's
-            # current recovery path. Boost along that same controlled nose
-            # direction, but release it close to contact or at high speed.
-            surface_directions = (
-                Vector(x=1), Vector(x=-1),
-                Vector(y=1), Vector(y=-1),
-                Vector(z=1), Vector(z=-1)
-            )
-            surface_distances = (
-                max(0.0, 4096.0 - agent.me.location.x - agent.me.hitbox.width * 0.5),
-                max(0.0, agent.me.location.x + 4096.0 - agent.me.hitbox.width * 0.5),
-                max(0.0, 5120.0 - agent.me.location.y - agent.me.hitbox.length * 0.5),
-                max(0.0, agent.me.location.y + 5120.0 - agent.me.hitbox.length * 0.5),
-                max(0.0, 2044.0 - agent.me.location.z - agent.me.hitbox.height * 0.5),
-                max(0.0, agent.me.location.z - agent.me.hitbox.height * 0.5)
-            )
-            surface_direction = surface_directions[landing_plane]
-            surface_distance = surface_distances[landing_plane]
-            nose_target = t_switch[landing_plane].normalize()
-            nose_alignment = agent.me.forward.dot(nose_target)
-            speed_toward_surface = agent.me.velocity.dot(surface_direction)
+        floor_clearance = max(
+            0.0,
+            agent.me.location.z - agent.me.hitbox.height * 0.5
+        )
 
-            agent.controller.boost = (
-                surface_distance > 180
-                and nose_alignment > 0.45
-                and speed_toward_surface < 1800
-                and agent.me.velocity.magnitude() < 2300
+        # Only use the downward boost phase when the predicted landing
+        # surface is the floor. Point the nose down to accelerate toward it,
+        # then switch back to the normal wheels-down recovery orientation
+        # early enough to rotate before contact.
+        boosting_down = (
+            self.boost_to_surface
+            and landing_plane == 5
+            and agent.me.boost > 0
+            and floor_clearance > 260
+            and agent.me.velocity.magnitude() < 2300
+            and agent.me.velocity.dot(Vector(z=-1)) < 1800
+        )
+
+        if boosting_down:
+            down = Vector(z=-1)
+            # A horizontal up reference keeps the car's roll defined while
+            # its nose points vertically down.
+            down_up = Vector(x=1)
+            defaultPD(
+                agent,
+                agent.me.local(down),
+                up=agent.me.local(down_up)
+            )
+            agent.controller.boost = agent.me.forward.dot(down) > 0.90
+        else:
+            # This is the normal upright landing controller. It also takes
+            # over for the final 260 units so the wheels are facing the floor.
+            defaultPD(
+                agent,
+                agent.me.local(t_switch[landing_plane]),
+                up=agent.me.local(r_switch[landing_plane])
             )
 
         if not agent.me.airborne:
