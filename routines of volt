@@ -1404,6 +1404,20 @@ class Aerial:
         aerial_physics = slices[slice_n].physics
         ball = aerial_physics.location
         self.ball = Vector(ball.x, ball.y, ball.z)
+
+        # Final safety gate for direct callers and future selection paths.
+        # Fast aerials require both live and predicted ball height above 350.
+        if self.fast_aerial and (
+            self.ball.z <= 350 or agent.ball.location.z <= 350
+        ):
+            self.fast_aerial = False
+            print(
+                f"[AERIAL] Fast mode disabled: ball height "
+                f"live={agent.ball.location.z:.0f} "
+                f"contact={self.ball.z:.0f} (requires >350)",
+                flush=True
+            )
+
         self.ceiling = (
             agent.me.location.z > 2044 - agent.me.hitbox.height * 2
             and not agent.me.jumped
@@ -2839,7 +2853,11 @@ class fast_intercept_finder:
                     continue
 
                 if bool(aerial_result.get("fast", False)):
-                    if location.z > 350 and fast_aerial_candidate is None:
+                    if (
+                        location.z > 350
+                        and agent.ball.location.z > 350
+                        and fast_aerial_candidate is None
+                    ):
                         fast_aerial_candidate = intercept_time
                 elif normal_aerial_candidate is None:
                     normal_aerial_candidate = intercept_time
@@ -2914,7 +2932,10 @@ class fast_intercept_finder:
                     and int(aerial_result.get("shot_type", -1)) == 3
                     and (
                         not bool(aerial_result.get("fast", False))
-                        or location.z > 350
+                        or (
+                            location.z > 350
+                            and agent.ball.location.z > 350
+                        )
                     )
                 ):
                     print(
@@ -2973,7 +2994,10 @@ class fast_intercept_finder:
 
             if shot_type == 3:
                 result_is_fast = bool(result.get("fast", True))
-                if result_is_fast and location.z <= 350:
+                if result_is_fast and (
+                    location.z <= 350
+                    or agent.ball.location.z <= 350
+                ):
                     continue
                 return Aerial(
                     intercept_time,
