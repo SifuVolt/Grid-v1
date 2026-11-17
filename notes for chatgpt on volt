@@ -449,3 +449,15 @@ This file is the project handoff and change checklist. Read it before every code
 - Boost is cut before the final landing phase. At 260 units of estimated hitbox clearance, the normal recovery PD controller takes over with world-up as the car's up reference so it can rotate onto its wheels before floor contact.
 - Side walls, back walls, and ceiling never receive recovery boost. Other landing planes keep the original recovery orientation.
 - No compile, simulation, or in-game test has been run.
+
+
+## Fast-aerial second-jump release and prediction alignment (2026-11-18)
+
+- Fixed the fast Aerial second-jump controller so the first jump is explicitly released for three full controller frames before the one-frame neutral second-jump pulse. The previous release branch only advanced a counter and did not explicitly set `controller.jump = False`, allowing a stale held jump input to carry through.
+- Updated the predicted second-jump impulse timing to match the actual controller sequence. The remaining first-jump hold is quantized to the next 120 Hz controller tick, then three full release frames are included. Once the release phase has started, the remaining pulse delay is derived from the number of completed release frames.
+- The controller now stops the pending second-jump sequence if the car packet reports `doublejumped`, preventing a stale second pulse after another dodge has already consumed the jump.
+- The first-jump hold duration, jump impulse values, full 3D target tracking, Party Cannon boost gate, hitbox standoff, and normal-aerial path were not otherwise changed.
+- Commits:
+  - `207c7e6`: explicitly release the first jump and align the fast second-jump pulse with the controller counter.
+  - `2b00845`: quantize the remaining hold time to the 120 Hz controller tick in the predicted second-jump timing.
+- Static GitHub source verification only. No Python compile, simulation, or in-game test has been performed. Pull the branch locally before testing.
