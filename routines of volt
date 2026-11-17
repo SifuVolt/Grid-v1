@@ -4563,6 +4563,7 @@ class jump_shot:
         self.finished = False
         self.last_debug_time = -1.0
         self.contact_label = None
+        self.wait_for_fall = -1.0
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -4686,26 +4687,35 @@ class jump_shot:
             0,
             min(600, round(min(max(T - jump_time, 0.0), 5.0) * 120))
         )
-        should_boost = (
+        boostless_reach = (
             travel_d0[ticks_driving]
             + travel_v0[ticks_driving]
             * (ticks_charging - ticks_driving) / 120
-            < distance
+        )
+        should_boost = (
+            boostless_reach < distance
+            or self.wait_for_fall < 0
         )
 
         local_approach = agent.me.local_location(approach.flatten())
         steer_angle = math.atan2(local_approach.y, local_approach.x)
         agent.controller.steer = cap(steer_angle * 5.0, -1.0, 1.0)
-        agent.controller.throttle = 1
-
         car_speed = agent.me.velocity.flatten().magnitude()
+        local_velocity = agent.me.local_velocity()
+        wait_and_coast = (
+            self.wait_for_fall >= 0
+            and car_speed * max(T, 0.0) > distance
+            and local_velocity.x > 0
+        )
+        agent.controller.throttle = -1 if wait_and_coast else 1
         agent.controller.boost = (
             not agent.me.airborne
             and agent.controller.throttle == 1
             and car_speed < 2299
             and should_boost
             and (
-                travel_d[2] + travel_v[2] * max(0.0, T - 1 / 60)
+                self.wait_for_fall < 0
+                or travel_d[2] + travel_v[2] * max(0.0, T - 1 / 60)
                 < distance
             )
         )
