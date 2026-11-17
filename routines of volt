@@ -1539,15 +1539,20 @@ class Aerial:
             xf += agent.me.up * jump_acc * tau * (T - 0.5 * tau)
 
             if self.jump_type_fast:
-                if not self.double_jump_complete:
+                second_jump_already_applied = (
+                    self.double_jump_complete
+                    or bool(getattr(agent.me, "doublejumped", False))
+                )
+                if not second_jump_already_applied:
                     # Release jump for three frames before the second-jump
-                    # pulse. Predict that actual delay instead of applying
-                    # the second impulse immediately in the contact model.
+                    # pulse. Predict the pulse at the same frame the
+                    # controller will send it, and never add it again after
+                    # the live car packet already contains that impulse.
                     if jump_elapsed <= jump_max_duration:
                         second_jump_delay = tau + 3 * dt
                     else:
                         second_jump_delay = (
-                            max(0, 3 - self.counter) * dt
+                            max(0, 2 - self.counter) * dt
                         )
 
                     if T >= second_jump_delay:
