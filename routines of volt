@@ -1510,10 +1510,13 @@ class Aerial:
         if not self.jumping and self._run_side_wall_takeoff(agent, T):
             return
 
-        if self.jumping or not agent.me.airborne:
+        # Keep predicting the jump after the input sequence finishes. The
+        # car's live velocity already contains completed jump impulses, so
+        # only add impulses that will still happen before this intercept.
+        if self.jumping or self.jump_time >= 0 or not agent.me.airborne:
             agent.dbg_2d("Jumping")
 
-            if not self.jumping or not agent.me.airborne:
+            if self.jump_time < 0:
                 self.jump_type_fast = self.fast_aerial
                 self.jumping = True
                 self.jump_time = agent.time
@@ -1523,22 +1526,35 @@ class Aerial:
 
             jump_elapsed = agent.time - self.jump_time
 
-            # how much of the jump acceleration time is left
+            # Remaining acceleration from holding the first jump.
             tau = max(0.0, jump_max_duration - jump_elapsed)
 
-            # impulse from the first jump
+            # The first-jump impulse is already in the live velocity after
+            # the launch frame, so add it only on the frame it is applied.
             if jump_elapsed == 0:
                 vf += agent.me.up * jump_speed
                 xf += agent.me.up * jump_speed * T
 
-            # acceleration from holding jump
             vf += agent.me.up * jump_acc * tau
             xf += agent.me.up * jump_acc * tau * (T - 0.5 * tau)
 
             if self.jump_type_fast:
-                # impulse from the second jump
-                vf += agent.me.up * jump_speed
-                xf += agent.me.up * jump_speed * (T - tau)
+                if not self.double_jump_complete:
+                    # Release jump for three frames before the second-jump
+                    # pulse. Predict that actual delay instead of applying
+                    # the second impulse immediately in the contact model.
+                    if jump_elapsed <= jump_max_duration:
+                        second_jump_delay = tau + 3 * dt
+                    else:
+                        second_jump_delay = (
+                            max(0, 3 - self.counter) * dt
+                        )
+
+                    if T >= second_jump_delay:
+                        vf += agent.me.up * jump_speed
+                        xf += agent.me.up * jump_speed * (
+                            T - second_jump_delay
+                        )
 
                 if jump_elapsed <= jump_max_duration:
                     agent.controller.jump = True
