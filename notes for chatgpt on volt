@@ -363,3 +363,26 @@ This file is the project handoff and change checklist. Read it before every code
   - `ff70640`: add untargeted fast-aerial candidates to goal-directed shot selection.
   - `010359d`: add the same candidate preference to general/untargeted shot selection.
 - Static fetch verification only. No Python compile, simulation, or in-game test has been performed. Pull the branch locally before testing.
+
+
+
+## Fast aerial boost, orientation, and contact prediction correction (2026-11-17)
+
+- Removed the previous `boost_commit` mode. It forced boost almost continuously (with only a brief release every 24 frames), overrode the normal orientation-aware boost controller, and simulated a boost trajectory using a fixed 0.10s pitch-back plus a guessed turn blend. Fast aerial selection no longer passes a continuous-boost flag.
+- Fast aerials still use the fast double-jump sequence: hold the first jump, release for three frames, then pulse the second jump. The jump sequence itself was preserved.
+- Aerial boost now follows Party Cannon's actual forward-projection rule: compute `offset = TargetLocation - predictedFinalPosition`; boost only when `offset.Dot(car.Forward) / timeRemaining` reaches the boost-plus-air-throttle threshold and the full 3D angle between the car's forward vector and the contact offset is below 0.4 radians. Throttle uses the same forward projection divided by air-throttle acceleration. There is no unconditional first-0.25-second boost override, so PD can rotate the nose before boost resumes.
+- Aerial orientation now follows Party Cannon's aim convention: aim the nose along the full 3D predicted contact offset; use world-up during the jump sequence, then use the direction from the car to the ball as the up reference after launch. Existing backboard underside and ceiling upside-down exceptions remain.
+- Corrected the hitbox local-right basis when translating hitbox offsets to world space: use `car.up.cross(car.forward)` for local +Y/right, not `car.forward.cross(car.up)` (which points left in the standard Rocket League car basis).
+- Apply `WallShot.adjust_aerial` before computing the final hitbox target, using the actual ball-radius plus half-hitbox-length approach distance. Previously the aerial wall adjustment was only applied inside the continuous-boost branch and used the jump-shot wall correction.
+- Fixed jump prediction persistence: continue including the first-jump hold acceleration after the jump input sequence ends, rather than reverting to a purely ballistic prediction as soon as `self.jumping` becomes false.
+- Fixed fast second-jump prediction timing: account for the three-frame release before the pulse, apply the second impulse at the frame the controller sends it, and do not add the impulse again once it has been requested/applied or the car packet reports `doublejumped`.
+- The conservative Party Cannon boost-budget estimate still guards ordinary aerials. A parser-confirmed fast aerial is allowed to proceed even if that later estimate is conservative; its actual boost remains governed by the forward-projection gate.
+- Source reference: Party Cannon/RedUtils `AerialShot.cs` computes the contact offset from its predicted final car position, aims at `car.Location + offset`, boosts only when forward projection and the 0.4-radian angle gate pass, and estimates required boost using turn-time, acceleration ratio, boost consumption, and max-speed checks.
+- Commits:
+  - `a916dab`: remove continuous boost simulation/override and use full 3D contact aim and boost gating.
+  - `29d914c`: remove continuous-boost arguments from shot selection.
+  - `203b21e`: preserve backboard/ceiling orientation exceptions with 3D contact tracking.
+  - `00d2195`: keep jump prediction active after takeoff and account for the second-jump release delay.
+  - `8a1a5e6`: prevent the predicted second-jump impulse from being added twice.
+  - `ff39a82`: include the second-jump request timestamp in the duplicate-impulse guard.
+- Static source verification only. No Python compile, simulation, or in-game test has been performed. Pull the branch locally before testing.
