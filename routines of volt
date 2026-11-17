@@ -2385,21 +2385,55 @@ class FastAerialPowerShot:
             and not agent.me.doublejumped
             and self.jump_release_frames >= 3
             and 0 < T <= 0.10
-            and self.target.dist(agent.me.location)
-            < 92 + agent.me.hitbox.length + 80
         ):
-            agent.dbg_2d("Fast aerial power-shot dodge")
-            local_target = agent.me.local_location(self.target).flatten().normalize()
-            agent.controller.pitch = -local_target.x
-            agent.controller.yaw = local_target.y
-            agent.controller.roll = 0
-            agent.controller.jump = True
-            agent.last_flip_time = agent.time
-            self.dodging = True
-            print(
-                f"[FAST AERIAL POWER SHOT DODGE] T={T:.3f} release_frames={self.jump_release_frames} target_gap={self.target.dist(agent.me.location):.0f}",
-                flush=True
+            # Only allow the contact flip when the actual front-nose centre
+            # is lined up with the ball's incoming surface. Measuring from
+            # the car origin lets the roof, rear, or side of the hitbox win.
+            hitbox = agent.me.hitbox
+            hitbox_offset = hitbox.offset
+            nose_center_local = Vector(
+                x=hitbox.length * 0.5 + hitbox_offset.x,
+                y=hitbox_offset.y,
+                z=hitbox_offset.z
             )
+            nose_surface_world = self.ball - self.shot_vector * 92.75
+            nose_surface_local = agent.me.local_location(nose_surface_world)
+            nose_delta = nose_surface_local - nose_center_local
+            nose_gap = nose_delta.magnitude()
+            nose_alignment = agent.me.forward.dot(self.shot_vector.normalize())
+            local_shot_direction = agent.me.local(
+                self.shot_vector
+            ).flatten().normalize()
+
+            nose_only_contact_ready = (
+                nose_gap <= 250
+                and abs(nose_delta.y) <= 135
+                and abs(nose_delta.z) <= 155
+                and nose_alignment >= 0.75
+                and local_shot_direction.x >= 0.65
+            )
+
+            if nose_only_contact_ready:
+                agent.dbg_2d("Fast aerial nose-contact flip")
+                # The nose is already aligned with the outgoing shot vector.
+                # Flip through that line instead of aiming the dodge at the
+                # car-centre approach marker.
+                agent.controller.pitch = -local_shot_direction.x
+                agent.controller.yaw = local_shot_direction.y
+                agent.controller.roll = 0
+                agent.controller.jump = True
+                agent.last_flip_time = agent.time
+                self.dodging = True
+                print(
+                    f"[FAST AERIAL POWER SHOT NOSE DODGE] "
+                    f"T={T:.3f} nose_gap={nose_gap:.0f} "
+                    f"nose_offset=({nose_delta.x:.0f},"
+                    f"{nose_delta.y:.0f},{nose_delta.z:.0f}) "
+                    f"forward_alignment={nose_alignment:.2f} "
+                    f"local_shot=({local_shot_direction.x:.2f},"
+                    f"{local_shot_direction.y:.2f})",
+                    flush=True
+                )
 
 
 class half_flip:
