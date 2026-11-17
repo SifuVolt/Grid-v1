@@ -1189,6 +1189,19 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             targets
         )
 
+        # The threshold applies to the live ball and predicted contact. A
+        # later high prediction must not make a grounded ball a fast aerial.
+        if (
+            shot.get("found") == 1
+            and int(shot.get("shot_type", -1)) == 3
+            and bool(shot.get("fast", False))
+            and (
+                ball_location[2] <= 350
+                or agent.ball.location.z <= 350
+            )
+        ):
+            shot = {**shot, "found": 0}
+
         # Use an untargeted fast aerial only for a high ball, and only when
         # this slice did not already produce a reachable normal aerial.
         normal_aerial_available = (
@@ -1219,7 +1232,10 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                 and int(fast_aerial.get("shot_type", -1)) == 3
                 and (
                     not bool(fast_aerial.get("fast", False))
-                    or ball_location[2] > 350
+                    or (
+                        ball_location[2] > 350
+                        and agent.ball.location.z > 350
+                    )
                 )
             ):
                 is_fast_aerial = bool(fast_aerial.get("fast", False))
@@ -1681,6 +1697,17 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
             me
         )
 
+        if (
+            shot.get("found") == 1
+            and int(shot.get("shot_type", -1)) == 3
+            and bool(shot.get("fast", False))
+            and (
+                ball_location[2] <= 350
+                or agent.ball.location.z <= 350
+            )
+        ):
+            shot = {**shot, "found": 0}
+
         # Retain a reachable aerial-only touch when it is useful. Prefer
         # the normal aerial; fast aerials are only eligible above 350 units.
         normal_aerial_available = (
@@ -1711,7 +1738,10 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
                 and int(fast_aerial.get("shot_type", -1)) == 3
                 and (
                     not bool(fast_aerial.get("fast", False))
-                    or ball_location[2] > 350
+                    or (
+                        ball_location[2] > 350
+                        and agent.ball.location.z > 350
+                    )
                 )
             ):
                 is_fast_aerial = bool(fast_aerial.get("fast", False))
