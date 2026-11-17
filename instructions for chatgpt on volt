@@ -241,6 +241,25 @@ class Bot(VirxERLU):
         3v3: Aggressive pressure, especially in the attacking half.
         """
 
+        # Enemy reach is checked before a shot routine is committed. Once an
+        # ordinary shot is running, do not re-run that enemy gate and retreat
+        # midway through the action; teammate ownership is handled separately
+        # by should_commit_to_shot below.
+        active_shot_names = {
+            "ground_shot",
+            "jump_shot",
+            "elevated_shot",
+            "double_jump",
+            "Aerial",
+            "Redirect",
+            "side_shot"
+        }
+        if not self.is_clear() and any(
+            routine.__class__.__name__ in active_shot_names
+            for routine in self.stack
+        ):
+            return True
+
         car = self.me
         ball = self.ball.location
         side = utils.side(self.team)
@@ -2047,6 +2066,11 @@ class Bot(VirxERLU):
                 "speedflip_kickoff",
                 "Aerial",
                 "Redirect",
+                "ground_shot",
+                "jump_shot",
+                "elevated_shot",
+                "double_jump",
+                "side_shot",
             }
 
             # Keep the existing power clear running.
@@ -2054,8 +2078,11 @@ class Bot(VirxERLU):
                 return
 
             # Let protected routines finish.
-            if current_name in protected:
-               return
+            if current_name in protected or any(
+                routine.__class__.__name__ in protected
+                for routine in self.stack
+            ):
+                return
 
             # Interrupt boost collection, shadowing, or a normal shot.
             self.clear()
@@ -2063,32 +2090,15 @@ class Bot(VirxERLU):
             return
 
     
-        # Once a jump shot has launched, don't replace it merely because
-        # an opponent is close enough to contest the ball. The rolling-ball
-        # emergency check above still runs first and can override this.
-        committed_jump_under_pressure = False
+        # An active shot is committed after its initial opponent check.
+        # Teammate ownership is still allowed to cancel it in the yield path.
+        committed_active_shot = False
         if not self.is_clear():
             active_routine = self.stack[0]
-            if (
-                active_routine.__class__.__name__ == "jump_shot"
-                and getattr(active_routine, "jumping", False)
-                and self.foes
-            ):
-                committed_jump_under_pressure = any(
-                    foe.location.dist(self.ball.location) <= 1200
-                    or foe.location.dist(self.me.location) <= 1000
-                    for foe in self.foes
-                )
-
-        if committed_jump_under_pressure and (
-            self.time - getattr(self, "_last_jump_pressure_debug", -999.0) >= 0.75
-        ):
-            self._last_jump_pressure_debug = self.time
-            print(
-                "[JUMP SHOT PRESSURE LOCK] keeping launched jump shot "
-                f"ball_enemy_dist={min(foe.location.dist(self.ball.location) for foe in self.foes):.0f}",
-                flush=True
-            )
+            committed_active_shot = active_routine.__class__.__name__ in {
+                "ground_shot", "jump_shot", "elevated_shot", "double_jump",
+                "Aerial", "Redirect", "side_shot"
+            }
 
         # RedUtils AerialShot becomes uninterruptible as soon as its launch
         # controller takes over. Keep that behaviour in Volt's strategy too.
@@ -2100,7 +2110,7 @@ class Bot(VirxERLU):
                 and getattr(active_routine, "aerialing", False)
             )
         committed_routine_lock = (
-            committed_jump_under_pressure or committed_aerial
+            committed_active_shot or committed_aerial
         )
 
         # Wall-shot attempt: only start from a clear stack so we don't
@@ -2174,13 +2184,15 @@ class Bot(VirxERLU):
                     ordinary_shots = {
                         "double_jump",
                         "jump_shot",
+                        "elevated_shot",
                         "ground_shot",
+                        "side_shot",
                         "Aerial",
                         "Redirect",
                         "wall_approach"
                     }
 
-                    if current_name in ordinary_shots and not committed_routine_lock:
+                    if current_name in ordinary_shots:
                         self.clear()
 
                         # Announce once when an active routine is actually
@@ -2215,7 +2227,9 @@ class Bot(VirxERLU):
                             ordinary_shots = {
                                 "ground_shot",
                                 "jump_shot",
+                                "elevated_shot",
                                 "double_jump",
+                                "side_shot",
                                 "Aerial",
                                 "Redirect"
                             }
@@ -2343,7 +2357,9 @@ class Bot(VirxERLU):
                         ordinary_shots = {
                             "ground_shot",
                             "jump_shot",
+                            "elevated_shot",
                             "double_jump",
+                            "side_shot",
                             "Aerial",
                             "Redirect",
                             "wall_approach"
