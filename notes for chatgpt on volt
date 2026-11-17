@@ -419,9 +419,10 @@ This file is the project handoff and change checklist. Read it before every code
 - Static source verification only; no Python compile or in-game test has been performed.
 
 
-## 17. Jump-shot goalpost clearance (2026-11-17)
+## 17. Revert jump-shot post-side aiming (2026-11-17)
 
-- Jump-shot goal aiming now selects the side of the opponent's goal based on the predicted ball's lateral position relative to goal centre.
-- Side-directed shots target 180 units inside the selected post, rather than aiming at the post/corner. Small lateral offsets (180 units or less) remain centre-aimed.
-- The change is confined to the `jump_shot` class. The shared `_relative_goal_aim_point` helper and ordinary Aerial aiming are unchanged.
-- Static source verification passed after the commit. No Python compile or in-game test has been run.
+- Removed the special `jump_shot._goal_aim_for_ball` adjustment that moved side-directed shots to 180 units inside the corresponding post.
+- Jump shots now use the shared `_relative_goal_aim_point`, restoring the previous central goal target.
+- Aerial aiming remains centre-directed: `Aerial._party_cannon_shot_direction` obtains its target from `_relative_goal_aim_point`. No separate post-side adjustment is used by the Aerial routine.
+- The shared helper itself was not changed, so its existing vertical-height behaviour remains intact.
+- Static source verification only; no Python compile or in-game test has been run.
