@@ -4648,10 +4648,10 @@ class jump_shot:
             self._finish(agent, True)
             return
 
-        ball_slice = min(
-            slices,
-            key=lambda item: abs(item.game_seconds - self.intercept_time)
-        )
+        ball_slice = _safe_prediction_slice(agent, T)
+        if ball_slice is None:
+            self._finish(agent, True)
+            return
         physics = ball_slice.physics
         ball = Vector(
             physics.location.x, physics.location.y, physics.location.z
