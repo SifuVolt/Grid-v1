@@ -1093,6 +1093,8 @@ class Aerial:
         self.double_jump_complete = False
         self.side_wall_route = False
         self.side_wall_launched = False
+        self.wall_shot_active = False
+        self.wall_shot_normal = None
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -1560,7 +1562,7 @@ class Aerial:
             agent.dbg_2d(f"Ceiling shot")
 
         delta_x = self.target - xf
-        direction = delta_x.normalize() if not self.jumping else delta_x.flatten().normalize()
+        direction = delta_x.normalize()
 
         agent.line(agent.me.location, agent.me.location + (direction * 250), agent.renderer.black)
         c_vf = vf + agent.me.location
@@ -1571,22 +1573,43 @@ class Aerial:
         
         if not self.dodging:
             # Party Cannon aims at the predicted car-centre contact position.
-            # Keep world-up as the reference during the jump sequence, then
-            # roll relative to the ball once the launch is complete.
+            # Preserve the special underside/ceiling recovery orientations,
+            # otherwise use the full 3D offset and ball-relative up vector.
             aim_vector = (
                 delta_x
                 if delta_x.magnitude() > 50
                 else self.shot_vector
             )
             local_aim = agent.me.local(aim_vector)
-            if self.jumping:
-                local_up = agent.me.local(Vector(z=1))
+
+            if backboard_mode:
+                ball_below_car = (
+                    self.ball.z < agent.me.location.z - 80
+                )
+                defaultPD(
+                    agent,
+                    local_aim,
+                    upside_down=ball_below_car
+                )
+            elif virxrlcu.find_landing_plane(
+                tuple(agent.me.location),
+                tuple(agent.me.velocity),
+                agent.gravity.z
+            ) == 4:
+                defaultPD(agent, local_aim, upside_down=True)
             else:
-                ball_direction = (
-                    self.ball - agent.me.location
-                ).normalize()
-                local_up = agent.me.local(ball_direction)
-            defaultPD(agent, local_aim, up=local_up)
+                if self.jumping:
+                    # During the jump sequence, keep the car's roof oriented
+                    # to world-up while the nose tracks the contact offset.
+                    local_up = agent.me.local(Vector(z=1))
+                else:
+                    # Once launched, roll relative to the ball just as
+                    # Party Cannon's AimAt(Location + offset, Direction(ball)).
+                    ball_direction = (
+                        self.ball - agent.me.location
+                    ).normalize()
+                    local_up = agent.me.local(ball_direction)
+                defaultPD(agent, local_aim, up=local_up)
 
         if self.dodging:
             # A neutral second-jump pulse avoids turning the fast aerial into
