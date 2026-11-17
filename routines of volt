@@ -1113,8 +1113,8 @@ class Aerial:
         # Port of Party Cannon's SetTargetLocation shot prediction.
         shot_target = _relative_goal_aim_point(agent, self.targets)
 
-        # Normal aerials aim for the far side of goal: ball right -> aim
-        # left, ball left -> aim right. A centred ball keeps the direct aim.
+        # Preserve the ball's lateral side of the goal: ball right -> aim
+        # right, ball left -> aim left. A centred ball keeps the direct aim.
         if side_bias:
             posts = (
                 self.targets
@@ -1136,7 +1136,7 @@ class Aerial:
             if abs(ball_lateral) > 180:
                 side_offset = cap(half_goal_width - 150, 0, 450)
                 shot_target.x = (
-                    goal_center_x - sign(ball_lateral) * side_offset
+                    goal_center_x + sign(ball_lateral) * side_offset
                 )
 
         safe_time = max(time_remaining, dt)
