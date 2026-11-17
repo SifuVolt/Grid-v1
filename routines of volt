@@ -4528,6 +4528,23 @@ class ground_shot:
         if future_shot_direction.magnitude() < 0.001:
             return None
 
+        # If the ball is already drifting off the desired scoring line,
+        # bias the planned push against that lateral trajectory. This uses
+        # the predicted movement, not just the ball's current position.
+        if ball_speed > 120 and trajectory_direction.magnitude() > 0.001:
+            trajectory_lateral = (
+                trajectory_direction
+                - future_shot_direction
+                * trajectory_direction.dot(future_shot_direction)
+            )
+            correction = trajectory_lateral * cap(ball_speed / 1400, 0, 0.22)
+            future_shot_direction = (
+                future_shot_direction - correction
+            ).normalize()
+
+        if future_ball.z > 135 or abs(future_physics.velocity.z) > 180:
+            return None
+
         # Preserve the selected contact side/height. Rebuild its approach
         # point against the predicted ball location, then use the actual
         # contact normal to keep the car behind the ball.
@@ -4543,7 +4560,7 @@ class ground_shot:
                 future_ball - future_shot_direction * agent.best_shot_value
             )
         contact_normal = (
-            future_ball - predicted_contact_target
+            predicted_contact_target - future_ball
         ).flatten().normalize()
         if contact_normal.magnitude() < 0.001:
             return None
@@ -4593,7 +4610,7 @@ class ground_shot:
         self.contact_normal = contact_normal
         self.contact_approach_target = predicted_contact_target.copy()
         self.contact_point = (
-            future_ball - contact_normal * 92.75
+            future_ball + contact_normal * 92.75
         )
 
         velocity = defaultDrive(agent, carry_speed, local_drive_target)[1]
