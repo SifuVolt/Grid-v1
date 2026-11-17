@@ -5424,10 +5424,8 @@ class recovery:
             if (
                 time_remaining > dt
                 and offset.magnitude() > 35
-                and agent.controller.boost
+                and required_acceleration * 0.8 <= total_acceleration
             ):
-                if not agent.me.airborne:
-                    agent.pop()
                 return
 
         defaultPD(agent, agent.me.local(t_switch[landing_plane]), up=agent.me.local(r_switch[landing_plane]))
