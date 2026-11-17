@@ -1541,6 +1541,7 @@ class Aerial:
             if self.jump_type_fast:
                 second_jump_already_applied = (
                     self.double_jump_complete
+                    or self.double_jump_time is not None
                     or bool(getattr(agent.me, "doublejumped", False))
                 )
                 if not second_jump_already_applied:
