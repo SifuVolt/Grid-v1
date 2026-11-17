@@ -430,8 +430,14 @@ This file is the project handoff and change checklist. Read it before every code
 
 ## 19. Ground-shot dribbling control (2026-11-17)
 
-- Added a controlled dribble phase inside the existing `ground_shot` class; no separate routine or shot-selection path was introduced.
-- It engages only when Volt is grounded and already behind/aligned with a slow, rolling ball at the front of the car. Bouncing, fast, airborne, badly aligned, or late-intercept cases retain the original ground-shot behaviour.
-- During the dribble, steering follows a live point 650 units ahead of the ball on the current ball-to-goal line. The speed target follows the ball's forward speed with a modest 300 uu/s lead and is capped at 1050 uu/s; boost is disabled to prevent blasting the ball away.
-- The live ball position and shot direction refresh the ground-shot contact geometry while carrying. A throttled `[GROUND DRIBBLE]` CMD diagnostic reports engagement and alignment.
-- This is an initial controlled push-dribble model, not a full hood-balance dribble controller. It has not been compiled or tested in-game; tune engagement geometry and speed from match observations.
+- The earlier simple push-dribble experiment described here was reverted before the current controller was added. Do not restore that version.
+
+
+## 20. Downward-only recovery boost and trajectory-aware ground dribble (2026-11-17)
+
+- Recovery now explicitly clears boost every frame. The optional boost phase is allowed only when `find_landing_plane` selects the floor (plane index 5); side-wall, back-wall, and ceiling recoveries never boost.
+- For a floor recovery, the nose is PD-aligned with world-down and boost is gated on strong downward nose alignment, remaining height, downward speed, and total speed. It no longer boosts toward the currently selected wall/ceiling surface.
+- Added a grounded rolling-ball carry controller inside `ground_shot`. It uses a short-horizon ball-prediction slice to estimate the ball's trajectory, aims the predicted ball path toward the existing goal target, and rebuilds the selected contact-label geometry at the predicted ball position.
+- The carry controller requires the car to be behind and facing the ball along the planned shot direction; otherwise the existing approach logic continues to reposition. It steers to the trajectory-aware contact approach point and retains the existing turn-aware flank approach.
+- It does not impose the previous 1050 uu/s cap: its speed target preserves the existing intercept speed requirement and adds a modest lead over the ball's projected forward speed, up to the normal maximum speed. Existing shot timing, jump/flip decision, and airborne paths remain in place.
+- Static source verification only. No Python compile, simulation, or in-game test has been performed.
