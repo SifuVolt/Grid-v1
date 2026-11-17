@@ -1081,10 +1081,10 @@ def _noob_black_single_jump_candidate(agent, targets, horizon=5.0):
     for step in range(1, min(301, int(horizon * 60) + 1)):
         t = step / 60.0
         wanted_time = start_time + t
-        index = min(
-            range(len(slices)),
-            key=lambda i: abs(slices[i].game_seconds - wanted_time)
-        )
+        index = int(round(
+            (wanted_time - slices[0].game_seconds) * 120
+        ))
+        index = max(0, min(index, len(slices) - 1))
         ball_slice = slices[index]
         if abs(ball_slice.game_seconds - wanted_time) > 0.025:
             continue
@@ -1337,6 +1337,7 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
     # selects its first physically reachable contact. Only replace another
     # single-jump candidate (or an empty result); ground, double-jump and
     # aerial selections remain under Volt's existing planner.
+    best_noob_candidate = None
     if can_jump:
         noob_candidate = _noob_black_single_jump_candidate(
             agent, target, min(cap_, 5.0)
@@ -1380,6 +1381,7 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                 best_ball_z = noob_candidate["ball_location"].z
                 best_ball_location = noob_candidate["ball_location"]
                 best_score = noob_time_remaining + 0.12
+                best_noob_candidate = noob_candidate
                 print(
                     f"[NOOB BLACK JUMP FIND] earliest reachable | "
                     f"T={noob_time_remaining:.3f} "
@@ -1589,6 +1591,9 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             best_intercept_time,
             best_targets
         )
+
+    if best_noob_candidate is not None and routine.__class__ is jump_shot:
+        routine.wait_for_fall = best_noob_candidate["wait_for_fall"]
 
     routine.contact_label = contact["label"]
     routine.contact_point = contact["contact_point"]
