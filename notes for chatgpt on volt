@@ -278,3 +278,16 @@ This file is the project handoff and change checklist. Read it before every code
 - The aerial-only side bias is passed explicitly by `Aerial.run`; the jump-shot's use of the shared Party Cannon shot-direction calculation does not enable that bias.
 - Preserved `double_jump`, `side_shot`, the separate fast-aerial power-shot class, and shot selection.
 - Static fetch verification confirmed the aerial-only flag, jump-shot contact orientation, directional dodge calculation, and the continued presence of the existing routine classes. No Python compile or in-game test has been performed; pull the branch locally before testing.
+
+
+## Reapplied jump-shot orientation / aerial far-side aim on reverted routines (2026-11-17)
+
+- The user reverted `routines of volt` to the earlier Party Cannon-derived jump-shot implementation. Reapplied the requested changes to that live implementation rather than assuming the later Noob Black single-jump class was still present.
+- In the reverted `jump_shot`, the post-takeoff orientation now matches the existing `double_jump` routine: `defaultPD` tracks the full 3D local contact/approach target (`self.offset_target`) instead of flattening the ball-centre direction and forcing a positive-pitch S input.
+- The jump-shot's normal final dodge now uses the local outgoing `self.shot_vector`, producing a forward W flip or a W+A / W+D diagonal. The existing explicit pure-backflip and urgent defensive-backflip exceptions remain unchanged.
+- In `Aerial`, the Party Cannon shot-direction method accepts an aerial-only side-bias flag. When the predicted ball is more than 180 units laterally from the opponent goal centre, it moves the aim point toward the opposite side of the goal, capped to remain 150 units inside the posts (maximum 450-unit shift). A ball already near the centre line retains the direct goal-centre aim.
+- In both `find_shot` and `find_any_shot`, double-jump candidates receive a 0.25 score penalty while Volt has boost, including the separately generated Grid double-jump candidate. This makes a viable single `jump_shot` win when the candidates are close, but keeps double jump available when it has a meaningfully better reachable contact. The penalty is not applied in urgent save mode, where earliest contact remains the priority. At zero boost, candidate scoring is unchanged.
+- GitHub commits:
+  - `1af5bf8`: reapply jump-shot contact orientation/directional flip and aerial far-side aim to the reverted routines.
+  - `d308b34`: prefer jump shot over double jump when boost is available in both shot finders.
+- Static fetch verification only. No Python compile, simulation, or in-game test has been performed. Pull the branch locally before testing.
