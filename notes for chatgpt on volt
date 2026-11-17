@@ -242,3 +242,11 @@ This file is the project handoff and change checklist. Read it before every code
 - This prevents the fast aerial candidate from being evaluated with the smaller generic margin if its parser shot type is changed or missing while the dedicated fast-aerial flag is present.
 - This changes candidate rejection during shot selection only; it does not change jump-shot execution, the fast aerial routine's own timeout/viability checks, or opponent physics estimates.
 - Static source verification only; no compile or in-game test has been performed.
+
+
+## 11. Fast aerial power-shot nose-only dodge (2026-11-17)
+
+- The independent `FastAerialPowerShot` must only initiate its final contact flip when the front-nose centre is aligned with the predicted incoming ball surface; do not accept roof, rear, side, or generic car-centre proximity as a valid contact.
+- At the dodge window, compare the local front-nose centre (hitbox half-length plus local hitbox offset) with the predicted ball surface point (ball centre minus 92.75 units along the outgoing shot vector).
+- Require tight lateral/vertical nose alignment and the car's forward axis to face the outgoing shot vector. Drive the final dodge along that shot vector rather than the car-centre approach marker.
+- This is scoped to `FastAerialPowerShot`; ordinary `Aerial` and `jump_shot` remain unchanged.
