@@ -1109,9 +1109,31 @@ class Aerial:
         blend = (speed - max_speed) / 2300
         return 0.55 + (0.3 - 0.55) * blend
 
-    def _party_cannon_shot_direction(self, agent, ball, ball_velocity, time_remaining):
+    def _party_cannon_shot_direction(
+        self, agent, ball, ball_velocity, time_remaining, side_bias=False
+    ):
         # Port of Party Cannon's SetTargetLocation shot prediction.
         shot_target = _relative_goal_aim_point(agent, self.targets)
+
+        # Normal aerials attack the far side of the goal relative to the
+        # ball's lateral position. A ball right of centre is aimed left;
+        # a ball left of centre is aimed right. Keep central balls direct.
+        if side_bias:
+            posts = self.targets if self.targets is not None else agent.foe_goal_shot
+            post_a = posts[0] if isinstance(posts[0], Vector) else Vector(*posts[0])
+            post_b = posts[1] if isinstance(posts[1], Vector) else Vector(*posts[1])
+            goal_center_x = (post_a.x + post_b.x) * 0.5
+            half_goal_width = abs(post_a.x - post_b.x) * 0.5
+            ball_lateral = ball.x - goal_center_x
+
+            if abs(ball_lateral) > 180:
+                side_offset = cap(half_goal_width - 150, 0, 450)
+                shot_target = Vector(
+                    goal_center_x - sign(ball_lateral) * side_offset,
+                    shot_target.y,
+                    shot_target.z
+                )
+
         safe_time = max(time_remaining, dt)
         car_final_velocity = (
             (ball - agent.me.location) / safe_time
@@ -1409,7 +1431,7 @@ class Aerial:
             aerial_physics.velocity.z
         )
         self.shot_vector = self._party_cannon_shot_direction(
-            agent, self.ball, aerial_ball_velocity, T
+            agent, self.ball, aerial_ball_velocity, T, side_bias=True
         )
 
         
@@ -4234,8 +4256,12 @@ class jump_shot:
                 # Keep the established grounded jump-shot orientation and
                 # boost timing unchanged.
                 if self.counter < 3 and not self.dodging:
-                    local_ball = agent.me.local_location(self.ball_location)
-                    defaultPD(agent, local_ball.flatten())
+                    # Match double_jump's post-takeoff tracking: orient
+                    # toward the planned contact/approach point, not the
+                    # ball centre. This gives the car time to line up before
+                    # the directional dodge.
+                    local_contact = agent.me.local_location(self.offset_target)
+                    defaultPD(agent, local_contact)
 
                     ball_is_airborne = self.ball_location.z > 130
                     ball_is_above_car = self.ball_location.z > agent.me.location.z + 65
@@ -4407,9 +4433,20 @@ class jump_shot:
                     # corner. If the predicted contact is genuinely behind
                     # the car, use a straight backflip: no yaw and no diagonal
                     # pitch/yaw combination.
-                    if nose_to_contact.magnitude() > 1:
-                        dodge_direction = nose_to_contact.normalize()
+                    # Use a forward/diagonal directional flip toward
+                    # the intended shot, like W/A/D input. The car has
+                    # already been oriented toward the contact point during
+                    # the first jump, so the local shot vector selects the
+                    # forward and lateral dodge components.
+                    local_shot_direction = agent.me.local(
+                        self.shot_vector
+                    ).flatten().normalize()
+
+                    if local_shot_direction.x > 0.05:
+                        dodge_direction = local_shot_direction
                     else:
+                        # Never turn a normal goal shot into an accidental
+                        # backflip merely because the car is slightly misaligned.
                         dodge_direction = Vector(x=1)
 
                     print(
