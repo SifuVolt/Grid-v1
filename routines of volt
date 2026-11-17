@@ -1075,9 +1075,14 @@ class double_jump:
 
 
 class Aerial:
-    def __init__(self, intercept_time, targets=None, fast_aerial=True):
+    def __init__(
+        self, intercept_time, targets=None, fast_aerial=True,
+        boost_commit=False
+    ):
         self.intercept_time = intercept_time
         self.fast_aerial = fast_aerial
+        self.boost_commit = boost_commit
+        self.boost_commit_frames = 0
         self.targets = targets
         self.shot_vector = None
         self.target = None
@@ -1088,6 +1093,7 @@ class Aerial:
         self.dodging = False
         self.ceiling = False
         self.jump_time = -1
+        self.double_jump_time = None
         self.counter = 0
         self.double_jump_complete = False
         self.side_wall_route = False
@@ -1096,6 +1102,9 @@ class Aerial:
     def update(self, shot):
         self.intercept_time = shot.intercept_time
         self.fast_aerial = shot.fast_aerial
+        self.boost_commit = getattr(
+            shot, "boost_commit", self.boost_commit
+        )
         self.targets = shot.targets
 
     @staticmethod
@@ -1109,13 +1118,17 @@ class Aerial:
         blend = (speed - max_speed) / 2300
         return 0.55 + (0.3 - 0.55) * blend
 
-    def _party_cannon_shot_direction(self, agent, ball, ball_velocity, time_remaining):
+    def _party_cannon_shot_direction(
+        self, agent, ball, ball_velocity, time_remaining,
+        car_final_velocity=None
+    ):
         # Port of Party Cannon's SetTargetLocation shot prediction.
         shot_target = _relative_goal_aim_point(agent, self.targets)
         safe_time = max(time_remaining, dt)
-        car_final_velocity = (
-            (ball - agent.me.location) / safe_time
-        ).cap(0, max_speed)
+        if car_final_velocity is None:
+            car_final_velocity = (
+                (ball - agent.me.location) / safe_time
+            ).cap(0, max_speed)
 
         velocity_for_power = (
             car_final_velocity * 6 + ball_velocity
@@ -1129,7 +1142,7 @@ class Aerial:
 
         score_speed = (
             velocity_difference
-            * Aerial._party_cannon_shot_power_modifier(velocity_difference)
+            * self._party_cannon_shot_power_modifier(velocity_difference)
             + velocity_for_power.dot(direction_to_score)
         )
         time_to_score = (
@@ -1182,6 +1195,107 @@ class Aerial:
             - shot_direction * (ball_radius + half_length)
             - world_offset
         )
+
+    def _predict_boost_commit_trajectory(self, agent, time_remaining, target):
+        """Simulate the fast jump and committed boost at controller-tick rate."""
+        step = 1.0 / 120.0
+        steps = max(0, int(math.ceil(max(0.0, time_remaining) / step)))
+        car = agent.me
+        position = car.location.copy()
+        velocity = car.velocity.copy()
+        up = car.up.normalize()
+        if up.magnitude() < 0.001:
+            up = Vector(z=1)
+
+        forward = car.forward.normalize()
+        if forward.magnitude() < 0.001:
+            forward = (target - position).normalize()
+
+        launch_up = up
+        launch_forward = forward
+        pitchback_direction = (
+            launch_forward + launch_up * 0.55
+        ).normalize()
+        if pitchback_direction.magnitude() < 0.001:
+            pitchback_direction = launch_forward
+
+        elapsed = max(0.0, agent.time - self.jump_time) if self.jumping else 0.0
+        jump_started_now = (
+            self.jumping
+            and elapsed <= step
+            and (not car.airborne or self.side_wall_launched)
+        )
+        jump_impulse_pending = jump_started_now
+        already_double_jumped = bool(
+            getattr(car, "doublejumped", False)
+            or getattr(car, "has_double_jumped", False)
+        )
+        second_jump_pending = (
+            self.jumping
+            and self.jump_type_fast
+            and not already_double_jumped
+            and not self.double_jump_complete
+        )
+        if self.double_jump_time is not None:
+            second_jump_time = max(
+                0.0, self.double_jump_time - agent.time
+            )
+        else:
+            second_jump_time = jump_max_duration + 3 * step - elapsed
+        boost_left = max(0.0, float(car.boost))
+        frame_offset = self.boost_commit_frames
+        boost_acceleration = max(0.0, float(agent.boost_accel))
+        gravity = agent.gravity
+        turn_time = 0.28
+
+        for index in range(steps):
+            future_time = elapsed + index * step
+
+            if jump_impulse_pending:
+                velocity += launch_up * jump_speed
+                jump_impulse_pending = False
+
+            if (
+                second_jump_pending
+                and future_time >= second_jump_time
+            ):
+                velocity += launch_up * jump_speed
+                second_jump_pending = False
+
+            acceleration = gravity.copy()
+            if self.jumping and future_time < jump_max_duration:
+                acceleration += launch_up * jump_acc
+
+            # Model the intentional backward pitch during takeoff, then the
+            # smooth turn toward the hitbox contact target used by PD.
+            aim_direction = (target - position).normalize()
+            if aim_direction.magnitude() < 0.001:
+                aim_direction = launch_forward
+            if future_time < 0.10:
+                boost_direction = pitchback_direction
+            else:
+                blend = cap((future_time - 0.10) / turn_time, 0.0, 1.0)
+                boost_direction = (
+                    pitchback_direction * (1.0 - blend)
+                    + aim_direction * blend
+                ).normalize()
+
+            controller_frame = frame_offset + index + 1
+            boost_pressed = (
+                boost_left > 0
+                and not self.dodging
+                and controller_frame % 24 != 0
+            )
+            if boost_pressed:
+                acceleration += boost_direction * boost_acceleration
+                boost_left = max(0.0, boost_left - boost_per_second * step)
+
+            velocity += acceleration * step
+            if velocity.magnitude() > max_speed:
+                velocity = velocity.normalize() * max_speed
+            position += velocity * step
+
+        return position, velocity
 
     def _party_cannon_boost_estimate(
         self, agent, target, time_remaining, final_position, final_velocity
@@ -1361,6 +1475,7 @@ class Aerial:
         self.jump_type_fast = self.fast_aerial
         self.jumping = True
         self.jump_time = agent.time
+        self.double_jump_time = None
         self.counter = 0
         self.double_jump_complete = False
         agent.controller.jump = True
@@ -1495,6 +1610,7 @@ class Aerial:
                 self.jump_type_fast = self.fast_aerial
                 self.jumping = True
                 self.jump_time = agent.time
+                self.double_jump_time = None
                 self.counter = 0
                 self.double_jump_complete = False
 
@@ -1524,6 +1640,8 @@ class Aerial:
                     self.counter += 1
 
                 if self.counter == 3:
+                    if self.double_jump_time is None:
+                        self.double_jump_time = agent.time
                     agent.controller.jump = True
                     self.dodging = True
                 elif self.counter == 4:
@@ -1536,6 +1654,40 @@ class Aerial:
 
         if self.ceiling:
             agent.dbg_2d(f"Ceiling shot")
+
+        if self.boost_commit:
+            # The normal aerial predictor is ballistic until its final boost
+            # estimate. A power aerial instead simulates the delayed second
+            # jump, held jump acceleration, upward pitch on takeoff, boost
+            # burn, and its gradual turn toward the hitbox target.
+            xf, vf = self._predict_boost_commit_trajectory(
+                agent, T, self.target
+            )
+
+            # Recompute Party Cannon's outgoing shot line from the velocity
+            # this fast flight is expected to have at contact, then update
+            # the hitbox target and flight prediction once with that line.
+            refined_shot_vector = self._party_cannon_shot_direction(
+                agent,
+                self.ball,
+                aerial_ball_velocity,
+                T,
+                car_final_velocity=vf
+            )
+            refined_shot_vector, wall_normal, wall_clearance = (
+                WallShot.adjust_jump(self.ball, refined_shot_vector)
+            )
+            self.shot_vector = refined_shot_vector
+            self.wall_shot_active = wall_normal is not None
+            self.wall_shot_normal = wall_normal
+            self.target = self._party_cannon_hitbox_target(
+                agent, self.ball, self.shot_vector
+            )
+            if self.ceiling:
+                self.target -= Vector(z=92)
+            xf, vf = self._predict_boost_commit_trajectory(
+                agent, T, self.target
+            )
 
         delta_x = self.target - xf
         direction = delta_x.normalize() if not self.jumping else delta_x.flatten().normalize()
@@ -1668,7 +1820,7 @@ class Aerial:
             party_cannon_boost_estimate = self._party_cannon_boost_estimate(
                 agent, self.target, T, xf, vf
             )
-            if party_cannon_boost_estimate is None:
+            if party_cannon_boost_estimate is None and not self.boost_commit:
                 if not getattr(self, "_boost_reject_logged", False):
                     self._boost_reject_logged = True
                     print(
@@ -1715,6 +1867,17 @@ class Aerial:
             and not self.dodging
         ):
             agent.controller.boost = True
+
+        # Power aerials spend the remaining boost continuously, with a
+        # single controller-tick release every 24 frames (~8 ms) so the
+        # boost input gets a clean reset while retaining a near-continuous
+        # burn. Fast jump timing and Aerial's contact/orientation stay intact.
+        if self.boost_commit and not self.dodging:
+            self.boost_commit_frames += 1
+            agent.controller.boost = (
+                agent.me.boost > 0
+                and self.boost_commit_frames % 24 != 0
+            )
 
         if T <= -0.4 or (not self.jumping and T > 1.5 and not virxrlcu.aerial_shot_is_viable(T, agent.boost_accel, tuple(agent.gravity), agent.me.get_raw(agent), tuple(self.target))):
             agent.pop()
@@ -2859,7 +3022,12 @@ class fast_intercept_finder:
                     )
                     return Aerial(
                         intercept_time,
-                        fast_aerial=bool(aerial_result.get("fast", True))
+                        fast_aerial=bool(aerial_result.get("fast", True)),
+                        boost_commit=(
+                            bool(aerial_result.get("fast", True))
+                            and agent.boost_amount != "unlimited"
+                            and agent.me.boost > 0
+                        )
                     )
 
         for ball_slice in slices:
@@ -2909,7 +3077,12 @@ class fast_intercept_finder:
             if shot_type == 3:
                 return Aerial(
                     intercept_time,
-                    fast_aerial=bool(result.get("fast", True))
+                    fast_aerial=bool(result.get("fast", True)),
+                    boost_commit=(
+                        bool(result.get("fast", True))
+                        and agent.boost_amount != "unlimited"
+                        and agent.me.boost > 0
+                    )
                 )
 
             constructors = {
@@ -3736,12 +3909,17 @@ class jump_shot:
     # Hits a target point at a target time towards a target direction
     def __init__(self, intercept_time, targets=None):
         self.ball_location = None
-        self.ball_velocity = None
+        self.ball_velocity = Vector()
         self.shot_vector = None
         self.offset_target = None
-        self.hitbox_target = None
         self.intercept_time = intercept_time
         self.targets = targets
+        # Reuse Aerial's predicted post-contact shot direction, but keep this
+        # as aim planning only; jump_shot retains its existing launch and
+        # nose-first dodge controller.
+        self._contact_aim = Aerial(
+            intercept_time, targets, fast_aerial=False
+        )
         self.goal_aim_point = None
         # Flags for what part of the routine we are in
         self.jumping = False
@@ -3760,6 +3938,8 @@ class jump_shot:
     def update(self, shot):
         self.intercept_time = shot.intercept_time
         self.targets = shot.targets
+        self._contact_aim.intercept_time = shot.intercept_time
+        self._contact_aim.targets = shot.targets
     def needs_half_flip(self, agent):
         if self.targets is None:
             return False
@@ -3827,13 +4007,15 @@ class jump_shot:
 
             agent.dbg_2d(f"Shot slice #: {slice_n}")
 
-            predicted_physics = slices[slice_n].physics
-            ball = predicted_physics.location
-            velocity = predicted_physics.velocity
+            ball = slices[slice_n].physics.location
             self.ball_location = Vector(ball.x, ball.y, ball.z)
-            self.ball_velocity = Vector(
-                velocity.x, velocity.y, velocity.z
+            ball_physics = slices[slice_n].physics
+            predicted_ball_velocity = Vector(
+                ball_physics.velocity.x,
+                ball_physics.velocity.y,
+                ball_physics.velocity.z
             )
+            self.ball_velocity = predicted_ball_velocity
 
             self.needed_jump_time = virxrlcu.get_jump_time(
                 ball.z - agent.me.location.z,
@@ -3841,28 +4023,47 @@ class jump_shot:
                 agent.gravity.z
             )
 
-        # Use the same relative goal aim and post-hit trajectory prediction
-        # as Aerial. This accounts for the predicted ball velocity and the
-        # shot's travel toward goal instead of aiming only at goal centre.
-        self.goal_aim_point = _relative_goal_aim_point(
-            agent, self.targets
-        )
+        # Always aim the contact toward the opponent's goal.
+        # Never use car-to-ball direction as the shot direction:
+        # that can put the approach point on the wrong side of the ball.
+        if self.goal_aim_point is None:
+            self.goal_aim_point = _relative_goal_aim_point(agent, self.targets)
         target_center = self.goal_aim_point
-        if self.ball_velocity is None:
-            current_ball_velocity = agent.ball.velocity
-            self.ball_velocity = Vector(
-                current_ball_velocity.x,
-                current_ball_velocity.y,
-                current_ball_velocity.z
-            )
 
-        self.shot_vector = Aerial._party_cannon_shot_direction(
-            self, agent, self.ball_location,
-            self.ball_velocity, time_remaining
-        )
+        goal_shot_vector = (
+            target_center - self.ball_location
+        ).flatten().normalize()
 
-        # Apply the existing Party Cannon jump-shot wall correction before
-        # constructing the hitbox-aware car reference point.
+        # Predict the outgoing ball path using Aerial's relative goal aim
+        # point and contact-power model. Blend it conservatively with the
+        # existing goal-centre direction so the established ground-shot
+        # contact choice stays stable.
+        if self.ball_location is not None:
+            predicted_shot_vector = (
+                self._contact_aim._party_cannon_shot_direction(
+                    agent,
+                    self.ball_location,
+                    self.ball_velocity,
+                    T
+                )
+            ).flatten().normalize()
+        else:
+            predicted_shot_vector = Vector()
+
+        if (
+            predicted_shot_vector.magnitude() > 0.001
+            and goal_shot_vector.magnitude() > 0.001
+        ):
+            self.shot_vector = (
+                goal_shot_vector * 0.65
+                + predicted_shot_vector * 0.35
+            ).normalize()
+        else:
+            self.shot_vector = goal_shot_vector
+
+        # Apply Party Cannon's wall-shot contact-angle correction before
+        # building the approach target, so all existing contact choices use
+        # the corrected shot direction.
         self.wall_shot_active = False
         self.wall_shot_normal = None
         self.shot_vector, wall_normal, wall_clearance = WallShot.adjust_jump(
@@ -3878,51 +4079,39 @@ class jump_shot:
                 flush=True
             )
 
-        # Match Aerial's real-hitbox contact point, but retain the jump
-        # shot's existing best_shot_value standoff. Extending the reference
-        # point when necessary preserves its current approach/power distance.
-        nominal_target = (
-            self.ball_location
-            - self.shot_vector * agent.best_shot_value
+        # Aim the car reference point so the front of its actual hitbox,
+        # rather than its origin, reaches the chosen ball contact surface.
+        hitbox_target = self._contact_aim._party_cannon_hitbox_target(
+            agent, self.ball_location, self.shot_vector
         )
-        self.hitbox_target = Aerial._party_cannon_hitbox_target(
-            self, agent, self.ball_location, self.shot_vector
-        )
-        hitbox = agent.me.hitbox
-        half_length = float(getattr(hitbox, "length", 118.01)) * 0.5
-        hitbox_standoff = 92.75 + half_length
-        preserved_standoff = max(
-            float(agent.best_shot_value), hitbox_standoff
-        )
-        self.hitbox_target -= self.shot_vector * (
-            preserved_standoff - hitbox_standoff
-        )
-        geometry_adjustment = self.hitbox_target - nominal_target
-        self.offset_target = self.hitbox_target.copy()
-
+        self.offset_target = hitbox_target.copy()
         contact_label = getattr(self, "contact_label", None)
+        hitbox = agent.me.hitbox
+        contact_standoff = (
+            92.75
+            + float(getattr(hitbox, "length", 118.01)) * 0.5
+        )
         refreshed_contact = _contact_approach_from_label(
             self.ball_location,
             self.shot_vector,
             contact_label,
-            agent.best_shot_value
+            contact_standoff
         )
         if refreshed_contact is not None:
-            # Keep the selected centre/left/right/high/low contact, while
-            # applying the same hitbox-centre correction used by Aerial.
-            self.offset_target = refreshed_contact + geometry_adjustment
-            contact_normal = (
-                refreshed_contact - self.ball_location
-            ).normalize()
-            self.contact_point = (
-                self.ball_location + contact_normal * 92.75
+            nominal_hitbox_target = (
+                self.ball_location
+                - self.shot_vector * contact_standoff
             )
-            self.contact_approach_target = self.offset_target.copy()
+            refreshed_contact += hitbox_target - nominal_hitbox_target
+            self.offset_target = refreshed_contact
+            self.contact_point = (
+                self.ball_location
+                + (refreshed_contact - self.ball_location).normalize() * 92.75
+            )
+            self.contact_approach_target = refreshed_contact.copy()
             print(
                 f"[JUMP CONTACT REFRESH] {contact_label} "
-                f"point={self.contact_point} approach={self.offset_target} "
-                f"hitbox_adjust=({geometry_adjustment.x:.1f},"
-                f"{geometry_adjustment.y:.1f},{geometry_adjustment.z:.1f})",
+                f"point={self.contact_point} approach={self.offset_target}",
                 flush=True
             )
 
@@ -3944,7 +4133,6 @@ class jump_shot:
             self.offset_target = (
                 self.ball_location
                 - left_of_shot * lateral_distance * side_sign
-                + geometry_adjustment
             )
             self.contact_point = (
                 self.ball_location
