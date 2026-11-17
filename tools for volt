@@ -1675,9 +1675,8 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
             me
         )
 
-        # Even when the best generic touch is a ground/jump option, retain
-        # a separate reachable fast aerial as a useful attacking pop or
-        # teammate-centering touch.
+        # Retain a reachable aerial-only touch when it is useful. Prefer
+        # the normal aerial; fast aerials are only eligible above 350 units.
         if (
             slice_can_aerial
             and (
@@ -1698,18 +1697,21 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
             if (
                 fast_aerial.get("found") == 1
                 and int(fast_aerial.get("shot_type", -1)) == 3
-                and bool(fast_aerial.get("fast", False))
-            ):
-                fast_aerial_score = (
-                    shot_candidate_score(
-                        agent,
-                        ball_slice,
-                        fast_aerial,
-                        time_remaining,
-                        target=None
-                    )
-                    - 0.45
+                and (
+                    not bool(fast_aerial.get("fast", False))
+                    or ball_location[2] > 350
                 )
+            ):
+                is_fast_aerial = bool(fast_aerial.get("fast", False))
+                fast_aerial_score = shot_candidate_score(
+                    agent,
+                    ball_slice,
+                    fast_aerial,
+                    time_remaining,
+                    target=None
+                )
+                if is_fast_aerial:
+                    fast_aerial_score -= 0.45
                 if fast_aerial_score < best_score:
                     best_score = fast_aerial_score
                     best_shot = {
