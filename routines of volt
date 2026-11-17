@@ -3736,8 +3736,10 @@ class jump_shot:
     # Hits a target point at a target time towards a target direction
     def __init__(self, intercept_time, targets=None):
         self.ball_location = None
+        self.ball_velocity = None
         self.shot_vector = None
         self.offset_target = None
+        self.hitbox_target = None
         self.intercept_time = intercept_time
         self.targets = targets
         self.goal_aim_point = None
@@ -3825,8 +3827,13 @@ class jump_shot:
 
             agent.dbg_2d(f"Shot slice #: {slice_n}")
 
-            ball = slices[slice_n].physics.location
+            predicted_physics = slices[slice_n].physics
+            ball = predicted_physics.location
+            velocity = predicted_physics.velocity
             self.ball_location = Vector(ball.x, ball.y, ball.z)
+            self.ball_velocity = Vector(
+                velocity.x, velocity.y, velocity.z
+            )
 
             self.needed_jump_time = virxrlcu.get_jump_time(
                 ball.z - agent.me.location.z,
@@ -3834,20 +3841,23 @@ class jump_shot:
                 agent.gravity.z
             )
 
-        # Always aim the contact toward the opponent's goal.
-        # Never use car-to-ball direction as the shot direction:
-        # that can put the approach point on the wrong side of the ball.
-        if self.goal_aim_point is None:
-            self.goal_aim_point = _relative_goal_aim_point(agent, self.targets)
+        # Use the same relative goal aim and post-hit trajectory prediction
+        # as Aerial. This accounts for the predicted ball velocity and the
+        # shot's travel toward goal instead of aiming only at goal centre.
+        self.goal_aim_point = _relative_goal_aim_point(
+            agent, self.targets
+        )
         target_center = self.goal_aim_point
+        if self.ball_velocity is None:
+            self.ball_velocity = agent.ball.velocity.copy()
 
-        self.shot_vector = (
-            target_center - self.ball_location
-        ).flatten().normalize()
+        self.shot_vector = Aerial._party_cannon_shot_direction(
+            self, agent, self.ball_location,
+            self.ball_velocity, time_remaining
+        )
 
-        # Apply Party Cannon's wall-shot contact-angle correction before
-        # building the approach target, so all existing contact choices use
-        # the corrected shot direction.
+        # Apply the existing Party Cannon jump-shot wall correction before
+        # constructing the hitbox-aware car reference point.
         self.wall_shot_active = False
         self.wall_shot_normal = None
         self.shot_vector, wall_normal, wall_clearance = WallShot.adjust_jump(
@@ -3863,11 +3873,28 @@ class jump_shot:
                 flush=True
             )
 
-        # Approach from behind the ball relative to the opponent's goal.
-        self.offset_target = (
+        # Match Aerial's real-hitbox contact point, but retain the jump
+        # shot's existing best_shot_value standoff. Extending the reference
+        # point when necessary preserves its current approach/power distance.
+        nominal_target = (
             self.ball_location
             - self.shot_vector * agent.best_shot_value
         )
+        self.hitbox_target = Aerial._party_cannon_hitbox_target(
+            self, agent, self.ball_location, self.shot_vector
+        )
+        hitbox = agent.me.hitbox
+        half_length = float(getattr(hitbox, "length", 118.01)) * 0.5
+        hitbox_standoff = 92.75 + half_length
+        preserved_standoff = max(
+            float(agent.best_shot_value), hitbox_standoff
+        )
+        self.hitbox_target -= self.shot_vector * (
+            preserved_standoff - hitbox_standoff
+        )
+        geometry_adjustment = self.hitbox_target - nominal_target
+        self.offset_target = self.hitbox_target.copy()
+
         contact_label = getattr(self, "contact_label", None)
         refreshed_contact = _contact_approach_from_label(
             self.ball_location,
@@ -3876,15 +3903,21 @@ class jump_shot:
             agent.best_shot_value
         )
         if refreshed_contact is not None:
-            self.offset_target = refreshed_contact
+            # Keep the selected centre/left/right/high/low contact, while
+            # applying the same hitbox-centre correction used by Aerial.
+            self.offset_target = refreshed_contact + geometry_adjustment
+            contact_normal = (
+                refreshed_contact - self.ball_location
+            ).normalize()
             self.contact_point = (
-                self.ball_location
-                + (refreshed_contact - self.ball_location).normalize() * 92.75
+                self.ball_location + contact_normal * 92.75
             )
-            self.contact_approach_target = refreshed_contact.copy()
+            self.contact_approach_target = self.offset_target.copy()
             print(
                 f"[JUMP CONTACT REFRESH] {contact_label} "
-                f"point={self.contact_point} approach={self.offset_target}",
+                f"point={self.contact_point} approach={self.offset_target} "
+                f"hitbox_adjust=({geometry_adjustment.x:.1f},"
+                f"{geometry_adjustment.y:.1f},{geometry_adjustment.z:.1f})",
                 flush=True
             )
 
@@ -3906,6 +3939,7 @@ class jump_shot:
             self.offset_target = (
                 self.ball_location
                 - left_of_shot * lateral_distance * side_sign
+                + geometry_adjustment
             )
             self.contact_point = (
                 self.ball_location
