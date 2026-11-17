@@ -1,6 +1,7 @@
 from util.routines import Aerial, double_jump, ground_shot, jump_shot, side_shot, virxrlcu, wall_approach
 from util.utils import Vector, math, side, cap
 from util.grid_double_jump import find_double_jump as grid_find_double_jump
+from util.grid_double_jump import new_jump_time, new_max_jump_height
 
 
 
@@ -1045,6 +1046,101 @@ def _parse_shot_with_boost_budget(
     return {"found": 0}
 
 
+def _noob_black_single_jump_candidate(agent, targets, horizon=5.0):
+    """Noob Black's 60 Hz predicted-slice reachability test for a single jump."""
+    prediction = getattr(agent, "ball_prediction_struct", None)
+    slices = getattr(prediction, "slices", None) if prediction is not None else None
+    if not slices or agent.me.airborne:
+        return None
+
+    car = agent.me.location
+    speed = agent.me.velocity.flatten().magnitude()
+    boost = 999.0 if agent.boost_amount == "unlimited" else max(0.0, float(agent.me.boost))
+    travel_d = [0.0]
+    travel_v = [max(0.0, speed)]
+    for tick in range(600):
+        v = travel_v[-1]
+        use_boost = tick / 3.6 < boost
+        if v <= 1400:
+            next_v = v + (1600 - 1440 / 1400 * v + (2975 / 3 if use_boost else 0)) / 120
+        elif v < 1410:
+            next_v = v + (22560 - 16 * v + (2975 / 3 if use_boost else 0)) / 120
+        else:
+            next_v = min(v + (2975 / 360 if use_boost else 0), 2300)
+        travel_v.append(next_v)
+        travel_d.append(travel_d[-1] + next_v / 120)
+
+    goal_y = (
+        (targets[0][1] + targets[1][1]) * 0.5
+        if targets is not None
+        else agent.foe_goal.location.y
+    )
+    max_jump_height = new_max_jump_height(False)
+    wait_for_fall = -1.0
+    start_time = agent.time
+    for step in range(1, min(301, int(horizon * 60) + 1)):
+        t = step / 60.0
+        wanted_time = start_time + t
+        index = min(
+            range(len(slices)),
+            key=lambda i: abs(slices[i].game_seconds - wanted_time)
+        )
+        ball_slice = slices[index]
+        if abs(ball_slice.game_seconds - wanted_time) > 0.025:
+            continue
+
+        bp = ball_slice.physics
+        ball = Vector(bp.location.x, bp.location.y, bp.location.z)
+        if abs(ball.y) > 5212.75:
+            break
+
+        deviation = abs(ball.y - goal_y)
+        target = Vector(
+            0,
+            goal_y,
+            deviation * math.tan(min(deviation / 5120.0, 1.0) * math.pi / 4)
+        )
+        shot_direction = (target - ball).normalize()
+        if shot_direction.magnitude() < 0.001:
+            continue
+        contact = ball - shot_direction * 134.85
+        required_height = max(contact.z - car.z, 0.0)
+        jump_time, _ = new_jump_time(required_height, False)
+        if jump_time is None or jump_time < 0:
+            continue
+
+        ticks_charging = max(0, min(600, round(t * 120)))
+        ticks_driving = max(
+            0,
+            min(600, round(min(max(t - jump_time, 0.0), 5.0) * 120))
+        )
+        distance = contact.flatten().dist(car.flatten())
+        reachable = (
+            travel_d[ticks_driving]
+            + travel_v[ticks_driving]
+            * (ticks_charging - ticks_driving) / 120
+        )
+        if reachable < distance:
+            continue
+
+        if required_height > max_jump_height:
+            if wait_for_fall < 0:
+                wait_for_fall = t
+            continue
+
+        return {
+            "time": ball_slice.game_seconds,
+            "ball_location": ball,
+            "contact_location": contact,
+            "shot_direction": shot_direction,
+            "wait_for_fall": wait_for_fall,
+            "jump_time": jump_time,
+            "reachable": reachable,
+            "distance": distance
+        }
+    return None
+
+
 def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_jump=True, can_ground=True):
     if not can_aerial and not can_double_jump and not can_jump and not can_ground:
         agent.print("WARNING: All shots were disabled when find_shot was ran")
@@ -1237,6 +1333,63 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                 best_intercept_time = intercept_time
                 best_ball_z = ball_location[2]
                 best_ball_location = Vector(*ball_location)
+    # Noob Black's single-jump planner scans the 60 Hz prediction and
+    # selects its first physically reachable contact. Only replace another
+    # single-jump candidate (or an empty result); ground, double-jump and
+    # aerial selections remain under Volt's existing planner.
+    if can_jump:
+        noob_candidate = _noob_black_single_jump_candidate(
+            agent, target, min(cap_, 5.0)
+        )
+        if noob_candidate is not None and (
+            best_shot is None
+            or int(best_shot.get("shot_type", 0)) == 1
+        ):
+            noob_time_remaining = (
+                noob_candidate["time"] - agent.time - (1 / 120)
+            )
+            noob_slice = min(
+                slices,
+                key=lambda item: abs(
+                    item.game_seconds - noob_candidate["time"]
+                )
+            )
+            noob_ball_tuple = (
+                noob_candidate["ball_location"].x,
+                noob_candidate["ball_location"].y,
+                noob_candidate["ball_location"].z
+            )
+            noob_shot = {
+                "found": 1,
+                "shot_type": 1,
+                "fast": False,
+                "targets": (tuple(target[0]), tuple(target[1]))
+            }
+            if (
+                noob_time_remaining > 0
+                and useful_non_aerial_shot(
+                    agent,
+                    noob_ball_tuple,
+                    noob_slice.physics.velocity,
+                    noob_shot,
+                    noob_candidate["time"]
+                )
+            ):
+                best_shot = noob_shot
+                best_intercept_time = noob_candidate["time"]
+                best_ball_z = noob_candidate["ball_location"].z
+                best_ball_location = noob_candidate["ball_location"]
+                best_score = noob_time_remaining + 0.12
+                print(
+                    f"[NOOB BLACK JUMP FIND] earliest reachable | "
+                    f"T={noob_time_remaining:.3f} "
+                    f"jump={noob_candidate['jump_time']:.3f} "
+                    f"distance={noob_candidate['distance']:.0f} "
+                    f"reachable={noob_candidate['reachable']:.0f} "
+                    f"wait_for_fall={noob_candidate['wait_for_fall']:.3f}",
+                    flush=True
+                )
+
     # Compare Grid's candidate against Volt's best C-parser candidate.
     if grid_candidate is not None:
         grid_time = grid_candidate["time"]
