@@ -4469,6 +4469,7 @@ class ground_shot:
         self.contact_approach_target = None
         self.contact_normal = None
         self.contact_label = None
+        self.last_dribble_debug = -1.0
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -4502,6 +4503,80 @@ class ground_shot:
         local_target = agent.me.local_location(offset_target)
 
         return local_target.x < 0
+
+    def _run_ground_dribble(self, agent, time_remaining):
+        """Carry a slow, grounded ball along the planned shot line."""
+        ball = agent.ball.location
+        ball_velocity = agent.ball.velocity
+
+        # Only take possession of a genuinely rolling ball. Let normal
+        # ground-shot handling deal with bouncing, fast, or airborne balls.
+        if (
+            ball.z > 112
+            or ball_velocity.z > 150
+            or ball_velocity.z < -250
+            or time_remaining <= 0.70
+        ):
+            return False
+
+        aim_point = _relative_goal_aim_point(agent, self.targets)
+        drive_direction = (aim_point - ball).flatten().normalize()
+        if drive_direction.magnitude() < 0.001:
+            return False
+
+        local_ball = agent.me.local_location(ball)
+        car_to_ball = (ball - agent.me.location).flatten()
+        if car_to_ball.magnitude() < 1:
+            return False
+
+        # The car must already be behind the ball and reasonably aligned.
+        # This avoids trying to dribble while crossing in front or reaching
+        # around the side of the ball.
+        approach_alignment = car_to_ball.normalize().dot(drive_direction)
+        nose_alignment = agent.me.forward.flatten().normalize().dot(
+            drive_direction
+        )
+        if (
+            not 70 < local_ball.x < 340
+            or abs(local_ball.y) > 170
+            or abs(local_ball.z) > 190
+            or approach_alignment < 0.72
+            or nose_alignment < 0.58
+        ):
+            return False
+
+        ball_speed = ball_velocity.flatten().dot(drive_direction)
+        if ball_velocity.flatten().magnitude() > 1500 or ball_speed > 1250:
+            return False
+
+        # Keep the ball moving, but don't accelerate through it at full
+        # shot speed. The target stays ahead of the ball on the live
+        # ball-to-goal line, so steering corrections change its trajectory.
+        target_speed = cap(max(0.0, ball_speed) + 300, 650, 1050)
+        drive_target = cap_in_field(
+            agent, ball + drive_direction * 650
+        )
+        local_drive_target = agent.me.local_location(drive_target)
+
+        defaultDrive(agent, target_speed, local_drive_target)
+        agent.controller.boost = False
+
+        # Refresh the contact geometry around the ball we're actually
+        # carrying, rather than the old prediction slice.
+        self.ball_location = ball.copy()
+        self.shot_vector = drive_direction
+        self.offset_target = ball - drive_direction * agent.best_shot_value
+
+        if agent.time - self.last_dribble_debug >= 0.5:
+            self.last_dribble_debug = agent.time
+            print(
+                f"[GROUND DRIBBLE] carrying | "
+                f"ball_speed={ball_speed:.0f} "
+                f"target_speed={target_speed:.0f} "
+                f"alignment={approach_alignment:.2f}",
+                flush=True
+            )
+        return True
 
     def run(self, agent: VirxERLU):
         if not agent.shooting:
@@ -4560,6 +4635,9 @@ class ground_shot:
                 flush=True
             )
         agent.sphere(self.ball_location, 92.75)
+
+        if self._run_ground_dribble(agent, time_remaining):
+            return
 
         l_ball = agent.me.local(agent.ball.location)
         car_to_ball = agent.ball.location - agent.me.location
