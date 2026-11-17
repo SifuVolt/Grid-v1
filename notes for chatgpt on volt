@@ -407,3 +407,13 @@ This file is the project handoff and change checklist. Read it before every code
 
 - Follow-up: applied the same strict height gate to the kickoff and general fallback paths in `fast_intercept_finder`, so no later fallback can return a fast aerial for a ball at or below 350 units.
 - Follow-up commit: `73bcb1c`.
+
+
+## Fast-aerial live-height safety correction (2026-11-17)
+
+- The earlier 350-unit restriction checked only predicted ball height at the selected intercept. A ball currently near the floor could still qualify if a later prediction slice rose above 350.
+- Fast aerial eligibility now requires BOTH the current live ball centre and the predicted contact ball centre to be strictly above 350 units.
+- Applied this to the initial targeted parser result, aerial-only fallback in both `find_shot` and `find_any_shot`, and fast-aerial branches in `fast_intercept_finder` (prepass, kickoff and general fallback).
+- Added a final guard inside `Aerial.run` for direct callers or any future selection path that bypasses the finders. If either height is 350 or lower, it downgrades to the normal aerial sequence rather than using the fast double-jump sequence.
+- Normal aerial candidates remain eligible at any height when the parser reports them reachable. Normal aerial controller, boost, contact geometry and orientation are unchanged.
+- Static source verification only; no Python compile or in-game test has been performed.
