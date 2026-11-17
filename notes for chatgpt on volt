@@ -326,3 +326,12 @@ This file is the project handoff and change checklist. Read it before every code
   - `0b6d000`: add predicted shot direction and hitbox-aware contact geometry.
   - `aff3817`: make the ball-velocity fallback explicit.
 - Static fetch checks confirm the Aerial calculations are reused, the existing standoff is preserved, contact labels/side mode remain, and the jump/wall/dodge paths remain present. No Python compile, simulation, or in-game test has been performed.
+
+
+## Jump-shot shared Aerial calculation runtime fix (2026-11-17)
+
+- Local traceback showed that `jump_shot` called `Aerial._party_cannon_shot_direction` with the jump-shot instance as `self`, but the method called `self._party_cannon_shot_power_modifier`. The jump-shot instance does not define that method.
+- Fixed the shared calculation to call the modifier explicitly as `Aerial._party_cannon_shot_power_modifier(...)`. The modifier is static and does not depend on Aerial instance state, so this lets both Aerial and jump_shot use the same calculation safely.
+- No change to the formula, shot power, contact geometry, jump timing, or dodge logic.
+- Commit: `8a18604`.
+- Static source verification only; no Python compile or in-game test has been performed.
