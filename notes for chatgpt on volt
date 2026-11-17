@@ -441,3 +441,11 @@ This file is the project handoff and change checklist. Read it before every code
 - The carry controller requires the car to be behind and facing the ball along the planned shot direction; otherwise the existing approach logic continues to reposition. It steers to the trajectory-aware contact approach point and retains the existing turn-aware flank approach.
 - It does not impose the previous 1050 uu/s cap: its speed target preserves the existing intercept speed requirement and adds a modest lead over the ball's projected forward speed, up to the normal maximum speed. Existing shot timing, jump/flip decision, and airborne paths remain in place.
 - Static source verification only. No Python compile, simulation, or in-game test has been performed.
+
+## 21. Floor-only downward recovery with wheels-down landing (2026-11-17)
+
+- The user reverted the previous recovery/dribble work; do not assume the old implementation is present. The current recovery edit is limited to the `recovery.run` controller.
+- When `boost_to_surface` is enabled and `find_landing_plane` selects the floor, the car points its nose straight down and boosts only when aligned, with adequate floor clearance, and below the speed limits.
+- Boost is cut before the final landing phase. At 260 units of estimated hitbox clearance, the normal recovery PD controller takes over with world-up as the car's up reference so it can rotate onto its wheels before floor contact.
+- Side walls, back walls, and ceiling never receive recovery boost. Other landing planes keep the original recovery orientation.
+- No compile, simulation, or in-game test has been run.
