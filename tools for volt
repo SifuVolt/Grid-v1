@@ -1354,7 +1354,12 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
         routine = Aerial(
             best_intercept_time,
             best_targets,
-            best_shot["fast"]
+            best_shot["fast"],
+            boost_commit=(
+                best_shot["fast"]
+                and agent.boost_amount != "unlimited"
+                and agent.me.boost > 0
+            )
         )
     elif best_shot["shot_type"] in (0, 1) and can_jump:
         # A side shot is a goal-line correction, not a half-field choice.
@@ -1722,7 +1727,12 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
     if best_shot['shot_type'] == 3:
         routine = Aerial(
             best_intercept_time,
-            fast_aerial=best_shot['fast']
+            fast_aerial=best_shot['fast'],
+            boost_commit=(
+                best_shot['fast']
+                and agent.boost_amount != 'unlimited'
+                and agent.me.boost > 0
+            )
         )
         contact = select_ball_contact(
             agent,
@@ -1883,9 +1893,10 @@ def find_pass_shot(agent, cap_=4):
         Vector(lead_x + 350, lead_y, 120)
     )
 
-    # Keep this conservative: only grounded shot types, no aerial pass attempts.
+    # Allow a fast aerial when it can reach the teammate's lead point; its
+    # aerial controller keeps the same contact geometry and carries the pass.
     return find_shot(
-        agent, target, cap_=cap_, can_aerial=False,
+        agent, target, cap_=cap_, can_aerial=True,
         can_double_jump=False, can_jump=True, can_ground=True
     )
 
