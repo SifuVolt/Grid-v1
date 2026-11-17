@@ -268,3 +268,13 @@ This file is the project handoff and change checklist. Read it before every code
 - Added Noob Black's 60 Hz predicted-slice single-jump reachability scan to both `find_shot` and `find_any_shot`. It selects the earliest reachable single-jump contact and replaces only another single-jump candidate or an empty result. Existing ground, double-jump, aerial, and side-shot selection remains intact.
 - The original Noob Black routine also contains wall, flick, double-jump, aerial, strategy, and goalie behavior; those are not part of this single-jump port.
 - This is a targeted adaptation to Volt's VirxERLU API, not a line-for-line copy of Noob Black's full RLBot v5 bot. Compilation and in-game testing must still be performed locally.
+
+
+## Jump-shot directional flip and aerial far-post aim (2026-11-17)
+
+- Updated the normal `jump_shot` post-takeoff orientation to match the existing `double_jump` tracking behaviour: after the first jump it uses `defaultPD` toward the planned contact/approach point rather than simply tracking the ball centre.
+- The jump-shot still uses its existing first-jump physics, hold/release timing, contact-window checks and hitbox safety checks. At the dodge window, the normal shot now derives the dodge from the local shot vector, producing a forward W-style flip or a W+A / W+D diagonal when the shot direction requires lateral input. It avoids turning a slightly misaligned normal shot into an unintended backflip; the existing explicit emergency/rear-contact backflip cases remain.
+- Updated normal `Aerial` shot-direction prediction to bias toward the far side of the goal: if the predicted ball is right of the goal centre, aim left; if left, aim right. Balls within 180 units of the goal centre's lateral line retain the direct centre aim. The target offset is capped to keep it inside the posts.
+- The aerial-only side bias is passed explicitly by `Aerial.run`; the jump-shot's use of the shared Party Cannon shot-direction calculation does not enable that bias.
+- Preserved `double_jump`, `side_shot`, the separate fast-aerial power-shot class, and shot selection.
+- Static fetch verification confirmed the aerial-only flag, jump-shot contact orientation, directional dodge calculation, and the continued presence of the existing routine classes. No Python compile or in-game test has been performed; pull the branch locally before testing.
