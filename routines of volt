@@ -5312,10 +5312,13 @@ class generic_kickoff:
 
 
 class recovery:
-    # Point towards our velocity vector and land upright, unless we aren't moving very fast
-    # A vector can be provided to control where the car points when it lands
+    # Point towards our velocity vector and land upright, unless we aren't moving very fast.
+    # A vector can be provided to control where the car points when it lands.
     def __init__(self, target=None):
         self.target = target
+        self.surface_boost_target = None
+        self.surface_boost_start = None
+        self.surface_boost_plane = None
 
     def run(self, agent: VirxERLU):
         target = agent.me.velocity.normalize() if self.target is None else (self.target - agent.me.location).normalize()
@@ -5350,6 +5353,82 @@ class recovery:
             Vector(z=-1),
             Vector(z=1)
         ]
+
+        # Party Cannon's AerialShot controller predicts the car's unboosted
+        # position, aims at the remaining positional error, and only boosts
+        # when the error is sufficiently forward-aligned. Recovery uses that
+        # same controller to add a short push toward the selected landing
+        # surface. Ceiling recovery deliberately keeps the original behaviour.
+        if agent.me.airborne and landing_plane != 4:
+            surface_direction = -r_switch[landing_plane]
+
+            if (
+                self.surface_boost_target is None
+                or self.surface_boost_plane != landing_plane
+            ):
+                boost_horizon = 1.0
+                natural_position = (
+                    agent.me.location
+                    + agent.me.velocity * boost_horizon
+                    + agent.gravity * (0.5 * boost_horizon * boost_horizon)
+                )
+                self.surface_boost_target = natural_position + surface_direction * 180
+                self.surface_boost_start = agent.time
+                self.surface_boost_plane = landing_plane
+
+            time_remaining = max(
+                dt,
+                1.0 - max(0.0, agent.time - self.surface_boost_start)
+            )
+            future_position = (
+                agent.me.location
+                + agent.me.velocity * time_remaining
+                + agent.gravity * (0.5 * time_remaining * time_remaining)
+            )
+            offset = self.surface_boost_target - future_position
+            forward_need = offset.dot(agent.me.forward) / time_remaining
+            total_acceleration = agent.boost_accel + throttle_accel
+            required_acceleration = (
+                2 * offset.magnitude() / (time_remaining * time_remaining)
+            )
+            angle_cos = cap(
+                offset.normalize().dot(agent.me.forward), -1, 1
+            )
+
+            # Rotate the nose toward the predicted correction point first.
+            # The landing-surface up vector is retained so the car can settle
+            # into the correct wall/floor orientation after the boost phase.
+            defaultPD(
+                agent,
+                agent.me.local(agent.me.location + offset),
+                up=agent.me.local(r_switch[landing_plane])
+            )
+
+            agent.controller.boost = (
+                agent.me.boost > 0
+                and required_acceleration * 0.8 <= total_acceleration
+                and forward_need >= total_acceleration * max(dt, 13 / 120)
+                and angle_cos >= math.cos(0.4)
+                and time_remaining > dt
+            )
+            agent.controller.throttle = cap(
+                forward_need / (
+                    throttle_accel * max(dt, 1 / 120)
+                ),
+                -1,
+                1
+            )
+
+            # Once the predictive boost correction is spent, return to the
+            # normal landing orientation controller below.
+            if (
+                time_remaining > dt
+                and offset.magnitude() > 35
+                and agent.controller.boost
+            ):
+                if not agent.me.airborne:
+                    agent.pop()
+                return
 
         defaultPD(agent, agent.me.local(t_switch[landing_plane]), up=agent.me.local(r_switch[landing_plane]))
         agent.controller.throttle = 1
