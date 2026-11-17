@@ -250,3 +250,12 @@ This file is the project handoff and change checklist. Read it before every code
 - At the dodge window, compare the local front-nose centre (hitbox half-length plus local hitbox offset) with the predicted ball surface point (ball centre minus 92.75 units along the outgoing shot vector).
 - Require tight lateral/vertical nose alignment and the car's forward axis to face the outgoing shot vector. Drive the final dodge along that shot vector rather than the car-centre approach marker.
 - This is scoped to `FastAerialPowerShot`; ordinary `Aerial` and `jump_shot` remain unchanged.
+
+
+## 14. Falling-ball jump-shot profile (2026-11-17)
+
+- When the selected single-jump intercept is airborne and descending (ball z > 150 and vertical velocity < -80), `jump_shot` uses a dedicated falling-ball jump-shot profile rather than ordinary Aerial-style orientation.
+- The routine retains the Party Cannon-derived shot direction and hitbox contact target. During the first 0.12 seconds of a non-quick jump it aligns to the contact and pitches back; after that it returns to 3D contact orientation and uses the existing boost projection, nose-contact dodge, and recovery logic.
+- Shot candidate scoring gives descending airborne single-jump candidates a stronger time preference (0.85 per second rather than 0.22) while preserving existing shot-angle, weak-contact, teammate, and goal-quality penalties.
+- The change is scoped to descending airborne single-jump shots. Grounded shots, double jumps, ordinary Aerial routines, and side shots retain their existing paths.
+- No compile or in-game test has been run yet. Validate that the car jumps before the ball reaches the floor, tilts back only during initial takeoff, then aligns and dodges through the predicted contact. Tune from match diagnostics rather than loosening contact geometry blindly.
