@@ -5312,13 +5312,11 @@ class generic_kickoff:
 
 
 class recovery:
-    # Point towards our velocity vector and land upright, unless we aren't moving very fast.
-    # A vector can be provided to control where the car points when it lands.
-    def __init__(self, target=None):
+    # Point towards our velocity vector and land upright, unless we aren't moving very fast
+    # A vector can be provided to control where the car points when it lands
+    def __init__(self, target=None, boost_to_surface=False):
         self.target = target
-        self.surface_boost_target = None
-        self.surface_boost_start = None
-        self.surface_boost_plane = None
+        self.boost_to_surface = boost_to_surface
 
     def run(self, agent: VirxERLU):
         target = agent.me.velocity.normalize() if self.target is None else (self.target - agent.me.location).normalize()
@@ -5354,93 +5352,51 @@ class recovery:
             Vector(z=1)
         ]
 
-        # Party Cannon's AerialShot controller predicts the car's unboosted
-        # position, aims at the remaining positional error, and only boosts
-        # when the error is sufficiently forward-aligned. Recovery uses that
-        # same controller to add a short push toward the selected landing
-        # surface. Ceiling recovery deliberately keeps the original behaviour.
-        if agent.me.airborne and landing_plane != 4:
-            surface_direction = -r_switch[landing_plane]
-
-            if (
-                self.surface_boost_target is None
-                or self.surface_boost_plane != landing_plane
-            ):
-                boost_horizon = 1.0
-                natural_position = (
-                    agent.me.location
-                    + agent.me.velocity * boost_horizon
-                    + agent.gravity * (0.5 * boost_horizon * boost_horizon)
-                )
-                self.surface_boost_target = natural_position + surface_direction * 180
-                self.surface_boost_start = agent.time
-                self.surface_boost_plane = landing_plane
-
-            time_remaining = max(
-                dt,
-                1.0 - max(0.0, agent.time - self.surface_boost_start)
-            )
-            future_position = (
-                agent.me.location
-                + agent.me.velocity * time_remaining
-                + agent.gravity * (0.5 * time_remaining * time_remaining)
-            )
-            offset = self.surface_boost_target - future_position
-            forward_need = offset.dot(agent.me.forward) / time_remaining
-            total_acceleration = agent.boost_accel + throttle_accel
-            required_acceleration = (
-                2 * offset.magnitude() / (time_remaining * time_remaining)
-            )
-            angle_cos = cap(
-                offset.normalize().dot(agent.me.forward), -1, 1
-            )
-
-            # Rotate the nose toward the predicted correction point first.
-            # The landing-surface up vector is retained so the car can settle
-            # into the correct wall/floor orientation after the boost phase.
-            defaultPD(
-                agent,
-                agent.me.local(agent.me.location + offset),
-                up=agent.me.local(r_switch[landing_plane])
-            )
-
-            agent.controller.boost = (
-                agent.me.boost > 0
-                and required_acceleration * 0.8 <= total_acceleration
-                and forward_need >= total_acceleration * max(dt, 13 / 120)
-                and angle_cos >= math.cos(0.4)
-                and time_remaining > dt
-            )
-            agent.controller.throttle = cap(
-                forward_need / (
-                    throttle_accel * max(dt, 1 / 120)
-                ),
-                -1,
-                1
-            )
-
-            # Once the predictive boost correction is spent, return to the
-            # normal landing orientation controller below.
-            if (
-                time_remaining > dt
-                and offset.magnitude() > 35
-                and required_acceleration * 0.8 <= total_acceleration
-            ):
-                return
-
         defaultPD(agent, agent.me.local(t_switch[landing_plane]), up=agent.me.local(r_switch[landing_plane]))
         agent.controller.throttle = 1
+
+        if self.boost_to_surface and agent.me.boost > 0:
+            # find_landing_plane selects the first surface on the car's
+            # current recovery path. Boost along that same controlled nose
+            # direction, but release it close to contact or at high speed.
+            surface_directions = (
+                Vector(x=1), Vector(x=-1),
+                Vector(y=1), Vector(y=-1),
+                Vector(z=1), Vector(z=-1)
+            )
+            surface_distances = (
+                max(0.0, 4096.0 - agent.me.location.x - agent.me.hitbox.width * 0.5),
+                max(0.0, agent.me.location.x + 4096.0 - agent.me.hitbox.width * 0.5),
+                max(0.0, 5120.0 - agent.me.location.y - agent.me.hitbox.length * 0.5),
+                max(0.0, agent.me.location.y + 5120.0 - agent.me.hitbox.length * 0.5),
+                max(0.0, 2044.0 - agent.me.location.z - agent.me.hitbox.height * 0.5),
+                max(0.0, agent.me.location.z - agent.me.hitbox.height * 0.5)
+            )
+            surface_direction = surface_directions[landing_plane]
+            surface_distance = surface_distances[landing_plane]
+            nose_target = t_switch[landing_plane].normalize()
+            nose_alignment = agent.me.forward.dot(nose_target)
+            speed_toward_surface = agent.me.velocity.dot(surface_direction)
+
+            agent.controller.boost = (
+                surface_distance > 180
+                and nose_alignment > 0.45
+                and speed_toward_surface < 1800
+                and agent.me.velocity.magnitude() < 2300
+            )
+
         if not agent.me.airborne:
             agent.pop()
 
 
 class ball_recovery:
     def __init__(self):
-        self.recovery = recovery()
+        self.recovery = recovery(boost_to_surface=True)
 
     def run(self, agent: VirxERLU):
-        self.recovery.target = agent.ball.location
-        self.recovery.target.y = cap(self.recovery.target.y, -5100, 5100)
+        # Let recovery choose the velocity-aligned point on its predicted
+        # landing surface instead of steering back toward the ball.
+        self.recovery.target = None
         self.recovery.run(agent)
 
 
