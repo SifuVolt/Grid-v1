@@ -3706,6 +3706,7 @@ class jump_shot:
         self.targets = targets
         self._aerial_aim = Aerial(intercept_time, targets, fast_aerial=False)
         self._airborne_aim = False
+        self._falling_airborne_shot = False
         self.goal_aim_point = None
         # Flags for what part of the routine we are in
         self.jumping = False
@@ -3820,6 +3821,18 @@ class jump_shot:
                     agent.me.velocity.z,
                     agent.gravity.z
                 )
+
+        # A descending airborne ball gets a dedicated jump-shot profile.
+        # Keep this separate from ordinary Aerial aiming: the car must make
+        # a jump-shot takeoff, briefly tilt back, then align for a real dodge.
+        self._falling_airborne_shot = (
+            self._airborne_aim
+            and self.ball_location is not None
+            and self.ball_velocity is not None
+            and self.ball_location.z > 150
+            and self.ball_velocity.z < -80
+            and not self.side_mode
+        )
 
         # Always aim the contact toward the opponent's goal.
         # Never use car-to-ball direction as the shot direction:
@@ -4174,14 +4187,30 @@ class jump_shot:
             d_direction = delta_x.normalize()
 
             if self._airborne_aim:
-                # Match Aerial's target tracking for airborne contacts.
+                # Descending airborne balls are treated as jump shots, not
+                # miniature Aerials: align to the contact, tilt back during
+                # the initial jump, then return to full 3D contact orientation.
                 orientation_target = (
                     delta_x if delta_x.magnitude() > 50 else self.shot_vector
                 )
                 orientation_target = agent.me.local(orientation_target)
 
                 if self.counter < 3 and not self.dodging:
-                    if agent.controller.jump:
+                    if self._falling_airborne_shot:
+                        if jump_elapsed <= 0.12 and not self.quick_shot:
+                            defaultPD(
+                                agent,
+                                orientation_target.flatten(),
+                                up=agent.me.up
+                            )
+                            agent.controller.pitch = 1
+                        else:
+                            defaultPD(
+                                agent,
+                                orientation_target,
+                                up=Vector(z=1)
+                            )
+                    elif agent.controller.jump:
                         if T > 0.45 and abs(delta_x.z) > 80:
                             defaultPD(
                                 agent,
@@ -4291,6 +4320,16 @@ class jump_shot:
                 return
 
             if self.counter == 3:
+                if self._falling_airborne_shot and not self.dodging:
+                    print(
+                        f"[FALLING BALL JUMP SHOT] T={T:.3f} "
+                        f"jump_elapsed={jump_elapsed:.3f} "
+                        f"ball_z={self.ball_location.z:.0f} "
+                        f"ball_vz={self.ball_velocity.z:.0f} "
+                        f"shot_dir=({self.shot_vector.x:.2f},"
+                        f"{self.shot_vector.y:.2f})",
+                        flush=True
+                    )
                 local_target = agent.me.local_location(
                     self.offset_target
                 ).flatten()
