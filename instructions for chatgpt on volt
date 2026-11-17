@@ -1617,6 +1617,7 @@ class Bot(VirxERLU):
             return
 
         # Share and compare shot opportunities with teammates.
+        self._opponent_rejected_shot = False
         self.update_teamplay()
 
         side = utils.side(self.team)
@@ -2410,6 +2411,27 @@ class Bot(VirxERLU):
                         self.clear()
                         self.push(shot)
                 return
+
+
+            # When opponent reachability invalidates every refreshed shot,
+            # don't let a stale jump/dodge routine fire anyway. Clear only
+            # the shot action and fall through into ordinary driving/defence.
+            active_shot_names = {
+                "ground_shot", "jump_shot", "elevated_shot",
+                "double_jump", "Aerial", "Redirect", "side_shot"
+            }
+            if (
+                shot is None
+                and getattr(self, "_opponent_rejected_shot", False)
+                and not self.is_clear()
+                and self.stack[0].__class__.__name__ in active_shot_names
+            ):
+                print(
+                    f"[SHOT CANCEL] opponent reaches first; "
+                    f"clearing {self.stack[0].__class__.__name__}",
+                    flush=True
+                )
+                self.clear()
 
 
 
