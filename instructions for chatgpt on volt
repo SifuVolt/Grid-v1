@@ -756,7 +756,8 @@ class Bot(VirxERLU):
                 # Only yield to a teammate who has a real shot/touch.
                 friend_has_opportunity = friend_type in (
                     "SHOT_FOUND",
-                    "ANY_SHOT_FOUND"
+                    "ANY_SHOT_FOUND",
+                    "WALL_PASS"
                 )
 
                 if (
@@ -1327,6 +1328,11 @@ class Bot(VirxERLU):
             teammate_score = message["score"]
             teammate_time = message["contact_time"]
 
+            if status == "WALL_PASS":
+                # The wall attacker owns the first touch; teammates rotate
+                # into the communicated receiving lane.
+                return False
+
             # A teammate handling a defensive emergency should be allowed
             # to take responsibility when the ball is in our half.
             if status == "DEFEND" and ball_is_our_side:
@@ -1447,6 +1453,21 @@ class Bot(VirxERLU):
         status = self.teamplay_status
         score = self.teamplay_score
         contact_time = self.teamplay_contact_time
+
+        active_wall_shot = next(
+            (
+                routine for routine in self.stack
+                if routine.__class__.__name__ == "wall_approach"
+            ),
+            None
+        )
+        if active_wall_shot is not None:
+            status = "WALL_PASS"
+            score = max(score, 78.0)
+            contact_time = max(
+                0.0,
+                min(10.0, active_wall_shot.intercept_time - self.time)
+            )
 
         if status == "NO_SHOT" and self.me.boost < 18:
             status = "LOW_BOOST"
@@ -1631,9 +1652,12 @@ class Bot(VirxERLU):
                 attacker_message is not None
                 and attacker_message.get("cover_released", False)
                 and attacker_message.get("status") in {
-                    "SHOT_FOUND", "ANY_SHOT_FOUND"
+                    "SHOT_FOUND", "ANY_SHOT_FOUND", "WALL_PASS"
                 }
-                and ball_depth < 1280
+                and (
+                    ball_depth < 1280
+                    or attacker_message.get("status") == "WALL_PASS"
+                )
                 and not self.defensive_emergency()
             )
 
@@ -2146,7 +2170,6 @@ class Bot(VirxERLU):
             wall_allowed = (
                 not self.friends
                 or self.get_grid_active_challenger() == self.me.index
-                or self.defensive_emergency()
             )
             if wall_allowed:
                 wall_drive = tools.find_wall_drive(self)
@@ -2268,7 +2291,6 @@ class Bot(VirxERLU):
             can_take_first_challenge = (
                 not self.friends
                 or self.get_grid_active_challenger() == self.me.index
-                or self.defensive_emergency()
             )
 
             # Prefer a reachable wall drive over waiting for a later ground shot.
@@ -2477,6 +2499,7 @@ class Bot(VirxERLU):
             if status not in {
                 "SHOT_FOUND",
                 "ANY_SHOT_FOUND",
+                "WALL_PASS",
                 "SHOT_ABANDONED",
                 "LOW_BOOST",
                 "NO_SHOT",
@@ -2543,8 +2566,16 @@ class Bot(VirxERLU):
         # ball is struck instead of guessing from the attacker's current nose.
         receive_plan = {}
         planned_shot = getattr(self, "teamplay_shot", None)
+        if status == "WALL_PASS":
+            planned_shot = next(
+                (
+                    routine for routine in self.stack
+                    if routine.__class__.__name__ == "wall_approach"
+                ),
+                planned_shot
+            )
         if (
-            status in {"SHOT_FOUND", "ANY_SHOT_FOUND"}
+            status in {"SHOT_FOUND", "ANY_SHOT_FOUND", "WALL_PASS"}
             and planned_shot is not None
             and getattr(planned_shot, "intercept_time", None) is not None
         ):
@@ -2593,7 +2624,7 @@ class Bot(VirxERLU):
         message = {
             "protocol": "volt_teamplay_v1",
             "status": status,
-            "shot_type": status if status in {"SHOT_FOUND", "ANY_SHOT_FOUND"} else "NO_SHOT",
+            "shot_type": status if status in {"SHOT_FOUND", "ANY_SHOT_FOUND", "WALL_PASS"} else "NO_SHOT",
             "score": round(max(0, min(100, score)), 1),
             "contact_time": round(max(0, min(10, contact_time)), 2),
             "cover_owner": self.get_cover_role_owner(),
@@ -2612,7 +2643,9 @@ class Bot(VirxERLU):
             message.get("receive_x"),
             message.get("receive_y"),
             message.get("receive_dir_x"),
-            message.get("receive_dir_y")
+            message.get("receive_dir_y"),
+            message.get("contact_x"),
+            message.get("contact_y")
         )
 
         # Refresh unchanged messages periodically so teammates don't
