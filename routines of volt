@@ -1564,9 +1564,16 @@ class Aerial:
                     # controller will send it, and never add it again after
                     # the live car packet already contains that impulse.
                     if jump_elapsed <= jump_max_duration:
-                        # Three complete released frames occur after the
-                        # first-jump hold, then the second-jump pulse is sent.
-                        second_jump_delay = tau + 4 * dt
+                        # Quantize the remaining hold to the next controller
+                        # tick, then include three full release frames.
+                        frames_to_release = (
+                            math.floor(
+                                max(0.0, jump_max_duration - jump_elapsed) / dt
+                            ) + 1
+                        )
+                        second_jump_delay = (
+                            frames_to_release + 3
+                        ) * dt
                     else:
                         # counter is the number of completed release frames.
                         second_jump_delay = (
