@@ -2967,10 +2967,72 @@ class fast_intercept_finder:
             slices[-1].game_seconds
         )
 
-        # For ten seconds after kickoff resolves, deliberately search
-        # reachable aerial contacts before accepting a ground/jump option.
-        # This makes aerials a preference, not a requirement: normal shot
-        # selection remains the fallback when no aerial can reach the ball.
+        # Prefer a reachable fast aerial touch before settling for a
+        # ground/jump touch. This search is deliberately untargeted: the
+        # aerial is still useful as a pop, clear, or midfield touch even when
+        # the ball cannot be hit directly onto the goal target.
+        fast_aerial_available = (
+            agent.boost_amount == "unlimited" or agent.me.boost > 0
+        )
+        if can_aerial and fast_aerial_available:
+            for ball_slice in slices:
+                intercept_time = ball_slice.game_seconds
+                if intercept_time < first_time:
+                    continue
+                if intercept_time > end_time:
+                    break
+
+                T = intercept_time - agent.time - (1 / 120)
+                if T <= 0:
+                    continue
+
+                physics = ball_slice.physics
+                location = physics.location
+                if abs(location.y) > 5212.75:
+                    break
+
+                ball_info = (
+                    (location.x, location.y, location.z),
+                    (
+                        physics.velocity.x,
+                        physics.velocity.y,
+                        physics.velocity.z
+                    )
+                )
+
+                aerial_result = virxrlcu.parse_slice_for_shot(
+                    False,
+                    False,
+                    False,
+                    True,
+                    T,
+                    *game_info,
+                    gravity,
+                    ball_info,
+                    me
+                )
+
+                if (
+                    aerial_result.get("found") == 1
+                    and int(aerial_result.get("shot_type", -1)) == 3
+                    and bool(aerial_result.get("fast", False))
+                ):
+                    print(
+                        f"[FAST AERIAL TOUCH BIAS] reachable untargeted "
+                        f"touch at {intercept_time - agent.time:.2f}s",
+                        flush=True
+                    )
+                    return Aerial(
+                        intercept_time,
+                        fast_aerial=True,
+                        boost_commit=(
+                            agent.boost_amount != "unlimited"
+                            and agent.me.boost > 0
+                        )
+                    )
+
+        # Preserve the existing kickoff-only preference for a regular
+        # reachable aerial when no fast aerial candidate was found.
         kickoff_aerial_window = (
             agent.time < getattr(agent, "kickoff_contest_until", -999.0)
         )
@@ -3022,9 +3084,9 @@ class fast_intercept_finder:
                     )
                     return Aerial(
                         intercept_time,
-                        fast_aerial=bool(aerial_result.get("fast", True)),
+                        fast_aerial=bool(aerial_result.get("fast", False)),
                         boost_commit=(
-                            bool(aerial_result.get("fast", True))
+                            bool(aerial_result.get("fast", False))
                             and agent.boost_amount != "unlimited"
                             and agent.me.boost > 0
                         )
