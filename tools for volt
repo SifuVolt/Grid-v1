@@ -593,16 +593,8 @@ def shot_candidate_score(agent, ball_slice, shot, time_remaining, target=None):
 
     # Time still matters, but it must not drown out a clearly better angle/contact.
     # Full-horizon search below lets a clean setup 1-3 seconds out beat a poor touch now.
+    score = time_remaining * 0.22
     shot_type = shot["shot_type"]
-    falling_single_jump = (
-        shot_type == 1
-        and ball.z > 130
-        and ball_velocity.z < -80
-    )
-    # Noob Black scans predicted slices and takes the earliest physically
-    # reachable falling-ball touch. Mirror that urgency while retaining the
-    # angle, power, teammate, and goal-quality penalties below.
-    score = time_remaining * (0.85 if falling_single_jump else 0.22)
 
     # Prefer simpler shots when their likely outcome is comparable.
     if shot_type == 0:       # Ground shot
