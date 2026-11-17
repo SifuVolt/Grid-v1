@@ -1129,7 +1129,7 @@ class Aerial:
 
         score_speed = (
             velocity_difference
-            * self._party_cannon_shot_power_modifier(velocity_difference)
+            * Aerial._party_cannon_shot_power_modifier(velocity_difference)
             + velocity_for_power.dot(direction_to_score)
         )
         time_to_score = (
