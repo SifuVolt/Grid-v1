@@ -1191,8 +1191,14 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
 
         # Use an untargeted fast aerial only for a high ball, and only when
         # this slice did not already produce a reachable normal aerial.
+        normal_aerial_available = (
+            shot.get("found") == 1
+            and int(shot.get("shot_type", -1)) == 3
+            and not bool(shot.get("fast", False))
+        )
         if (
-            slice_can_aerial
+            not normal_aerial_available
+            and slice_can_aerial
             and (
                 agent.boost_amount == "unlimited"
                 or agent.me.boost > 0
@@ -1677,8 +1683,14 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
 
         # Retain a reachable aerial-only touch when it is useful. Prefer
         # the normal aerial; fast aerials are only eligible above 350 units.
+        normal_aerial_available = (
+            shot.get("found") == 1
+            and int(shot.get("shot_type", -1)) == 3
+            and not bool(shot.get("fast", False))
+        )
         if (
-            slice_can_aerial
+            not normal_aerial_available
+            and slice_can_aerial
             and (
                 agent.boost_amount == "unlimited"
                 or agent.me.boost > 0
