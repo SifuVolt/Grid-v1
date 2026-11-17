@@ -5448,25 +5448,27 @@ class recovery:
         agent.controller.boost = False
         if self.boost_to_surface and landing_plane == 5 and agent.me.boost > 0:
             down = Vector(z=-1)
-            world_up = (
-                Vector(y=1)
-                if abs(agent.me.forward.dot(Vector(x=1))) > 0.85
-                else Vector(x=1)
-            )
-            down_local = agent.me.local(down)
-            up_local = agent.me.local(world_up)
-
-            # Point the nose toward the floor before allowing boost. The
-            # separate horizontal up reference prevents a roll ambiguity.
-            defaultPD(agent, down_local, up=up_local)
-            nose_alignment = agent.me.forward.dot(down)
             downward_speed = agent.me.velocity.dot(down)
-            agent.controller.boost = (
-                agent.me.location.z > 250
-                and nose_alignment > 0.92
+
+            # Only enter the nose-down boost phase while there is enough
+            # height and speed headroom to use it safely. Otherwise retain
+            # the normal landing orientation set above.
+            if (
+                agent.me.location.z > 350
                 and downward_speed < 1800
                 and agent.me.velocity.magnitude() < 2300
-            )
+            ):
+                world_up = (
+                    Vector(y=1)
+                    if abs(agent.me.forward.dot(Vector(x=1))) > 0.85
+                    else Vector(x=1)
+                )
+                down_local = agent.me.local(down)
+                up_local = agent.me.local(world_up)
+                defaultPD(agent, down_local, up=up_local)
+
+                nose_alignment = agent.me.forward.dot(down)
+                agent.controller.boost = nose_alignment > 0.92
 
         if not agent.me.airborne:
             agent.pop()
