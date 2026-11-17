@@ -4222,17 +4222,19 @@ class jump_shot:
                 )
 
                 if close_enough and (local_target.x > 0 or self.side_mode):
-                    # Aim the dodge at the predicted ball contact itself,
-                    # not at the approach point behind the ball. The selected
-                    # centre/left/right contact has already shaped that approach.
-                    # This also gives quick shots a directional flip without
-                    # adding the S-tilt they do not have time to perform.
-                    local_ball_for_dodge = agent.me.local_location(
-                        self.ball_location
+                    # Dodge along the planned outgoing shot direction.
+                    # A lateral shot angle naturally becomes a diagonal dodge;
+                    # keep a forward flip as the safe fallback rather than
+                    # allowing a slightly misaligned shot to become a backflip.
+                    local_shot_direction = agent.me.local(
+                        self.shot_vector
                     ).flatten()
 
-                    if local_ball_for_dodge.magnitude() > 1:
-                        dodge_direction = local_ball_for_dodge.normalize()
+                    if (
+                        local_shot_direction.magnitude() > 1
+                        and local_shot_direction.x > 0.05
+                    ):
+                        dodge_direction = local_shot_direction.normalize()
                     else:
                         dodge_direction = Vector(x=1)
 
