@@ -1231,6 +1231,16 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                     target
                 )
 
+                # With boost available, prefer the simpler single-jump
+                # routine over a double jump when their shot qualities are
+                # reasonably close. Keep the double jump available as the
+                # fallback when it offers a meaningfully better contact.
+                if (
+                    int(shot.get("shot_type", 0)) == 2
+                    and agent.me.boost > 0
+                ):
+                    score += 0.25
+
             if score < best_score:
                 best_score = score
                 best_shot = shot
@@ -1297,6 +1307,8 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                         grid_time_remaining,
                         target
                     )
+                    if agent.me.boost > 0:
+                        grid_score += 0.25
 
                 if grid_score < best_score:
                     best_score = grid_score
@@ -1606,6 +1618,11 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
             time_remaining,
             target=None
         )
+        if (
+            int(shot.get("shot_type", 0)) == 2
+            and agent.me.boost > 0
+        ):
+            score += 0.25
 
         if score < best_score:
             best_score = score
@@ -1671,6 +1688,8 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
                     grid_time_remaining,
                     target=None
                 )
+                if agent.me.boost > 0:
+                    grid_score += 0.25
 
                 if grid_score < best_score:
                     best_score = grid_score
