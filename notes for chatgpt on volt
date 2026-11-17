@@ -426,3 +426,12 @@ This file is the project handoff and change checklist. Read it before every code
 - Aerial aiming remains centre-directed: `Aerial._party_cannon_shot_direction` obtains its target from `_relative_goal_aim_point`. No separate post-side adjustment is used by the Aerial routine.
 - The shared helper itself was not changed, so its existing vertical-height behaviour remains intact.
 - Static source verification only; no Python compile or in-game test has been run.
+
+
+## 19. Ground-shot dribbling control (2026-11-17)
+
+- Added a controlled dribble phase inside the existing `ground_shot` class; no separate routine or shot-selection path was introduced.
+- It engages only when Volt is grounded and already behind/aligned with a slow, rolling ball at the front of the car. Bouncing, fast, airborne, badly aligned, or late-intercept cases retain the original ground-shot behaviour.
+- During the dribble, steering follows a live point 650 units ahead of the ball on the current ball-to-goal line. The speed target follows the ball's forward speed with a modest 300 uu/s lead and is capped at 1050 uu/s; boost is disabled to prevent blasting the ball away.
+- The live ball position and shot direction refresh the ground-shot contact geometry while carrying. A throttled `[GROUND DRIBBLE]` CMD diagnostic reports engagement and alignment.
+- This is an initial controlled push-dribble model, not a full hood-balance dribble controller. It has not been compiled or tested in-game; tune engagement geometry and speed from match observations.
