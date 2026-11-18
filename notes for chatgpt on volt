@@ -506,3 +506,10 @@ This file is the project handoff and change checklist. Read it before every code
 - Changed only the orientation aim vector during that phase: yaw now tracks the planned outgoing shot vector toward the opponent's goal, rather than steering the nose directly at the instantaneous car-to-ball vector. The pitchback override remains active, so goal alignment does not cancel the power-shot setup.
 - Preserved the existing Party Cannon hitbox-aware approach target, selected contact-label refresh, centre-contact geometry when selected, and final directional dodge. No hitbox dimensions, standoff, contact label, jump timing, or dodge timing were changed.
 - Static source verification only. No compile, simulation, or in-game test has been performed. Pull the branch before testing.
+
+
+## Jump-shot subtle counter air roll (2026-11-18)
+
+- During the existing airborne-above-car pitchback phase only, add a small roll input (magnitude 0.15) opposite the live defaultPD yaw command. This pairs left yaw/A with right air roll/E, and right yaw/D with left air roll/Q.
+- The roll is zeroed when yaw correction is negligible, and the existing positive-pitch S override, goal-directed yaw, hitbox-aware contact target, contact refresh, and final dodge remain unchanged.
+- This is a subtle controller assist, not a full air-roll manoeuvre. Static source verification only; no compile, simulation, or in-game test has been performed.
