@@ -1570,10 +1570,10 @@ class Aerial:
                             0.0, self.double_jump_time - agent.time
                         )
                     elif jump_elapsed <= jump_max_duration:
-                        second_jump_delay = tau + 3 * dt
+                        second_jump_delay = tau + 1 * dt
                     else:
                         second_jump_delay = max(
-                            0, 3 - self.counter
+                            0, 1 - self.counter
                         ) * dt
 
                     if T >= second_jump_delay:
@@ -1588,7 +1588,7 @@ class Aerial:
                     # Fully release the first jump for three controller frames.
                     # The second press then starts a held second-jump phase.
                     agent.controller.jump = False
-                    if self.counter < 3:
+                    if self.counter < 1:
                         self.counter += 1
                     else:
                         self.double_jump_time = agent.time
