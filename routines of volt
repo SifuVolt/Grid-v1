@@ -1477,7 +1477,11 @@ class Aerial:
             agent.dbg_2d(f"Ceiling shot")
 
         delta_x = self.target - xf
-        direction = delta_x.normalize()
+        direction = (
+            delta_x.normalize()
+            if not self.jumping
+            else delta_x.flatten().normalize()
+        )
 
         agent.line(agent.me.location, agent.me.location + (direction * 250), agent.renderer.black)
         c_vf = vf + agent.me.location
