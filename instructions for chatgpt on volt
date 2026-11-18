@@ -2115,6 +2115,31 @@ class Bot(VirxERLU):
             return
 
     
+        # Start a gradual ground carry only when the opponents are genuinely
+        # out of the play. In team modes, ground_carry.find enforces the
+        # elected-challenger role. It may replace a normal ground_shot, but
+        # never an aerial, jump/dodge, recovery, or defensive routine.
+        current_name_for_carry = (
+            self.stack[0].__class__.__name__
+            if not self.is_clear()
+            else None
+        )
+        if (
+            (self.is_clear() or self.odd_tick == 0)
+            and current_name_for_carry != "ground_carry"
+            and current_name_for_carry in {None, "ground_shot"}
+        ):
+            carry = routines.ground_carry.find(self)
+            if carry is not None:
+                print(
+                    f"[GROUND CARRY START] player={self.me.index} "
+                    f"foes={len(self.foes)} ball={self.ball.location}",
+                    flush=True
+                )
+                self.clear()
+                self.push(carry)
+                return
+
         # An active shot is committed after its initial opponent check.
         # Teammate ownership is still allowed to cancel it in the yield path.
         committed_active_shot = False
