@@ -1091,6 +1091,7 @@ class Aerial:
         self.double_jump_time = None
         self.counter = 0
         self.double_jump_complete = False
+        self.first_jump_impulse_applied = False
         self.side_wall_route = False
         self.side_wall_launched = False
         self.wall_shot_active = False
@@ -1371,6 +1372,7 @@ class Aerial:
         self.double_jump_time = None
         self.counter = 0
         self.double_jump_complete = False
+        self.first_jump_impulse_applied = False
         agent.controller.jump = True
         print(
             f"[AERIAL SIDE WALL] LAUNCH side={wall_side:+d} "
@@ -1537,17 +1539,19 @@ class Aerial:
                 self.double_jump_time = None
                 self.counter = 0
                 self.double_jump_complete = False
+                self.first_jump_impulse_applied = False
 
             jump_elapsed = agent.time - self.jump_time
 
             # Remaining acceleration from holding the first jump.
             tau = max(0.0, jump_max_duration - jump_elapsed)
 
-            # The first-jump impulse is already in the live velocity after
-            # the launch frame, so add it only on the frame it is applied.
-            if jump_elapsed == 0:
+            # Predict the first jump impulse once, rather than relying on
+            # exact floating-point equality for jump_elapsed.
+            if not self.first_jump_impulse_applied:
                 vf += agent.me.up * jump_speed
                 xf += agent.me.up * jump_speed * T
+                self.first_jump_impulse_applied = True
 
             vf += agent.me.up * jump_acc * tau
             xf += agent.me.up * jump_acc * tau * (T - 0.5 * tau)
@@ -1598,7 +1602,11 @@ class Aerial:
             agent.dbg_2d(f"Ceiling shot")
 
         delta_x = self.target - xf
-        direction = delta_x.normalize()
+        direction = (
+            delta_x.normalize()
+            if not self.jumping
+            else delta_x.flatten().normalize()
+        )
 
         agent.line(agent.me.location, agent.me.location + (direction * 250), agent.renderer.black)
         c_vf = vf + agent.me.location
@@ -1608,9 +1616,8 @@ class Aerial:
 
         
         if not self.dodging:
-            # Party Cannon aims at the predicted car-centre contact position.
-            # Preserve the special underside/ceiling recovery orientations,
-            # otherwise use the full 3D offset and ball-relative up vector.
+            # Reference Aerial orientation: keep the nose aligned to the
+            # contact offset, flattening only while the first jump is held.
             aim_vector = (
                 delta_x
                 if delta_x.magnitude() > 50
@@ -1618,34 +1625,33 @@ class Aerial:
             )
             local_aim = agent.me.local(aim_vector)
 
-            if backboard_mode:
+            if agent.controller.jump:
+                defaultPD(
+                    agent,
+                    local_aim.flatten(),
+                    up=agent.me.up
+                )
+            else:
                 ball_below_car = (
                     self.ball.z < agent.me.location.z - 80
                 )
+                landing_plane = virxrlcu.find_landing_plane(
+                    tuple(agent.me.location),
+                    tuple(agent.me.velocity),
+                    agent.gravity.z
+                )
+                if backboard_mode:
+                    upside_down = ball_below_car
+                elif landing_plane == 4:
+                    upside_down = True
+                else:
+                    upside_down = self.shot_vector.z < 0
+
                 defaultPD(
                     agent,
                     local_aim,
-                    upside_down=ball_below_car
+                    upside_down=upside_down
                 )
-            elif virxrlcu.find_landing_plane(
-                tuple(agent.me.location),
-                tuple(agent.me.velocity),
-                agent.gravity.z
-            ) == 4:
-                defaultPD(agent, local_aim, upside_down=True)
-            else:
-                if self.jumping:
-                    # During the jump sequence, keep the car's roof oriented
-                    # to world-up while the nose tracks the contact offset.
-                    local_up = agent.me.local(Vector(z=1))
-                else:
-                    # Once launched, roll relative to the ball just as
-                    # Party Cannon's AimAt(Location + offset, Direction(ball)).
-                    ball_direction = (
-                        self.ball - agent.me.location
-                    ).normalize()
-                    local_up = agent.me.local(ball_direction)
-                defaultPD(agent, local_aim, up=local_up)
 
         if self.dodging:
             # A neutral second-jump pulse avoids turning the fast aerial into
@@ -1656,57 +1662,29 @@ class Aerial:
             agent.controller.yaw = 0
             agent.controller.roll = 0
 
-        # Check the remaining flight against Party Cannon's boost budget.
-        # The position/velocity supplied here are Volt's existing predicted
-        # values, including the current jump model above.
-        if (
-            T > 0.25
-            and agent.boost_amount != "unlimited"
-            and not self.dodging
-        ):
-            party_cannon_boost_estimate = self._party_cannon_boost_estimate(
-                agent, self.target, T, xf, vf
-            )
-            if party_cannon_boost_estimate is None and not self.fast_aerial:
-                if not getattr(self, "_boost_reject_logged", False):
-                    self._boost_reject_logged = True
-                    print(
-                        f"[AERIAL BOOST REJECT] insufficient flight budget "
-                        f"boost={agent.me.boost:.1f} T={T:.2f} "
-                        f"distance={delta_x.magnitude():.0f}",
-                        flush=True
-                    )
-                agent.pop()
-                agent.shooting = False
-                agent.push(ball_recovery())
-                return
+        # Reference Aerial boost/throttle controller. Project the remaining
+        # contact displacement onto the car's forward axis and spend boost
+        # only when the nose is sufficiently aligned with the flight path.
+        if T > 0 and abs(agent.me.forward.dot(direction)) > 0.5:
+            delta_v = delta_x.dot(agent.me.forward) / T
 
-        # Party Cannon's forward-projection boost controller. Boost only
-        # when the nose is aligned with the full 3D contact offset and the
-        # required forward acceleration is high enough to justify it.
-        if T > 0 and delta_x.magnitude() > 1:
-            party_cannon_forward_need = (
-                delta_x.dot(agent.me.forward) / T
-            )
-            contact_direction = delta_x.normalize()
-            party_cannon_forward_angle = math.acos(cap(
-                agent.me.forward.dot(contact_direction),
-                -1,
-                1
-            ))
-            agent.controller.boost = (
-                party_cannon_forward_need
-                >= (agent.boost_accel + throttle_accel)
-                * max(dt, 13.0 / 120.0)
-                and party_cannon_forward_angle < 0.4
-                and agent.me.boost > 0
-            )
-            agent.controller.throttle = cap(
-                party_cannon_forward_need
-                / (throttle_accel * max(dt, 1.0 / 120.0)),
-                -1,
-                1
-            )
+            if (
+                agent.me.boost > 0
+                and delta_v >= agent.boost_accel * min_boost_time
+            ):
+                agent.controller.boost = True
+                delta_v -= agent.boost_accel * min_boost_time
+            else:
+                agent.controller.boost = False
+
+            if abs(delta_v) > throttle_accel * min_boost_time:
+                agent.controller.throttle = cap(
+                    delta_v / (throttle_accel * min_boost_time),
+                    -1,
+                    1
+                )
+            else:
+                agent.controller.throttle = 0
         else:
             agent.controller.boost = False
             agent.controller.throttle = 0
