@@ -1757,18 +1757,19 @@ class Aerial:
                 agent, self.target, T, xf, vf
             )
             if party_cannon_boost_estimate is None and not self.fast_aerial:
+                # A rejected boost estimate is not proof that the shot is
+                # finished or that the car should recover. Keep the aerial
+                # tracking its hitbox contact target; the forward-projection
+                # controller below independently decides whether boost is
+                # actually needed on this frame.
                 if not getattr(self, "_boost_reject_logged", False):
                     self._boost_reject_logged = True
                     print(
-                        f"[AERIAL BOOST REJECT] insufficient flight budget "
-                        f"boost={agent.me.boost:.1f} T={T:.2f} "
-                        f"distance={delta_x.magnitude():.0f}",
+                        f"[AERIAL BOOST BUDGET] estimate rejected; "
+                        f"continuing contact tracking boost={agent.me.boost:.1f} "
+                        f"T={T:.2f} distance={delta_x.magnitude():.0f}",
                         flush=True
                     )
-                agent.pop()
-                agent.shooting = False
-                agent.push(ball_recovery())
-                return
 
         # Party Cannon's forward-projection boost controller. Boost only
         # when the nose is aligned with the full 3D contact offset and the
