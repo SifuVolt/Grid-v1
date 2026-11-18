@@ -3937,6 +3937,7 @@ class jump_shot:
         self.dodging = False
         self.counter = 0
         self.jump_time = -1
+        self.first_jump_impulse_applied = False
         self.needed_jump_time = -1
         self._orientation_logged = False
         self.quick_shot = False
@@ -4368,15 +4369,17 @@ class jump_shot:
         else:
             if self.jump_time == -1:
                 self.jump_time = agent.time
+                self.first_jump_impulse_applied = False
 
             jump_elapsed = agent.time - self.jump_time
             tau = max(0.0, jump_max_duration - jump_elapsed)
 
             xf = agent.me.location + agent.me.velocity * T + 0.5 * agent.gravity * T * T
 
-            if jump_elapsed == 0:
+            if not self.first_jump_impulse_applied:
                 vf += agent.me.up * jump_speed
                 xf += agent.me.up * jump_speed * T
+                self.first_jump_impulse_applied = True
 
             hf = vf.z
             vf += agent.me.up * jump_acc * tau
