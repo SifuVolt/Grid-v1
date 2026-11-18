@@ -1586,14 +1586,18 @@ class Aerial:
             xf += agent.me.up * jump_acc * tau * (T - 0.5 * tau)
 
             if self.jump_type_fast:
+                # The second jump is a three-frame hold, preceded by three
+                # explicit release frames. Only the live packet can confirm
+                # that Rocket League has consumed the second jump.
+                if bool(getattr(agent.me, "doublejumped", False)):
+                    self.double_jump_complete = True
+
                 second_jump_already_applied = (
                     self.double_jump_complete
-                    or bool(getattr(agent.me, "doublejumped", False))
                 )
                 if not second_jump_already_applied:
-                    # Predict the second impulse at its actual request time.
-                    # Keep it in the prediction until the live car packet confirms
-                    # that the game has applied the double jump.
+                    # Predict the second impulse from the first frame of the
+                    # second-jump hold, and retain it until packet confirmation.
                     if self.double_jump_time is not None:
                         second_jump_delay = max(
                             0.0, self.double_jump_time - agent.time
@@ -1602,7 +1606,7 @@ class Aerial:
                         second_jump_delay = tau + 3 * dt
                     else:
                         second_jump_delay = (
-                            max(0, 2 - self.counter) * dt
+                            max(0, 3 - self.counter) * dt
                         )
 
                     if T >= second_jump_delay:
@@ -1613,17 +1617,21 @@ class Aerial:
 
                 if jump_elapsed <= jump_max_duration:
                     agent.controller.jump = True
-                elif self.counter < 4:
+                elif self.counter < 3:
+                    # Party Cannon explicitly releases jump for three frames
+                    # so the game can register a distinct second jump.
                     self.counter += 1
-
-                if self.counter == 3:
-                    if self.double_jump_time is None:
-                        self.double_jump_time = agent.time
+                    agent.controller.jump = False
+                elif self.counter < 6:
+                    # Hold the second jump for three frames, not a single pulse.
+                    self.counter += 1
                     agent.controller.jump = True
                     self.dodging = True
-                elif self.counter == 4:
-                    self.dodging = self.jumping = False
-                    self.double_jump_complete = True
+                    if self.counter == 4 and self.double_jump_time is None:
+                        self.double_jump_time = agent.time
+                else:
+                    self.dodging = False
+                    self.jumping = False
             elif jump_elapsed <= jump_max_duration:
                 agent.controller.jump = True
             else:
