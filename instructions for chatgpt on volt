@@ -2188,14 +2188,21 @@ class Bot(VirxERLU):
         }
 
         if self.is_clear() or self.odd_tick == 0:
-            shot = self.teamplay_shot
+            # Once ground_carry owns the stack, let its live trajectory and
+            # opponent-window checks decide when it finishes. Do not replace
+            # it with a cached shot or wall candidate on the next search tick.
+            carry_is_active = current_routine_name == "ground_carry"
+            shot = None if carry_is_active else self.teamplay_shot
 
             # The cached teamplay candidate may be a later ground shot.
             # Recheck the live prediction first so a reachable wall touch
             # can replace it instead of waiting for the ball to fall.
             wall_allowed = (
-                not self.friends
-                or self.get_grid_active_challenger() == self.me.index
+                not carry_is_active
+                and (
+                    not self.friends
+                    or self.get_grid_active_challenger() == self.me.index
+                )
             )
             if wall_allowed:
                 wall_drive = tools.find_wall_drive(self)
