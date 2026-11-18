@@ -538,3 +538,14 @@ This file is the project handoff and change checklist. Read it before every code
 - Preserved the first-jump duration, jump physics constants, fast-aerial height gate, pitchback, hitbox-aware target, shot direction, wall correction, orientation, and forward-projection boost controller. No tools/contact-selection logic was changed.
 - Commit: `8822342`.
 - Static GitHub source edit and re-fetch verification only. No Python compile, simulation, or in-game test has been performed. Pull the branch locally before testing.
+
+## 17. Ground carry / gradual trajectory steering (2026-11-19)
+
+- Added a separate `ground_carry` routine. It does not replace or rewrite `ground_shot`.
+- The carry is available in 1v1, 2v2, and 3v3 when the nearest living opponent's estimated ball ETA is at least 1.45 s and at least 0.85 s slower than Volt's ETA. In team modes it is restricted to the elected challenger.
+- It only starts for a grounded, low ball outside the dangerous own-half zone. It may replace an ordinary `ground_shot`, but does not interrupt aerials, jump/dodge routines, recoveries, or defensive routines.
+- The car approaches the ball from the rear/opposite side of the desired impulse. If the ball's projected goal-line crossing is to the right of the goal, the goalward direction adds a leftward component and the car approaches from the right-rear.
+- The controller blends a small amount of goalward direction into the ball's existing horizontal travel direction. The blend is smaller at higher ball speeds, with a capped approach speed and no boost, jump, or dodge. This is intended to make incremental trajectory changes while preserving momentum.
+- The carry hands back to normal shot selection when the predicted crossing is inside the central goal mouth, when an opponent recovers, if the ball becomes airborne / returns to the own half, or after a 5 s timeout.
+- Opponent ETA is the existing lightweight `_eta_to_ball` estimate, not a full opponent physics simulation. The carry's contact/ball impulse is not physically simulated; its thresholds and gentle-touch behaviour require in-game tuning.
+- No compile, simulation, or in-game test has been run for this implementation.
