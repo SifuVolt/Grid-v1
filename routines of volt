@@ -1091,6 +1091,7 @@ class Aerial:
         self.double_jump_time = None
         self.counter = 0
         self.double_jump_complete = False
+        self.fast_pitchback_logged = False
         self.side_wall_route = False
         self.side_wall_launched = False
         self.wall_shot_active = False
@@ -1434,6 +1435,34 @@ class Aerial:
             agent, self.ball, aerial_ball_velocity, T
         )
 
+        # When the ball is close to our net, prioritise a safe outward clear
+        # over the normal attacking goal direction.
+        own_goal_center = Vector(
+            0, -agent.foe_goal.location.y, 300
+        )
+        own_goal_distance = self.ball.flatten().dist(
+            own_goal_center.flatten()
+        )
+        defensive_clear = own_goal_distance < 2600
+        if defensive_clear:
+            clear_direction = (
+                self.ball - own_goal_center
+            ).flatten().normalize()
+            if clear_direction.magnitude() > 0.001:
+                self.shot_vector = clear_direction
+                if (
+                    not hasattr(self, "last_defensive_clear_debug")
+                    or agent.time - self.last_defensive_clear_debug >= 0.5
+                ):
+                    self.last_defensive_clear_debug = agent.time
+                    print(
+                        f"[AERIAL DEFENSIVE CLEAR] own_goal_distance="
+                        f"{own_goal_distance:.0f} "
+                        f"direction=({clear_direction.x:.2f},"
+                        f"{clear_direction.y:.2f})",
+                        flush=True
+                    )
+
         
         # Detect a useful backboard rebound for an already-airborne car.
         left_post, right_post = agent.foe_goal_shot
@@ -1537,6 +1566,7 @@ class Aerial:
                 self.double_jump_time = None
                 self.counter = 0
                 self.double_jump_complete = False
+                self.fast_pitchback_logged = False
 
             jump_elapsed = agent.time - self.jump_time
 
@@ -1594,6 +1624,40 @@ class Aerial:
             else:
                 self.jumping = False
 
+        fast_pitchback = False
+        if (
+            self.jump_type_fast
+            and self.jumping
+            and 0.02 <= jump_elapsed <= 0.16
+            and T > 0.30
+            and self.target.z - xf.z > 80
+            and agent.me.boost > 0
+        ):
+            # Pitching the nose back briefly turns part of the forward boost
+            # into upward acceleration. Include that acceleration in the
+            # predicted intercept position so the contact target remains ETA-
+            # aware instead of steering toward an unboosted ballistic guess.
+            fast_pitchback = True
+            pitchback_remaining = min(
+                T,
+                0.16 - jump_elapsed,
+                max(0.0, float(agent.me.boost)) / boost_per_second
+            )
+            pitchback_angle = 0.35
+            pitchback_direction = (
+                agent.me.forward * math.cos(pitchback_angle)
+                + agent.me.up * math.sin(pitchback_angle)
+            ).normalize()
+            if pitchback_remaining > 0:
+                pitchback_acceleration = (
+                    pitchback_direction * agent.boost_accel
+                )
+                vf += pitchback_acceleration * pitchback_remaining
+                xf += pitchback_acceleration * (
+                    pitchback_remaining
+                    * (T - 0.5 * pitchback_remaining)
+                )
+
         if self.ceiling:
             agent.dbg_2d(f"Ceiling shot")
 
@@ -1646,6 +1710,19 @@ class Aerial:
                     ).normalize()
                     local_up = agent.me.local(ball_direction)
                 defaultPD(agent, local_aim, up=local_up)
+                if fast_pitchback:
+                    # Positive pitch is Volt's nose-up / tilt-back input.
+                    # defaultPD still supplies the lateral yaw and roll
+                    # corrections needed to stay on the predicted contact line.
+                    agent.controller.pitch = 1
+                    if not self.fast_pitchback_logged:
+                        self.fast_pitchback_logged = True
+                        print(
+                            f"[AERIAL FAST PITCHBACK] T={T:.2f} "
+                            f"vertical_error={delta_x.z:.0f} "
+                            f"boost={agent.me.boost:.0f}",
+                            flush=True
+                        )
 
         if self.dodging:
             # A neutral second-jump pulse avoids turning the fast aerial into
@@ -1684,7 +1761,10 @@ class Aerial:
         # Party Cannon's forward-projection boost controller. Boost only
         # when the nose is aligned with the full 3D contact offset and the
         # required forward acceleration is high enough to justify it.
-        if T > 0 and delta_x.magnitude() > 1:
+        if fast_pitchback and delta_x.z > 0 and agent.me.boost > 0:
+            agent.controller.boost = True
+            agent.controller.throttle = 1
+        elif T > 0 and delta_x.magnitude() > 1:
             party_cannon_forward_need = (
                 delta_x.dot(agent.me.forward) / T
             )
@@ -4293,32 +4373,38 @@ class jump_shot:
             delta_x = self.offset_target - xf
             d_direction = delta_x.normalize()
 
-            # ORIENT THE NOSE DURING THE EXISTING JUMP WINDOW.
-            # First steer toward the ball's horizontal position, then use S
-            # (positive pitch) to raise the nose when the ball is airborne
-            # and above the car. This adds no waiting phase and leaves the
-            # existing counter-3 dodge trigger intact.
+            # Use the same full 3D, hitbox-offset contact orientation as
+            # Aerial. The lateral component drives aerial yaw (A/D), while
+            # the up reference lets the controller choose pitch and roll.
             if self.counter < 3 and not self.dodging:
-                local_ball = agent.me.local_location(self.ball_location)
-                defaultPD(agent, local_ball.flatten())
-
-                ball_is_airborne = self.ball_location.z > 130
-                ball_is_above_car = self.ball_location.z > agent.me.location.z + 65
-                hold_s = (
-                    ball_is_airborne
-                    and ball_is_above_car
-                    and not self.quick_shot
+                contact_aim = (
+                    delta_x
+                    if delta_x.magnitude() > 50
+                    else self.shot_vector
                 )
+                local_contact_aim = agent.me.local(contact_aim)
 
-                if hold_s:
-                    agent.controller.pitch = 1
+                if jump_elapsed <= jump_max_duration:
+                    local_up = agent.me.local(Vector(z=1))
+                else:
+                    ball_direction = (
+                        self.ball_location - agent.me.location
+                    ).normalize()
+                    local_up = agent.me.local(ball_direction)
+
+                defaultPD(
+                    agent,
+                    local_contact_aim,
+                    up=local_up
+                )
 
                 if not self._orientation_logged:
                     print(
                         f"[JUMP SHOT ORIENT] T={T:.3f} "
-                        f"ball_z={self.ball_location.z:.0f} "
-                        f"car_z={agent.me.location.z:.0f} "
-                        f"hold_S={hold_s} counter={self.counter}",
+                        f"contact_error=({delta_x.x:.0f},"
+                        f"{delta_x.y:.0f},{delta_x.z:.0f}) "
+                        f"local_yaw_error={local_contact_aim.y:.2f} "
+                        f"counter={self.counter}",
                         flush=True
                     )
                     self._orientation_logged = True
