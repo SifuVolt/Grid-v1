@@ -1559,20 +1559,22 @@ class Aerial:
             if self.jump_type_fast:
                 second_jump_already_applied = (
                     self.double_jump_complete
-                    or self.double_jump_time is not None
                     or bool(getattr(agent.me, "doublejumped", False))
                 )
                 if not second_jump_already_applied:
-                    # Release jump for three frames before the second-jump
-                    # pulse. Predict the pulse at the same frame the
-                    # controller will send it, and never add it again after
-                    # the live car packet already contains that impulse.
-                    if jump_elapsed <= jump_max_duration:
+                    # Predict the second impulse at its actual controller
+                    # request time. Once requested, keep the impulse in the
+                    # prediction until the live packet reports it applied.
+                    if self.double_jump_time is not None:
+                        second_jump_delay = max(
+                            0.0, self.double_jump_time - agent.time
+                        )
+                    elif jump_elapsed <= jump_max_duration:
                         second_jump_delay = tau + 3 * dt
                     else:
-                        second_jump_delay = (
-                            max(0, 2 - self.counter) * dt
-                        )
+                        second_jump_delay = max(
+                            0, 3 - self.counter
+                        ) * dt
 
                     if T >= second_jump_delay:
                         vf += agent.me.up * jump_speed
@@ -1582,17 +1584,28 @@ class Aerial:
 
                 if jump_elapsed <= jump_max_duration:
                     agent.controller.jump = True
-                elif self.counter < 4:
-                    self.counter += 1
-
-                if self.counter == 3:
-                    if self.double_jump_time is None:
+                elif self.double_jump_time is None:
+                    # Fully release the first jump for three controller frames.
+                    # The second press then starts a held second-jump phase.
+                    agent.controller.jump = False
+                    if self.counter < 3:
+                        self.counter += 1
+                    else:
                         self.double_jump_time = agent.time
-                    agent.controller.jump = True
-                    self.dodging = True
-                elif self.counter == 4:
-                    self.dodging = self.jumping = False
-                    self.double_jump_complete = True
+                        agent.controller.jump = True
+                        self.dodging = True
+                else:
+                    second_jump_elapsed = agent.time - self.double_jump_time
+                    # Hold the second jump as well. Only the initial press frame
+                    # is neutral so it cannot become a directional dodge.
+                    agent.controller.jump = (
+                        second_jump_elapsed < jump_max_duration
+                    )
+                    self.dodging = second_jump_elapsed < dt
+                    if second_jump_elapsed >= jump_max_duration:
+                        self.dodging = False
+                        self.jumping = False
+                        self.double_jump_complete = True
             elif jump_elapsed <= jump_max_duration:
                 agent.controller.jump = True
             else:
@@ -1631,6 +1644,15 @@ class Aerial:
                     local_aim.flatten(),
                     up=agent.me.up
                 )
+                # Keep an ordinary floor-launched aerial from rolling just
+                # to chase tiny orientation errors. Permit roll only when
+                # the car is already substantially off-upright or launched
+                # from the side wall.
+                if (
+                    not self.side_wall_launched
+                    and abs(agent.me.up.z) >= 0.7
+                ):
+                    agent.controller.roll = 0
             else:
                 ball_below_car = (
                     self.ball.z < agent.me.location.z - 80
@@ -1652,6 +1674,13 @@ class Aerial:
                     local_aim,
                     upside_down=upside_down
                 )
+                # Roll is reserved for cases where the intended contact
+                # actually requires an inverted car orientation.
+                if (
+                    not upside_down
+                    and abs(agent.me.up.z) >= 0.7
+                ):
+                    agent.controller.roll = 0
 
         if self.dodging:
             # A neutral second-jump pulse avoids turning the fast aerial into
