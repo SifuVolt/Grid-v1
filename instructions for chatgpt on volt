@@ -2208,7 +2208,10 @@ class Bot(VirxERLU):
                 wall_drive = tools.find_wall_drive(self)
                 if wall_drive is not None:
                     shot = wall_drive
-            elif self.time - getattr(self, "_last_wall_drive_gate_debug", -999.0) >= 0.5:
+            elif (
+                not carry_is_active
+                and self.time - getattr(self, "_last_wall_drive_gate_debug", -999.0) >= 0.5
+            ):
                 self._last_wall_drive_gate_debug = self.time
                 print(
                     f"[WALL DRIVE SKIP] team-role gate | "
