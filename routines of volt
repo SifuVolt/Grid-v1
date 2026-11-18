@@ -1102,6 +1102,90 @@ class Aerial:
         self.fast_aerial = shot.fast_aerial
         self.targets = shot.targets
 
+    @staticmethod
+    def _party_cannon_shot_power_modifier(speed):
+        speed = cap(speed, 0, 4600)
+        if speed <= 500:
+            return 0.65
+        if speed <= max_speed:
+            blend = (speed - 500) / 1800
+            return 0.65 + (0.55 - 0.65) * blend
+        blend = (speed - max_speed) / 2300
+        return 0.55 + (0.3 - 0.55) * blend
+
+    def _party_cannon_shot_direction(
+        self, agent, ball, ball_velocity, time_remaining,
+        car_final_velocity=None
+    ):
+        shot_target = _relative_goal_aim_point(agent, self.targets)
+        safe_time = max(time_remaining, dt)
+        if car_final_velocity is None:
+            car_final_velocity = (
+                (ball - agent.me.location) / safe_time
+            ).cap(0, max_speed)
+
+        velocity_for_power = (
+            car_final_velocity * 6 + ball_velocity
+        ) / 7
+        direction_to_score = (
+            shot_target - ball
+        ).flatten().normalize()
+        velocity_difference = (
+            car_final_velocity - ball_velocity
+        ).magnitude()
+
+        score_speed = (
+            velocity_difference
+            * self._party_cannon_shot_power_modifier(velocity_difference)
+            + velocity_for_power.dot(direction_to_score)
+        )
+        time_to_score = (
+            ball.flatten().dist(shot_target.flatten())
+            / cap(score_speed, 500, 6000)
+        )
+
+        predicted_after_hit_velocity = (
+            car_final_velocity + ball_velocity * 2
+        ) / 3
+        predicted_ball_location = (
+            ball
+            + predicted_after_hit_velocity * time_to_score
+            + agent.gravity * (0.5 * time_to_score * time_to_score)
+        )
+        shot_direction = (
+            shot_target - predicted_ball_location
+        ).normalize()
+
+        if shot_direction.magnitude() < 0.001:
+            return direction_to_score
+        return shot_direction
+
+    def _party_cannon_hitbox_target(self, agent, ball, shot_direction):
+        hitbox = agent.me.hitbox
+        half_length = float(getattr(hitbox, "length", 118.01)) * 0.5
+        ball_radius = 92.75
+
+        local_offset = getattr(agent.me, "hitbox_offset", None)
+        if local_offset is None:
+            local_offset = getattr(hitbox, "offset", None)
+
+        world_offset = Vector()
+        if local_offset is not None:
+            offset_x = float(getattr(local_offset, "x", 0.0))
+            offset_y = float(getattr(local_offset, "y", 0.0))
+            offset_z = float(getattr(local_offset, "z", 0.0))
+            world_offset = (
+                agent.me.forward * offset_x
+                + agent.me.up.cross(agent.me.forward) * offset_y
+                + agent.me.up * offset_z
+            )
+
+        return (
+            ball
+            - shot_direction * (ball_radius + half_length)
+            - world_offset
+        )
+
     def _run_side_wall_takeoff(self, agent, time_remaining):
         """
         Internally route an aerial up a side wall before launching.
@@ -1383,13 +1467,6 @@ class Aerial:
         self.target = (
             self.ball - self.shot_vector * agent.best_shot_value
         )
-
-        # Place the car reference point so the front of its hitbox reaches
-        # the corrected contact point at the predicted intercept.
-        self.target = self._party_cannon_hitbox_target(
-            agent, self.ball, self.shot_vector
-        )
-
 
         agent.sphere(self.ball, 92.75)
 
