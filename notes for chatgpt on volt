@@ -483,3 +483,12 @@ This file is the project handoff and change checklist. Read it before every code
 - Ordinary floor-launched aerials suppress PD-generated roll while the car is already substantially upright. Roll remains available when the car is significantly off-upright, when a side-wall launch requires it, or when the shot/backboard/landing-plane geometry explicitly requires an inverted orientation.
 - The existing Aerial shot-vector prediction, wall correction, hitbox-aware target, ceiling offset, and `tools for volt` contact selection/handoff are unchanged.
 - This is a static source edit only. No compile, simulation, or in-game test has been performed; validate fast-aerial timing and contact accuracy in-game.
+
+
+## Fast aerial pitchback, defensive clear, jump-shot air steering and wall-drive contest gate (2026-11-18)
+
+- Fast Aerial now uses a short, ETA-gated nose-up pitchback phase after takeoff when the predicted hitbox contact target is still substantially above the car. Its estimated upward boost acceleration is included in the predicted final position and velocity, and boost is allowed during that brief phase. The normal Aerial hitbox target, shot-vector prediction and wall correction remain the contact geometry source; no separate fast-aerial geometry was introduced.
+- Aerials with the ball within 2600 units of our own goal aim the hit away from our net using an outward clear direction rather than the ordinary opponent-goal shot direction.
+- Jump-shot airborne orientation now uses the same full 3D predicted contact offset and PD orientation convention as Aerial, including aerial yaw control for left/right (A/D) corrections. The previous flattened ball-centre-only aim and forced nose-up pitch override are removed from this phase. The selected hitbox/contact target and final directional dodge remain intact.
+- Wall-drive candidate selection now rejects any predicted ball slice with an opponent within 1000 horizontal units, preventing the wall approach from starting into a nearby contest. Rejection counts are included in its debug output.
+- Static GitHub source edits and re-fetch verification only; no Python compile, simulation, or in-game test has been performed. Pull the branch locally before testing.
