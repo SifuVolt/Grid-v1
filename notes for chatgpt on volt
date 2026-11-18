@@ -513,3 +513,10 @@ This file is the project handoff and change checklist. Read it before every code
 - During the existing airborne-above-car pitchback phase only, add a small roll input (magnitude 0.15) opposite the live defaultPD yaw command. This pairs left yaw/A with right air roll/E, and right yaw/D with left air roll/Q.
 - The roll is zeroed when yaw correction is negligible, and the existing positive-pitch S override, goal-directed yaw, hitbox-aware contact target, contact refresh, and final dodge remain unchanged.
 - This is a subtle controller assist, not a full air-roll manoeuvre. Static source verification only; no compile, simulation, or in-game test has been performed.
+
+## 17. Aerial boost-estimate rejection must not end the shot (2026-11-18)
+
+- In the live Aerial.run, a rejected Party Cannon boost estimate (None) must not be treated as a completed shot or trigger ball_recovery().
+- Keep tracking the existing hitbox-aware contact target; the forward-projection boost controller independently decides whether boost is needed on each frame.
+- This specifically removes the early normal-aerial abort caused by the boost-estimate rejection. The existing intercept timeout and other genuine shot-exit conditions remain unchanged.
+- Static source verification only; no compile, simulation, or in-game test has been performed.
