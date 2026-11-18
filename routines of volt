@@ -4391,8 +4391,24 @@ class jump_shot:
             # and above the car. This adds no waiting phase and leaves the
             # existing counter-3 dodge trigger intact.
             if self.counter < 3 and not self.dodging:
-                local_ball = agent.me.local_location(self.ball_location)
-                defaultPD(agent, local_ball.flatten())
+                # Keep the original jump-shot power posture: pitch back (S)
+                # while the car rises, then let the existing forward/directional
+                # dodge drive the hitbox through the ball.
+                #
+                # Yaw toward the planned outgoing shot direction, not the
+                # instantaneous car-to-ball vector. The approach target was
+                # already built from the hitbox-aware centre contact, so this
+                # keeps the car behind that contact line without flattening
+                # the nose-up pitch that creates the power shot.
+                local_shot_direction = agent.me.local(
+                    self.shot_vector.flatten().normalize()
+                )
+                if local_shot_direction.flatten().magnitude() < 0.001:
+                    local_shot_direction = agent.me.local(
+                        self.ball_location - agent.me.location
+                    ).flatten()
+
+                defaultPD(agent, local_shot_direction.flatten())
 
                 ball_is_airborne = self.ball_location.z > 130
                 ball_is_above_car = self.ball_location.z > agent.me.location.z + 65
@@ -4403,6 +4419,8 @@ class jump_shot:
                 )
 
                 if hold_s:
+                    # Override only pitch. Keep defaultPD's goal-directed
+                    # yaw correction active throughout the nose-up phase.
                     agent.controller.pitch = 1
 
                 if not self._orientation_logged:
@@ -4410,6 +4428,8 @@ class jump_shot:
                         f"[JUMP SHOT ORIENT] T={T:.3f} "
                         f"ball_z={self.ball_location.z:.0f} "
                         f"car_z={agent.me.location.z:.0f} "
+                        f"shot_yaw=({local_shot_direction.x:.2f},"
+                        f"{local_shot_direction.y:.2f}) "
                         f"hold_S={hold_s} counter={self.counter}",
                         flush=True
                     )
