@@ -520,3 +520,11 @@ This file is the project handoff and change checklist. Read it before every code
 - Keep tracking the existing hitbox-aware contact target; the forward-projection boost controller independently decides whether boost is needed on each frame.
 - This specifically removes the early normal-aerial abort caused by the boost-estimate rejection. The existing intercept timeout and other genuine shot-exit conditions remain unchanged.
 - Static source verification only; no compile, simulation, or in-game test has been performed.
+
+
+## 13. Jump-shot counter air roll adjustment (2026-11-18)
+
+- During the existing airborne jump-shot tilt-back phase (`hold_s`), the counter air-roll input opposite the goal-directed yaw was increased slightly from 0.15 to 0.20.
+- Left yaw (A) continues to pair with right roll (E); right yaw (D) continues to pair with left roll (Q). Roll still follows the actual `defaultPD` yaw command and is zero when yaw correction is negligible.
+- This is a modest increase to the normalized roll controller input, not a direct 40–45 degree orientation target. The jump-shot shot-vector calculation, pitch-back, contact geometry, and dodge logic were left unchanged.
+- Not compiled or tested in-game; user must pull/copy the latest branch commit before testing.
