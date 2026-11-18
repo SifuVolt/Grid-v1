@@ -492,3 +492,6 @@ This file is the project handoff and change checklist. Read it before every code
 - Jump-shot airborne orientation now uses the same full 3D predicted contact offset and PD orientation convention as Aerial, including aerial yaw control for left/right (A/D) corrections. The previous flattened ball-centre-only aim and forced nose-up pitch override are removed from this phase. The selected hitbox/contact target and final directional dodge remain intact.
 - Wall-drive candidate selection now rejects any predicted ball slice with an opponent within 1000 horizontal units, preventing the wall approach from starting into a nearby contest. Rejection counts are included in its debug output.
 - Static GitHub source edits and re-fetch verification only; no Python compile, simulation, or in-game test has been performed. Pull the branch locally before testing.
+
+
+- Fast-aerial ETA prediction also now applies the first-jump impulse exactly once and keeps the requested second-jump impulse in the predicted trajectory until the live car packet confirms it. The pitchback phase is disabled for backboard, ceiling, and wall-landing orientation exceptions so its predicted boost direction cannot disagree with the required contact orientation.
