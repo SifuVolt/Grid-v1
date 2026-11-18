@@ -495,3 +495,6 @@ This file is the project handoff and change checklist. Read it before every code
 
 
 - Fast-aerial ETA prediction also now applies the first-jump impulse exactly once and keeps the requested second-jump impulse in the predicted trajectory until the live car packet confirms it. The pitchback phase is disabled for backboard, ceiling, and wall-landing orientation exceptions so its predicted boost direction cannot disagree with the required contact orientation.
+
+
+- Jump-shot prediction also applies its first-jump impulse once rather than relying on exact floating-point equality for `jump_elapsed == 0`, keeping its full 3D contact offset aligned with the actual jump.
