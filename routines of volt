@@ -4419,9 +4419,20 @@ class jump_shot:
                 )
 
                 if hold_s:
-                    # Override only pitch. Keep defaultPD's goal-directed
-                    # yaw correction active throughout the nose-up phase.
+                    # Override pitch to preserve the power-shot nose-up
+                    # posture, while keeping defaultPD's goal-directed yaw.
                     agent.controller.pitch = 1
+
+                    # Add a very small counter-direction air roll during
+                    # lateral steering: left yaw (A) gets right roll (E),
+                    # right yaw (D) gets left roll (Q). Read the actual PD
+                    # yaw command so the pairing follows the controller's
+                    # real correction direction, not a guessed world axis.
+                    yaw_command = agent.controller.yaw
+                    if abs(yaw_command) > 0.08:
+                        agent.controller.roll = -0.15 * sign(yaw_command)
+                    else:
+                        agent.controller.roll = 0
 
                 if not self._orientation_logged:
                     print(
