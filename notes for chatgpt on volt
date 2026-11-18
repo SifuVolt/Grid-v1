@@ -461,3 +461,15 @@ This file is the project handoff and change checklist. Read it before every code
   - `207c7e6`: explicitly release the first jump and align the fast second-jump pulse with the controller counter.
   - `2b00845`: quantize the remaining hold time to the 120 Hz controller tick in the predicted second-jump timing.
 - Static GitHub source verification only. No Python compile, simulation, or in-game test has been performed. Pull the branch locally before testing.
+
+
+## 17. Reference Aerial geometry and flight-control port (2026-11-18)
+
+- The user's pasted Aerial is the reference for both contact geometry and flight movement; do not retain the former Volt-specific predictive post-hit shot vector or hitbox-length/offset standoff for Aerial.
+- Aerial shot direction now starts as car-to-predicted-ball. If target posts are supplied, clamp that direction between the two ball-to-target directions. If no target pair is supplied, use the direct car-to-ball direction.
+- Aerial's car target is the predicted ball location minus `shot_vector * agent.best_shot_value`. The separate `select_ball_contact` geometry in `tools for volt` is no longer attached to Aerial routines; non-aerial routines retain their existing contact selection.
+- Aerial orientation follows the reference control pattern: full 3D contact tracking in flight, flattened local tracking while jump is held, and upside-down orientation for landing plane 4 or a downward shot vector.
+- Aerial boost/throttle now uses the reference forward-projection controller with the `min_boost_time` pulse, and the previous Party Cannon boost-budget rejection is removed so it cannot cancel a reachable aerial solely from that estimate.
+- The first jump impulse is added to the predicted trajectory once using an explicit state flag rather than exact floating-point equality on elapsed jump time. Existing fast-aerial height gate and normal-aerial fallback are preserved.
+- The existing wall-takeoff path and backboard detection remain in the Aerial class; their in-game interaction with the new direct target geometry needs testing.
+- This port has not been compiled or tested in-game. Verify takeoff speed, fast-aerial reach, overshoot control, and goal-window contact in matches.
