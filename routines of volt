@@ -3937,7 +3937,6 @@ class jump_shot:
         self.dodging = False
         self.counter = 0
         self.jump_time = -1
-        self.first_jump_impulse_applied = False
         self.needed_jump_time = -1
         self._orientation_logged = False
         self.quick_shot = False
@@ -4369,17 +4368,15 @@ class jump_shot:
         else:
             if self.jump_time == -1:
                 self.jump_time = agent.time
-                self.first_jump_impulse_applied = False
 
             jump_elapsed = agent.time - self.jump_time
             tau = max(0.0, jump_max_duration - jump_elapsed)
 
             xf = agent.me.location + agent.me.velocity * T + 0.5 * agent.gravity * T * T
 
-            if not self.first_jump_impulse_applied:
+            if jump_elapsed == 0:
                 vf += agent.me.up * jump_speed
                 xf += agent.me.up * jump_speed * T
-                self.first_jump_impulse_applied = True
 
             hf = vf.z
             vf += agent.me.up * jump_acc * tau
@@ -4388,38 +4385,32 @@ class jump_shot:
             delta_x = self.offset_target - xf
             d_direction = delta_x.normalize()
 
-            # Use the same full 3D, hitbox-offset contact orientation as
-            # Aerial. The lateral component drives aerial yaw (A/D), while
-            # the up reference lets the controller choose pitch and roll.
+            # ORIENT THE NOSE DURING THE EXISTING JUMP WINDOW.
+            # First steer toward the ball's horizontal position, then use S
+            # (positive pitch) to raise the nose when the ball is airborne
+            # and above the car. This adds no waiting phase and leaves the
+            # existing counter-3 dodge trigger intact.
             if self.counter < 3 and not self.dodging:
-                contact_aim = (
-                    delta_x
-                    if delta_x.magnitude() > 50
-                    else self.shot_vector
-                )
-                local_contact_aim = agent.me.local(contact_aim)
+                local_ball = agent.me.local_location(self.ball_location)
+                defaultPD(agent, local_ball.flatten())
 
-                if jump_elapsed <= jump_max_duration:
-                    local_up = agent.me.local(Vector(z=1))
-                else:
-                    ball_direction = (
-                        self.ball_location - agent.me.location
-                    ).normalize()
-                    local_up = agent.me.local(ball_direction)
-
-                defaultPD(
-                    agent,
-                    local_contact_aim,
-                    up=local_up
+                ball_is_airborne = self.ball_location.z > 130
+                ball_is_above_car = self.ball_location.z > agent.me.location.z + 65
+                hold_s = (
+                    ball_is_airborne
+                    and ball_is_above_car
+                    and not self.quick_shot
                 )
+
+                if hold_s:
+                    agent.controller.pitch = 1
 
                 if not self._orientation_logged:
                     print(
                         f"[JUMP SHOT ORIENT] T={T:.3f} "
-                        f"contact_error=({delta_x.x:.0f},"
-                        f"{delta_x.y:.0f},{delta_x.z:.0f}) "
-                        f"local_yaw_error={local_contact_aim.y:.2f} "
-                        f"counter={self.counter}",
+                        f"ball_z={self.ball_location.z:.0f} "
+                        f"car_z={agent.me.location.z:.0f} "
+                        f"hold_S={hold_s} counter={self.counter}",
                         flush=True
                     )
                     self._orientation_logged = True
