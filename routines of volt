@@ -1761,7 +1761,7 @@ class Aerial:
         # Party Cannon's forward-projection boost controller. Boost only
         # when the nose is aligned with the full 3D contact offset and the
         # required forward acceleration is high enough to justify it.
-        if fast_pitchback and delta_x.z > 0 and agent.me.boost > 0:
+        if fast_pitchback and agent.me.boost > 0:
             agent.controller.boost = True
             agent.controller.throttle = 1
         elif T > 0 and delta_x.magnitude() > 1:
