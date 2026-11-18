@@ -4431,7 +4431,7 @@ class jump_shot:
                     # real correction direction, not a guessed world axis.
                     yaw_command = agent.controller.yaw
                     if abs(yaw_command) > 0.08:
-                        agent.controller.roll = -0.15 * sign(yaw_command)
+                        agent.controller.roll = -0.20 * sign(yaw_command)
                     else:
                         agent.controller.roll = 0
 
