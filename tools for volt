@@ -153,6 +153,7 @@ def find_wall_drive(agent, cap_=4.0):
     reject_height = 0
     reject_other_wall = 0
     reject_unreachable = 0
+    reject_enemy_near = 0
     best = None
     max_index = min(len(slices), int(cap_ * 120))
 
@@ -173,6 +174,16 @@ def find_wall_drive(agent, cap_=4.0):
 
         intercept_in = ball_slice.game_seconds - agent.time
         if intercept_in <= 0:
+            continue
+
+        # Do not commit to the wall-drive route when an opponent is already
+        # close enough to contest the predicted ball position.
+        predicted_ball = Vector(loc.x, loc.y, loc.z)
+        if any(
+            foe.location.flat_dist(predicted_ball) < 1000
+            for foe in agent.foes
+        ):
+            reject_enemy_near += 1
             continue
 
         axis, wall_side, wall_gap = surface
@@ -232,6 +243,7 @@ def find_wall_drive(agent, cap_=4.0):
                 f"wall_window={reject_wall_window} "
                 f"height={reject_height} "
                 f"other_wall={reject_other_wall} "
+                f"enemy_near={reject_enemy_near} "
                 f"unreachable={reject_unreachable} slices={len(slices)}",
                 flush=True
             )
