@@ -498,3 +498,11 @@ This file is the project handoff and change checklist. Read it before every code
 
 
 - Jump-shot prediction also applies its first-jump impulse once rather than relying on exact floating-point equality for `jump_elapsed == 0`, keeping its full 3D contact offset aligned with the actual jump.
+
+
+## Jump-shot power posture with goal-directed yaw (2026-11-18)
+
+- Restored the original jump-shot pitchback posture: when the ball is airborne and above the car, the car continues holding positive pitch (S/nose-up) during the jump window. The previous full-3D contact-orientation replacement is not used.
+- Changed only the orientation aim vector during that phase: yaw now tracks the planned outgoing shot vector toward the opponent's goal, rather than steering the nose directly at the instantaneous car-to-ball vector. The pitchback override remains active, so goal alignment does not cancel the power-shot setup.
+- Preserved the existing Party Cannon hitbox-aware approach target, selected contact-label refresh, centre-contact geometry when selected, and final directional dodge. No hitbox dimensions, standoff, contact label, jump timing, or dodge timing were changed.
+- Static source verification only. No compile, simulation, or in-game test has been performed. Pull the branch before testing.
