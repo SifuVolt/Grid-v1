@@ -4988,11 +4988,13 @@ class ground_carry:
 
         if agent.time - self.last_debug_time >= 0.5:
             self.last_debug_time = agent.time
+            goal_angle = math.degrees(math.acos(cap(
+                current_direction.dot(goal_direction), -1, 1
+            )))
             print(
                 f"[GROUND CARRY] foe_eta={min(foe_etas):.2f} "
                 f"my_eta={my_eta:.2f} ball_speed={ball_speed:.0f} "
-                f"goal_angle={math.degrees(math.acos(cap("
-                f"current_direction.dot(goal_direction), -1, 1))):.1f} "
+                f"goal_angle={goal_angle:.1f} "
                 f"miss={lateral_miss:.0f} car_ball={distance_to_ball:.0f}",
                 flush=True
             )
