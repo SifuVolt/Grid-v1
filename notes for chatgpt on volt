@@ -528,3 +528,13 @@ This file is the project handoff and change checklist. Read it before every code
 - Left yaw (A) continues to pair with right roll (E); right yaw (D) continues to pair with left roll (Q). Roll still follows the actual `defaultPD` yaw command and is zero when yaw correction is negligible.
 - This is a modest increase to the normalized roll controller input, not a direct 40–45 degree orientation target. The jump-shot shot-vector calculation, pitch-back, contact geometry, and dodge logic were left unchanged.
 - Not compiled or tested in-game; user must pull/copy the latest branch commit before testing.
+
+
+## Party Cannon fast-aerial second-jump hold correction (2026-11-18)
+
+- Matched the fast Aerial second-jump input sequence to Party Cannon's `AerialShot.Run`: after the initial 0.2-second first-jump hold, explicitly release jump for three controller frames, then hold jump for three controller frames.
+- The previous Volt sequence only asserted jump on one frame for the second jump and ended the sequence on the following frame. It now holds the second-jump input for all three frames and keeps directional controls neutral during those frames through the existing `self.dodging` handling.
+- The predicted second-jump impulse is timestamped on the first frame of the second-jump hold and remains in the predicted trajectory until `agent.me.doublejumped` confirms that the game registered it. Finishing the three-frame input sequence no longer marks the impulse as confirmed or removes it from prediction prematurely.
+- Preserved the first-jump duration, jump physics constants, fast-aerial height gate, pitchback, hitbox-aware target, shot direction, wall correction, orientation, and forward-projection boost controller. No tools/contact-selection logic was changed.
+- Commit: `8822342`.
+- Static GitHub source edit and re-fetch verification only. No Python compile, simulation, or in-game test has been performed. Pull the branch locally before testing.
