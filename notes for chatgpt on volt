@@ -478,7 +478,7 @@ This file is the project handoff and change checklist. Read it before every code
 
 ## Fast-aerial held second jump and reduced air roll (2026-11-18)
 
-- Fast aerial now explicitly releases the first jump for three full controller frames, then holds the second jump for the same 0.2-second jump window rather than sending a one-frame second-jump pulse.
+- Fast aerial now explicitly releases the first jump for one full controller frame, then holds the second jump for the same 0.2-second jump window rather than sending a one-frame second-jump pulse. This reduces the gap before the second impulse while still giving the game a clear released frame.
 - The second-jump impulse remains predicted from its actual request timestamp until the live car packet reports `doublejumped`, keeping the predicted contact position aligned during the held second jump.
 - Ordinary floor-launched aerials suppress PD-generated roll while the car is already substantially upright. Roll remains available when the car is significantly off-upright, when a side-wall launch requires it, or when the shot/backboard/landing-plane geometry explicitly requires an inverted orientation.
 - The existing Aerial shot-vector prediction, wall correction, hitbox-aware target, ceiling offset, and `tools for volt` contact selection/handoff are unchanged.
