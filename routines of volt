@@ -429,7 +429,15 @@ class wall_approach:
             and car.up.y * car.location.y < 0
             and (1 if car.location.y >= 0 else -1) != side(agent.team)
         )
-        on_wall = attached if axis == "x" else attached_y
+        on_wall = (
+            axis == "x"
+            and attached
+            and (1 if car.location.x >= 0 else -1) == wall_side
+        ) or (
+            axis == "y"
+            and attached_y
+            and (1 if car.location.y >= 0 else -1) == wall_side
+        )
 
         if on_wall:
             surface_up = (
