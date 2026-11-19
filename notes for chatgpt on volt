@@ -549,3 +549,13 @@ This file is the project handoff and change checklist. Read it before every code
 - The carry hands back to normal shot selection when the predicted crossing is inside the central goal mouth, when an opponent recovers, if the ball becomes airborne / returns to the own half, or after a 5 s timeout.
 - Opponent ETA is the existing lightweight `_eta_to_ball` estimate, not a full opponent physics simulation. The carry's contact/ball impulse is not physically simulated; its thresholds and gentle-touch behaviour require in-game tuning.
 - No compile, simulation, or in-game test has been run for this implementation.
+
+
+## Conditional pure lateral jump-shot dodge (2026-11-19)
+
+- Added a trajectory-correction branch inside the existing `jump_shot` class. The normal jump-shot path remains the default; this is not a replacement for its existing forward/diagonal directional dodge or the separate `side_shot` subclass.
+- Activation is deliberately narrow: the predicted ball must be low (z <= 420), moving at least 500 uu/s, travelling generally toward the opponent goal, and projected to cross outside a 150-unit safety margin inside the goal posts. The incoming direction must also differ materially from the planned shot vector (dot < 0.9063, approximately more than 25 degrees). A stationary ball, a ball travelling away from goal, or a projected safe goal-mouth path retains the ordinary jump shot.
+- The projected crossing is calculated against the goal plane using the incoming ball velocity. The signed miss is measured on a lateral axis perpendicular to the goal direction; its sign determines whether the ball needs a leftward or rightward correction.
+- For the special setup, Volt's centre is placed on the opposite side of the desired impulse, using the existing longitudinal hitbox standoff and a lateral standoff based on ball radius plus 45% of the car hitbox width. The normal flank approach is bypassed only while this special geometry is active.
+- At the existing final dodge trigger, the controller uses pitch=0 and pure local left/right yaw input, with roll=0. The desired world-space correction is transformed into the car's local frame so the dodge direction is team/arena independent. The existing jump timing, pitchback/orientation phase, boost logic, contact aim, and ordinary dodge remain otherwise unchanged.
+- This uses a geometric contact heuristic, not a full Rocket League collision/impulse simulation. Actual side-hit impulse strength and the left/right control sign must be confirmed in-game; tune the lateral standoff only from observed contact outcomes. Static source edits and re-fetch verification only; no compile, simulation, or in-game test has been performed.
