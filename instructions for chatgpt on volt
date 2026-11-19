@@ -1569,7 +1569,11 @@ class Bot(VirxERLU):
             attached_wall = tools.car_wall_surface(car, self.team)
             if (
                 attached_wall is not None
-                and abs(car.up.x) > 0.65
+                and (
+                    abs(car.up.x) > 0.65
+                    if attached_wall[0] == "x"
+                    else abs(car.up.y) > 0.65
+                )
                 and not car.doublejumped
                 and self.odd_tick == 0
             ):
