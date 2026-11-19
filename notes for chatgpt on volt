@@ -643,3 +643,15 @@ This file is the project handoff and change checklist. Read it before every code
 - For low balls under 500, route ETA aims for a controlled elevated run-up 420–720 units above the eventual contact height, then the routine switches down to the actual contact height during the final 0.55 seconds.
 - Wall attachment and surface steering now recognise the opponent back wall as well as side walls. Team-role challenger gating remains intact: a non-elected teammate still yields rather than double-challenging.
 - This remains a simplified arena-surface route model. No compile or in-game test has been performed.
+
+## Noob Black wall-shot port (2026-11-19)
+- Replaced the active wall-drive finder implementation in `tools for volt` with a Noob Black `shot_variables_wall`-style reachability scan.
+- The finder samples the ball prediction at 60 Hz, uses Noob Black's wall-specific jump-time equation, 120 Hz acceleration/travel profile, and the coordinate unfolding transforms for ground-to-wall, x-wall-to-y, y-wall-to-x, and car-on-wall distance.
+- Wall eligibility now follows Noob Black's two main cases: a stable ball close enough to the wall for a wall jump (jump time <=1.45s, vertical height 400-1900, wall-normal speed <150), or a low ball rolling toward the wall quickly (predicted low height <=129 and wall-normal speed >=720). Volt's prior policy still excludes the own back wall and goal mouth.
+- The active routine retains the `wall_approach` class name so existing team-role gates and stack handling remain intact. Its controller now uses the unfolded Noob Black wall geometry and hands off to Volt's existing `Aerial`, `jump_shot`, or `double_jump` controller based on the selected reachable mode.
+- Existing team challenger / cover-role gates were not changed. The former `find_wall_drive` entry point remains as a compatibility name for the agent selection path, but its candidate selection is now Noob Black wall-shot reachability.
+- Commits:
+  - tools finder: `cbd951fd94e66ca610fc48785a1bde35ae525545`
+  - routines controller: `399a88354e9fdfa7bd6dcfff4d13d3c756dd6df1`
+  - stable/rolling wall eligibility correction: `d0facd36fcaa1d3132eabcb74f58b545d547251c`
+- Not compiled or tested in a match. Re-fetch and syntax-check locally before running; this is a substantial port and the first console trace should verify `[NOOB WALL FIND]` and `[NOOB WALL SHOT]` logs.
