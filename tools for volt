@@ -46,7 +46,7 @@ def car_wall_surface(car, team=None):
 
 def _wall_drive_eta(
     distance, car, direction, on_wall=False,
-    initial_speed=None, facing_override=None
+    initial_speed=None, facing_override=None, boost_fraction=1.0
 ):
     """
     Conservative travel-time estimate for one continuous surface segment.
@@ -92,7 +92,7 @@ def _wall_drive_eta(
     max_speed = 2300.0
     boost_acceleration = 991.0
     base_acceleration = 900.0
-    boost_time = max(0.0, float(car.boost)) / 33.3333333333
+    boost_time = max(0.0, float(car.boost) * cap(boost_fraction, 0.0, 1.0)) / 33.3333333333
     boost_time = min(
         boost_time,
         max(0.0, (max_speed - forward_speed) / boost_acceleration)
@@ -241,9 +241,26 @@ def find_wall_drive(agent, cap_=4.0):
         )
 
         if attached_wall is not None:
-            route_distance = car.location.dist(wall_target)
-            eta = _wall_drive_eta(
-                route_distance, car, wall_target - car.location,
+            # Measure travel along the wall surface, not through the air.
+            # If the car is still on the rounded transition, include the
+            # remaining quarter-circle arc before measuring wall travel.
+            progress = cap(
+                (abs(car.location.x) - 3780.0) / 256.0, 0.0, 1.0
+            )
+            transition_angle = progress * (math.pi * 0.5)
+            transition_remaining = 256.0 * (
+                math.pi * 0.5 - transition_angle
+            )
+            wall_distance = math.hypot(
+                wall_target.y - car.location.y,
+                wall_target.z - car.location.z
+            )
+            transition_speed = max(
+                600.0, min(1100.0, car.velocity.magnitude())
+            )
+            transition_eta = transition_remaining / transition_speed
+            eta = transition_eta + _wall_drive_eta(
+                wall_distance, car, wall_target - car.location,
                 on_wall=True
             )
         else:
@@ -278,13 +295,26 @@ def find_wall_drive(agent, cap_=4.0):
                 450.0,
                 min(950.0, car.velocity.flatten().magnitude() * 0.65)
             )
+            total_route_distance = max(
+                1.0,
+                ground_distance + transition_distance + climb_distance
+            )
+            ground_boost_fraction = ground_distance / total_route_distance
+            climb_boost_fraction = climb_distance / total_route_distance
+            # Split the available boost budget between the two driven
+            # segments. Do not count the same boost twice in the ETA.
+            ground_eta = _wall_drive_eta(
+                ground_distance, car, ground_delta, on_wall=False,
+                boost_fraction=ground_boost_fraction
+            )
             climb_eta = _wall_drive_eta(
                 climb_distance,
                 car,
                 Vector(0, 0, 1),
                 on_wall=True,
                 initial_speed=wall_entry_speed,
-                facing_override=0.65
+                facing_override=0.65,
+                boost_fraction=climb_boost_fraction
             )
             eta = ground_eta + transition_eta + climb_eta
 
