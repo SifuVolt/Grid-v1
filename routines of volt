@@ -670,6 +670,30 @@ class wall_jump_shot:
         local_contact = car.local(delta_x)
         local_ball = car.local_location(self.ball_location)
 
+        # Apply Aerial's forward-projection boost calculation throughout the
+        # jump and alignment phases, not only after the jump has finished.
+        if self.phase != "dodge" and T > dt and contact_distance > 1:
+            forward_need = delta_x.dot(car.forward) / max(T, dt)
+            forward_angle = math.acos(cap(
+                car.forward.dot(contact_direction), -1, 1
+            ))
+            agent.controller.boost = (
+                forward_need
+                >= (agent.boost_accel + throttle_accel)
+                * max(dt, 13.0 / 120.0)
+                and forward_angle < 0.4
+                and car.boost > 0
+            )
+            agent.controller.throttle = cap(
+                forward_need / (
+                    throttle_accel * max(dt, 1.0 / 120.0)
+                ),
+                -1, 1
+            )
+        elif self.phase != "dodge":
+            agent.controller.boost = False
+            agent.controller.throttle = 0
+
         wall_attached = (
             (
                 abs(car.location.x) > 3720
@@ -702,7 +726,7 @@ class wall_jump_shot:
         if self.phase == "jump":
             agent.controller.jump = jump_elapsed < self.jump_hold_duration
             agent.controller.throttle = 1
-            if jump_elapsed >= self.JUMP_HOLD:
+            if jump_elapsed >= self.jump_hold_duration:
                 self.phase = "release"
                 self.release_frames = 0
                 agent.controller.jump = False
@@ -714,30 +738,6 @@ class wall_jump_shot:
                 self.phase = "align"
 
         elif self.phase == "align":
-            # Aerial's forward-projection boost rule: boost only when the
-            # predicted contact offset is sufficiently forward and aligned.
-            if T > dt and contact_distance > 1:
-                forward_need = delta_x.dot(car.forward) / max(T, dt)
-                forward_angle = math.acos(cap(
-                    car.forward.dot(contact_direction), -1, 1
-                ))
-                agent.controller.boost = (
-                    forward_need
-                    >= (agent.boost_accel + throttle_accel)
-                    * max(dt, 13.0 / 120.0)
-                    and forward_angle < 0.4
-                    and car.boost > 0
-                )
-                agent.controller.throttle = cap(
-                    forward_need / (
-                        throttle_accel * max(dt, 1.0 / 120.0)
-                    ),
-                    -1, 1
-                )
-            else:
-                agent.controller.boost = False
-                agent.controller.throttle = 0
-
             # Match Aerial's final dodge timing and local hitbox-contact aim.
             if T <= 0.10 and not bool(getattr(car, "doublejumped", False)):
                 local_target = car.local_location(self.offset_target).flatten().normalize()
