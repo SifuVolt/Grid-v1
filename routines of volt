@@ -377,10 +377,15 @@ class wall_approach:
             agent.shooting = False
             return
 
-        contact_offset = (
-            92.75 if self.selected_mode in {"double", "aerial"}
-            else 134.85
-        )
+        if self.selected_mode == "wall_jump":
+            contact_offset = (
+                92.75 + float(getattr(car.hitbox, "length", 118.01)) * 0.5
+            )
+        else:
+            contact_offset = (
+                92.75 if self.selected_mode in {"double", "aerial"}
+                else 134.85
+            )
         target_og_pos = ball - shot_direction * contact_offset
         jump_index = 1 if self.selected_mode == "double" else 0
         jump_time, _ = self._jump_time_wall(
@@ -519,18 +524,17 @@ class wall_approach:
 
 class wall_jump_shot:
     """
-    Single-jump wall shot.
+    Noob Black wall launch with Volt's Aerial contact and flight prediction.
 
-    Launches from the wall using the car's wall-normal jump impulse, rotates
-    toward the planned goalward shot line, then uses a directional dodge at
-    the predicted contact. The wall finder and wall_approach retain Noob
-    Black's contact prediction and unfolded surface reachability.
+    Noob's finder still chooses the reachable wall slice and surface route.
+    The actual launch uses the same shot direction, wall correction, hitbox
+    centre target, jump prediction, and forward-projection boost calculation
+    as Volt's Aerial routine. The final dodge uses Aerial's local contact aim.
     """
 
-    JUMP_HOLD = 0.06
+    JUMP_HOLD = jump_max_duration
     RELEASE_FRAMES = 3
-    DODGE_HOLD = 0.08
-    MAX_START_TIME = 1.25
+    DODGE_HOLD = 0.10
 
     def __init__(self, intercept_time, targets=None, ball_location=None):
         self.intercept_time = intercept_time
@@ -542,13 +546,17 @@ class wall_jump_shot:
         self.release_frames = 0
         self.dodge_start = -1.0
         self.last_debug = -1.0
+        self.first_jump_impulse_applied = False
+        self.contact_aim = Aerial(intercept_time, targets, fast_aerial=False)
         self.shot_vector = None
         self.offset_target = None
-        self.logged_start = False
+        self.wall_normal = None
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
         self.targets = getattr(shot, "targets", self.targets)
+        self.contact_aim.intercept_time = self.intercept_time
+        self.contact_aim.targets = self.targets
 
     def _abort(self, agent, reason):
         print(f"[WALL JUMP SHOT] Abort: {reason}", flush=True)
@@ -578,30 +586,84 @@ class wall_jump_shot:
             self._abort(agent, "intercept outside launch window")
             return
 
-        ball_slice = _safe_prediction_slice(agent, max(0.0, T))
-        if ball_slice is None:
+        prediction = getattr(agent, "ball_prediction_struct", None)
+        slices = getattr(prediction, "slices", None) if prediction is not None else None
+        if not slices:
             self._abort(agent, "missing ball prediction")
             return
-        raw = ball_slice.physics.location
-        self.ball_location = Vector(raw.x, raw.y, raw.z)
 
-        goal = _relative_goal_aim_point(agent, self.targets)
-        self.shot_vector = (goal - self.ball_location).flatten().normalize()
+        # Match Aerial's timestamp-based slice selection; do not use a rounded
+        # T*120 index that can drift when the intercept time is refreshed.
+        slice_n = min(
+            range(len(slices)),
+            key=lambda i: abs(slices[i].game_seconds - self.intercept_time)
+        )
+        physics = slices[slice_n].physics
+        self.ball_location = Vector(
+            physics.location.x, physics.location.y, physics.location.z
+        )
+        ball_velocity = Vector(
+            physics.velocity.x, physics.velocity.y, physics.velocity.z
+        )
+
+        # Reuse Aerial's Party Cannon outgoing-shot estimate, then its exact
+        # wall correction and hitbox-centre contact target.
+        self.shot_vector = self.contact_aim._party_cannon_shot_direction(
+            agent, self.ball_location, ball_velocity, max(T, dt)
+        ).normalize()
         if self.shot_vector.magnitude() < 0.001:
-            self._abort(agent, "invalid shot direction")
+            self._abort(agent, "invalid predicted shot direction")
             return
 
-        # Match jump_shot's normal centre-contact standoff.
-        self.offset_target = self.ball_location - self.shot_vector * 134.85
-        local_ball = car.local_location(self.ball_location)
-        local_shot = car.local(self.shot_vector)
+        hitbox_half_length = float(
+            getattr(car.hitbox, "length", 118.01)
+        ) * 0.5
+        contact_standoff = 92.75 + hitbox_half_length
+        self.shot_vector, self.wall_normal, wall_clearance = (
+            WallShot.adjust_aerial(
+                self.ball_location,
+                self.shot_vector,
+                approach_distance=contact_standoff
+            )
+        )
+        self.offset_target = self.contact_aim._party_cannon_hitbox_target(
+            agent, self.ball_location, self.shot_vector
+        )
 
-        # The routine must begin while the car is attached to a wall. A failed
-        # wall jump falls back to the normal jump-shot controller, not a blind
-        # airborne dodge.
+        # Predict the car's centre at the intercept using the same jump
+        # impulse/hold model used by Aerial. The jump impulse is included once,
+        # while the remaining held-jump acceleration is projected forward.
+        xf = car.location + car.velocity * T + 0.5 * agent.gravity * T * T
+        vf = car.velocity + agent.gravity * T
+        jump_elapsed = max(0.0, agent.time - self.jump_start)
+        tau = max(0.0, self.JUMP_HOLD - jump_elapsed)
+
+        if not self.first_jump_impulse_applied:
+            vf += car.up * jump_speed
+            xf += car.up * jump_speed * T
+            self.first_jump_impulse_applied = True
+
+        if tau > 0:
+            vf += car.up * jump_acc * tau
+            xf += car.up * jump_acc * tau * (T - 0.5 * tau)
+
+        delta_x = self.offset_target - xf
+        contact_distance = delta_x.magnitude()
+        contact_direction = delta_x.normalize()
+        local_contact = car.local(delta_x)
+        local_ball = car.local_location(self.ball_location)
+
         wall_attached = (
-            (abs(car.location.x) > 3720 and abs(car.up.x) > 0.34)
-            or (abs(car.location.y) > 4740 and abs(car.up.y) > 0.34)
+            (
+                abs(car.location.x) > 3720
+                and abs(car.up.x) > 0.34
+                and car.up.x * car.location.x < 0
+            )
+            or (
+                abs(car.location.y) > 4740
+                and abs(car.up.y) > 0.34
+                and car.up.y * car.location.y < 0
+            )
         )
         if (
             self.phase == "jump"
@@ -611,18 +673,19 @@ class wall_jump_shot:
             self._abort(agent, "car was not attached at launch")
             return
 
-        if self.phase == "jump":
-            # Use the wall's own normal for the takeoff; the car's up vector
-            # points away from the surface while attached.
-            agent.controller.jump = True
-            agent.controller.throttle = 1
-            agent.controller.boost = False
+        # Aim at the predicted hitbox-centre position, not the ball centre.
+        # Keep world-up as the orientation reference while leaving the wall.
+        if self.phase != "dodge":
             defaultPD(
                 agent,
-                local_shot,
+                local_contact if contact_distance > 50 else car.local(self.shot_vector),
                 up=car.local(Vector(z=1))
             )
-            if agent.time - self.jump_start >= self.JUMP_HOLD:
+
+        if self.phase == "jump":
+            agent.controller.jump = jump_elapsed < self.JUMP_HOLD
+            agent.controller.throttle = 1
+            if jump_elapsed >= self.JUMP_HOLD:
                 self.phase = "release"
                 self.release_frames = 0
                 agent.controller.jump = False
@@ -630,46 +693,39 @@ class wall_jump_shot:
         elif self.phase == "release":
             agent.controller.jump = False
             self.release_frames += 1
-            defaultPD(
-                agent,
-                local_shot,
-                up=car.local(Vector(z=1))
-            )
             if self.release_frames >= self.RELEASE_FRAMES:
                 self.phase = "align"
 
         elif self.phase == "align":
-            # Orient the nose toward the shot line. Keep the world-up reference
-            # so the car levels out after leaving the wall instead of aiming
-            # back into the surface.
-            defaultPD(
-                agent,
-                local_shot,
-                up=car.local(Vector(z=1))
-            )
-            agent.controller.throttle = 1
-            forward_alignment = car.forward.dot(self.shot_vector)
-            if (
-                car.boost > 0
-                and forward_alignment > 0.72
-                and T > 0.10
-                and local_ball.x > 0
-            ):
-                agent.controller.boost = True
-                agent.controller.throttle = 1
+            # Aerial's forward-projection boost rule: boost only when the
+            # predicted contact offset is sufficiently forward and aligned.
+            if T > dt and contact_distance > 1:
+                forward_need = delta_x.dot(car.forward) / max(T, dt)
+                forward_angle = math.acos(cap(
+                    car.forward.dot(contact_direction), -1, 1
+                ))
+                agent.controller.boost = (
+                    forward_need
+                    >= (agent.boost_accel + throttle_accel)
+                    * max(dt, 13.0 / 120.0)
+                    and forward_angle < 0.4
+                    and car.boost > 0
+                )
+                agent.controller.throttle = cap(
+                    forward_need / (
+                        throttle_accel * max(dt, 1.0 / 120.0)
+                    ),
+                    -1, 1
+                )
             else:
                 agent.controller.boost = False
+                agent.controller.throttle = 0
 
-            close_to_contact = (
-                car.location.dist(self.offset_target)
-                <= 92.75 + car.hitbox.length + 90
-            )
-            if T <= 0.16 and close_to_contact and local_ball.x > 0:
-                dodge = local_ball.flatten().normalize()
-                if dodge.magnitude() < 0.001:
-                    dodge = Vector(x=1)
-                agent.controller.pitch = -dodge.x
-                agent.controller.yaw = dodge.y
+            # Match Aerial's final dodge timing and local hitbox-contact aim.
+            if T <= 0.10 and not bool(getattr(car, "doublejumped", False)):
+                local_target = car.local_location(self.offset_target).flatten().normalize()
+                agent.controller.pitch = -local_target.x
+                agent.controller.yaw = local_target.y
                 agent.controller.roll = 0
                 agent.controller.jump = True
                 self.phase = "dodge"
@@ -677,21 +733,23 @@ class wall_jump_shot:
                 agent.last_flip_time = agent.time
                 print(
                     f"[WALL JUMP SHOT] DODGE T={T:.3f} "
-                    f"local_ball=({local_ball.x:.2f},{local_ball.y:.2f}) "
-                    f"distance={car.location.dist(self.offset_target):.0f}",
+                    f"predicted_contact_error={contact_distance:.0f} "
+                    f"local_target=({local_target.x:.2f},{local_target.y:.2f}) "
+                    f"wall_clearance={wall_clearance:.1f}",
                     flush=True
                 )
-            elif T <= 0.04 and not close_to_contact:
-                self._abort(agent, "missed contact window")
-                return
 
         elif self.phase == "dodge":
+            local_target = car.local_location(self.offset_target).flatten().normalize()
+            agent.controller.pitch = -local_target.x
+            agent.controller.yaw = local_target.y
+            agent.controller.roll = 0
             agent.controller.jump = True
             if agent.time - self.dodge_start >= self.DODGE_HOLD:
                 agent.controller.jump = False
                 print(
-                    f"[WALL JUMP SHOT] DODGE COMPLETE "
-                    f"T={T:.3f} boost={car.boost:.0f}",
+                    f"[WALL JUMP SHOT] DODGE COMPLETE T={T:.3f} "
+                    f"contact_error={contact_distance:.0f} boost={car.boost:.0f}",
                     flush=True
                 )
                 agent.pop()
@@ -701,17 +759,17 @@ class wall_jump_shot:
                 agent.push(recovery())
                 return
 
-        if agent.time - self.last_debug >= 0.35:
+        if agent.time - self.last_debug >= 0.30:
             self.last_debug = agent.time
             print(
                 f"[WALL JUMP SHOT] phase={self.phase} T={T:.2f} "
-                f"airborne={car.airborne} wall_up=({car.up.x:.2f},"
-                f"{car.up.y:.2f},{car.up.z:.2f}) "
+                f"jump={jump_elapsed:.2f} airborne={car.airborne} "
                 f"align={car.forward.dot(self.shot_vector):.2f} "
-                f"distance={car.location.dist(self.offset_target):.0f}",
+                f"predicted_error={contact_distance:.0f} "
+                f"actual_target={car.location.dist(self.offset_target):.0f} "
+                f"boost={car.boost:.0f}",
                 flush=True
             )
-
 
 class wall_dash:
     JUMP_TIME = 0.07
