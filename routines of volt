@@ -4769,10 +4769,13 @@ class jump_shot:
                     self.dodging = True
                     self.counter = 4
 
-                elif local_target.x <= 0 or (
-                    agent.me.location.dist(self.offset_target)
-                    > (92.75 + agent.me.hitbox.length) * 1.02 + 150
-                    and T < 0.12
+                elif (
+                    (not self.trajectory_side_flip and local_target.x <= 0)
+                    or (
+                        agent.me.location.dist(self.offset_target)
+                        > (92.75 + agent.me.hitbox.length) * 1.02 + 150
+                        and T < 0.12
+                    )
                 ):
                     print(
                         f"[JUMP SHOT NO DODGE] id={id(self)} "
