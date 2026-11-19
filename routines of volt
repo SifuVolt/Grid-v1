@@ -3951,14 +3951,6 @@ class jump_shot:
         self.quick_shot = False
         self.side_mode = False
         self.last_side_debug_time = -1
-        # A trajectory-side flip is a conditional, pure lateral dodge.
-        # It is independent of the existing side_shot subclass.
-        self.trajectory_side_flip = False
-        self.trajectory_side_direction = 0
-        self.trajectory_side_world_direction = None
-        self.trajectory_side_forward = None
-        self.trajectory_side_depth = 0.0
-        self.last_trajectory_side_debug_time = -1
         self.patience = shot_patience()
         self.wall_shot_active = False
         self.wall_shot_normal = None
@@ -4143,176 +4135,6 @@ class jump_shot:
                 flush=True
             )
 
-        # Choose a side-flip when the ball's natural/normal shot path
-        # misses the goal mouth. This is not limited to balls travelling
-        # across the goal: a ball moving toward goal from a wide angle can
-        # need exactly the same lateral redirection.
-        self.trajectory_side_flip = False
-        self.trajectory_side_direction = 0
-        self.trajectory_side_world_direction = None
-        self.trajectory_side_forward = None
-        self.trajectory_side_depth = 0.0
-        if not self.side_mode and self.ball_location.z <= 420:
-            try:
-                post_a, post_b = agent.foe_goal_shot
-                post_a = post_a if isinstance(post_a, Vector) else Vector(*post_a)
-                post_b = post_b if isinstance(post_b, Vector) else Vector(*post_b)
-                goal_center = (post_a + post_b) * 0.5
-                goal_center.z = self.ball_location.z
-                goal_vector = (goal_center - self.ball_location).flatten()
-                goal_distance = goal_vector.magnitude()
-                goal_direction = goal_vector.normalize()
-                incoming = self.ball_velocity.flatten()
-                incoming_speed = incoming.magnitude()
-                goalward_speed = incoming.dot(goal_direction)
-
-                goal_width_axis = (post_b - post_a).flatten().normalize()
-                goal_half_width = post_a.flat_dist(post_b) * 0.5
-                safe_goal_half_width = max(0.0, goal_half_width - 92.75)
-
-                if (
-                    incoming_speed >= 300
-                    and goal_distance <= 2400
-                    and goalward_speed >= 150
-                    and goal_width_axis.magnitude() > 0.001
-                ):
-                    # Estimate where the ball crosses the goal plane without
-                    # a side dodge. A miss to either side is the reason to
-                    # build a lateral contact rather than take a normal shot.
-                    natural_goal_time = goal_distance / goalward_speed
-                    natural_crossing = (
-                        self.ball_location + incoming * natural_goal_time
-                    )
-                    natural_miss = abs(
-                        (natural_crossing - goal_center).dot(goal_width_axis)
-                    )
-
-                    # The side-flip axis is perpendicular to the incoming
-                    # shot direction. Point it toward the goal's lateral
-                    # centre, which means Volt must approach from the
-                    # opposite side of the ball.
-                    desired_lateral = (
-                        goal_vector
-                        - incoming.normalize()
-                        * goal_vector.dot(incoming.normalize())
-                    ).flatten()
-                    if desired_lateral.magnitude() > 0.001:
-                        desired_lateral = desired_lateral.normalize()
-                        if desired_lateral.dot(goal_center - self.ball_location) < 0:
-                            desired_lateral = desired_lateral * -1
-
-                        # Only take over when the normal path is actually
-                        # outside (or dangerously close to) the goal mouth.
-                        # Also require that a side impulse materially improves
-                        # the projected crossing rather than merely changing
-                        # the ball's direction for its own sake.
-                        if natural_miss > safe_goal_half_width - 80:
-                            best_depth = 0.0
-                            best_outgoing = None
-                            best_miss = natural_miss
-                            best_score = -999999.0
-
-                            for depth in (0.0, 8.0, 16.0, 24.0, 32.0):
-                                # Deeper lateral contact gives the dodge a
-                                # stronger transfer. Keep the estimate modest
-                                # until actual collision data can calibrate it.
-                                lateral_impulse = 400 + depth * 18.0
-                                outgoing = (
-                                    incoming
-                                    + desired_lateral * lateral_impulse
-                                )
-                                outgoing_goalward = outgoing.dot(goal_direction)
-                                if outgoing_goalward <= 150:
-                                    continue
-                                crossing_time = goal_distance / outgoing_goalward
-                                if crossing_time > 3.0:
-                                    continue
-                                crossing = (
-                                    self.ball_location + outgoing * crossing_time
-                                )
-                                miss = abs(
-                                    (crossing - goal_center).dot(goal_width_axis)
-                                )
-                                improvement = natural_miss - miss
-                                score = (
-                                    improvement * 2.0
-                                    - max(0.0, miss - safe_goal_half_width) * 1.5
-                                    - depth * 0.5
-                                )
-                                if score > best_score:
-                                    best_score = score
-                                    best_depth = depth
-                                    best_outgoing = outgoing
-                                    best_miss = miss
-
-                            if (
-                                best_outgoing is not None
-                                and natural_miss - best_miss >= 100
-                                and best_miss < natural_miss
-                            ):
-                                lateral_standoff = (
-                                    92.75
-                                    + float(getattr(
-                                        agent.me.hitbox, "width", 84.0
-                                    )) * 0.5
-                                    - best_depth
-                                )
-                                lateral_standoff = max(110.0, lateral_standoff)
-
-                                # The car centre goes to the side opposite
-                                # the desired impulse. For a ball right of the
-                                # goal, this puts Volt to the ball's right so
-                                # a left side flip drives it toward the net.
-                                side_contact_target = (
-                                    self.ball_location
-                                    - desired_lateral * lateral_standoff
-                                )
-                                self.offset_target = Vector(
-                                    side_contact_target.x,
-                                    side_contact_target.y,
-                                    hitbox_target.z
-                                )
-                                self.contact_approach_target = (
-                                    self.offset_target.copy()
-                                )
-                                self.contact_point = (
-                                    self.ball_location
-                                    + desired_lateral * 92.75
-                                )
-                                self.trajectory_side_flip = True
-                                self.trajectory_side_world_direction = (
-                                    desired_lateral
-                                )
-                                self.trajectory_side_forward = (
-                                    incoming.normalize()
-                                )
-                                self.trajectory_side_depth = best_depth
-
-                                if (
-                                    self.last_trajectory_side_debug_time < 0
-                                    or agent.time
-                                    - self.last_trajectory_side_debug_time >= 0.35
-                                ):
-                                    self.last_trajectory_side_debug_time = agent.time
-                                    print(
-                                        f"[JUMP SIDE FLIP PLAN] "
-                                        f"natural_miss={natural_miss:.0f} "
-                                        f"predicted_miss={best_miss:.0f} "
-                                        f"goal_limit={safe_goal_half_width:.0f} "
-                                        f"goalward_speed={goalward_speed:.0f} "
-                                        f"depth={best_depth:.0f} "
-                                        f"impulse=({desired_lateral.x:.2f},"
-                                        f"{desired_lateral.y:.2f}) "
-                                        f"setup=({self.offset_target.x:.0f},"
-                                        f"{self.offset_target.y:.0f})",
-                                        flush=True
-                                    )
-            except (AttributeError, TypeError, ValueError, ZeroDivisionError):
-                self.trajectory_side_flip = False
-                self.trajectory_side_direction = 0
-                self.trajectory_side_world_direction = None
-                self.trajectory_side_forward = None
-
         if self.side_mode:
             # Rebuild the lateral setup from the latest predicted intercept
             # every frame. The car approaches from the side opposite the goal.
@@ -4388,12 +4210,7 @@ class jump_shot:
         Tj = T - self.needed_jump_time * 1.15
         agent.dbg_2d(f"Needed jump time: {round(self.needed_jump_time, 2)}")
 
-        if (
-            Tj > 0
-            and self.targets is not None
-            and not self.side_mode
-            and not self.trajectory_side_flip
-        ):
+        if Tj > 0 and self.targets is not None and not self.side_mode:
             # Normal jump shots may use the generic flank route. A side shot
             # must preserve its deliberately selected lateral setup point.
             final_target = _shot_approach_target(
@@ -4475,20 +4292,6 @@ class jump_shot:
                 drive_speed = max(drive_speed, minimum_final_speed)
 
             velocity = defaultDrive(agent, drive_speed, local_final_target)[1]
-
-            if self.trajectory_side_flip:
-                # Once the side setup point is reached, stop steering at the
-                # ball diagonally. Hold the car's forward axis along the
-                # ball's travel so the selected left/right dodge produces
-                # the intended goalward lateral impulse.
-                setup_distance = agent.me.location.flat_dist(
-                    self.offset_target
-                )
-                if setup_distance < 420:
-                    local_side_forward = agent.me.local(
-                        self.trajectory_side_forward
-                    ).flatten()
-                    defaultPD(agent, local_side_forward)
 
             if velocity == 0:
                 velocity = 1
@@ -4695,37 +4498,8 @@ class jump_shot:
                     agent.me.location.dist(self.offset_target)
                     < (92.75 + agent.me.hitbox.length) * 1.02
                 )
-                side_contact_ready = False
-                if self.trajectory_side_flip:
-                    # The ball must be beside the car, not behind its bumper.
-                    # Its local side must agree with the selected dodge side,
-                    # and the car must already be facing along ball travel.
-                    local_ball = agent.me.local_location(
-                        self.ball_location
-                    ).flatten()
-                    local_forward = agent.me.local(
-                        self.trajectory_side_forward
-                    ).flatten()
-                    local_impulse = agent.me.local(
-                        self.trajectory_side_world_direction
-                    ).flatten()
-                    expected_side = sign(local_impulse.y)
-                    side_contact_ready = (
-                        local_ball.x > -25
-                        and local_ball.x < agent.me.hitbox.length * 0.65
-                        and local_ball.y * expected_side > 65
-                        and abs(local_ball.y) < (
-                            92.75 + agent.me.hitbox.width * 0.5 + 85
-                        )
-                        and local_forward.x > 0.78
-                    )
-                    close_enough = side_contact_ready
 
-                if close_enough and (
-                    local_target.x > 0
-                    or self.side_mode
-                    or self.trajectory_side_flip
-                ):
+                if close_enough and (local_target.x > 0 or self.side_mode):
                     # Aim the dodge at the predicted ball contact itself,
                     # not at the approach point behind the ball. The selected
                     # centre/left/right contact has already shaped that approach.
@@ -4740,50 +4514,18 @@ class jump_shot:
                     else:
                         dodge_direction = Vector(x=1)
 
-                    if self.trajectory_side_flip:
-                        # A true side dodge has no forward/backward pitch.
-                        # Resolve the desired world-space correction into the
-                        # car's local frame so left/right remains correct
-                        # regardless of team side or arena orientation.
-                        correction_direction = (
-                            self.trajectory_side_world_direction
-                        )
-                        local_correction = agent.me.local(
-                            correction_direction
-                        ).flatten()
-                        side_input = sign(local_correction.y)
-                        if side_input == 0:
-                            side_input = sign(local_ball_for_dodge.y)
-                        if side_input == 0:
-                            side_input = 1
-                        agent.controller.pitch = 0
-                        agent.controller.yaw = side_input
-                        agent.controller.roll = 0
-                        print(
-                            f"[JUMP SIDE FLIP EXECUTE] "
-                            f"direction={'left' if side_input < 0 else 'right'} "
-                            f"local_correction=({local_correction.x:.2f},"
-                            f"{local_correction.y:.2f}) "
-                            f"ball_local=({local_ball_for_dodge.x:.0f},"
-                            f"{local_ball_for_dodge.y:.0f})",
-                            flush=True
-                        )
-                    else:
-                        agent.controller.pitch = -dodge_direction.x
-                        agent.controller.yaw = dodge_direction.y
+                    agent.controller.pitch = -dodge_direction.x
+                    agent.controller.yaw = dodge_direction.y
                     agent.controller.jump = True
 
                     agent.last_flip_time = agent.time
                     self.dodging = True
                     self.counter = 4
 
-                elif (
-                    (not self.trajectory_side_flip and local_target.x <= 0)
-                    or (
-                        agent.me.location.dist(self.offset_target)
-                        > (92.75 + agent.me.hitbox.length) * 1.02 + 150
-                        and T < 0.12
-                    )
+                elif local_target.x <= 0 or (
+                    agent.me.location.dist(self.offset_target)
+                    > (92.75 + agent.me.hitbox.length) * 1.02 + 150
+                    and T < 0.12
                 ):
                     print(
                         f"[JUMP SHOT NO DODGE] id={id(self)} "
@@ -4961,9 +4703,10 @@ class ground_shot:
             # Some adjustment to the final target to ensure it's inside the field and we don't try to drive through any goalposts or walls to reach it
             final_target = self.offset_target.copy().flatten()
 
-            if self.targets is not None and not self.trajectory_side_flip:
-                # Normal shots may use the usual flank route. A planned
-                # side-flip has its own exact beside-the-ball setup point.
+            if self.targets is not None:
+                # whether we are to the left or right of the shot vector
+                # Choose a flank route only when our current approach is poorly
+                # aligned. This offset fades away before the jump/contact.
                 final_target = _shot_approach_target(
                     agent, self.ball_location, final_target, self.shot_vector, T
                 )
