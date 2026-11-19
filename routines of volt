@@ -203,320 +203,293 @@ class wave_dash:
                 agent.controller.pitch = 0
 
 class wall_approach:
-    WALL_X = 4050.0
-    WALL_ENTRY_X = 3825.0
-    MIN_BALL_HEIGHT = 190.0
-    MAX_BALL_HEIGHT = 2200.0
-    MAX_WALL_GAP = 1800.0
-    WALL_TRANSITION_RADIUS = 256.0
+    """
+    Noob Black wall-shot execution adapted to Volt's routine stack.
 
-    def __init__(self, intercept_time, targets=None):
+    The finder supplies a contact that passed Noob's wall transforms and
+    120 Hz reachability test. This routine drives to the corresponding
+    unfolded floor/wall point, then hands the contact to Volt's existing
+    jump-shot or aerial controller.
+    """
+
+    def __init__(
+        self, intercept_time, targets=None, selected_mode="single",
+        ball_location=None
+    ):
         self.intercept_time = intercept_time
         self.targets = targets
-        self.ball_location = None
+        self.selected_mode = selected_mode
+        self.ball_location = ball_location
         self.start_time = -1.0
         self.last_debug_time = -1.0
-        self.lost_wall_time = -1.0
-        self.wall_axis = None
-        self.wall_side = 0
+        self.handed_off = False
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
         self.targets = getattr(shot, "targets", self.targets)
+        self.selected_mode = getattr(
+            shot, "selected_mode", self.selected_mode
+        )
+        self.ball_location = getattr(
+            shot, "ball_location", self.ball_location
+        )
 
-    def wall_surface_for_ball(self, ball):
-        # Plan against the projected side-wall contact point. The ball
-        # does not need to be touching the wall yet; it may still be moving
-        # toward it while Volt drives up the wall to meet its future position.
+    @staticmethod
+    def _jump_time_wall(height, double_jump=0):
+        height = max(0.0, float(height))
+        single_time = (height + 7.0) / 538.9887109375
+        if single_time >= 24 / 120:
+            if single_time >= 25 / 120 and double_jump:
+                if double_jump == 1:
+                    return (height + 407.0 / 6.0) / 830.9887109375, 3
+                return (height + 667.0 / 6.0) / 1038.9887109375, 2
+            return single_time, 1
+        a, b, c = 717.3359375, 272.7626953125, 17.671875
+        root = (height - c) / a + b * b / (4 * a * a)
+        if root < 0:
+            return 0.0, 1
+        return -b / (2 * a) + math.sqrt(root), 1
+
+    @staticmethod
+    def _wall_surface(ball, team):
         radius = 92.75
-        wall_side = 1 if ball.x >= 0 else -1
-        gap_x = 4096.0 - abs(ball.x) - radius
-        gap_y = 5120.0 - abs(ball.y) - radius
         candidates = [
-            ("x", wall_side, gap_x),
-            ("y", 1 if ball.y >= 0 else -1, gap_y)
+            ("x", 1 if ball.x >= 0 else -1, 4096.0 - abs(ball.x) - radius),
+            ("y", 1 if ball.y >= 0 else -1, 5120.0 - abs(ball.y) - radius),
         ]
         candidates.sort(key=lambda item: item[2])
-        for axis, candidate_side, gap in candidates:
-            if gap < -8.0 or gap > self.MAX_WALL_GAP:
+        for axis, wall_side, gap in candidates:
+            if gap < -8.0 or gap > 1800.0:
                 continue
             if axis == "y":
                 if abs(ball.x) < 900 and ball.z < 700:
                     continue
-                if candidate_side == side(agent.team):
+                if wall_side == side(team):
                     continue
-            return axis, candidate_side, max(0.0, gap)
+            return axis, wall_side, max(0.0, gap)
         return None
 
-    def car_wall_surface(self, car):
-        # The car's up vector rotates continuously through the curved
-        # floor-to-wall transition. Use a lower alignment threshold than
-        # the old hard wall-only test so the controller does not snap
-        # between ground and wall steering halfway through the transition.
-        if (
-            abs(car.location.x) > 3720.0
-            and abs(car.up.x) > 0.34
-            and car.up.x * car.location.x < 0
-        ):
-            return "x", (1 if car.location.x >= 0 else -1)
-        if (
-            abs(car.location.y) > 4740.0
-            and abs(car.up.y) > 0.34
-            and car.up.y * car.location.y < 0
-            and (1 if car.location.y >= 0 else -1) != side(agent.team)
-        ):
-            return "y", (1 if car.location.y >= 0 else -1)
-        return None
+    @staticmethod
+    def _ball_from_ground(pos):
+        if 4096.0 - abs(pos.x) < 5120.0 - abs(pos.y):
+            return Vector(
+                (1 if pos.x >= 0 else -1) * (4096.0 + pos.z),
+                pos.y, 0
+            )
+        return Vector(
+            pos.x,
+            (1 if pos.y >= 0 else -1) * (5120.0 + pos.z),
+            0
+        )
 
-    def stop(self, agent, reason):
-        print(f"[WALL DRIVE] STOP: {reason}", flush=True)
-        agent.pop()
-        agent.shooting = False
+    @staticmethod
+    def _ball_x_to_y(origin, pos):
+        if 4096.0 - abs(pos.x) < 5120.0 - abs(pos.y):
+            return Vector(
+                (1 if pos.x >= 0 else -1) * 4096.0, pos.y, pos.z
+            )
+        origin_x = 1 if origin.x >= 0 else -1
+        return Vector(
+            origin_x * 4096.0,
+            (1 if pos.y >= 0 else -1) * (
+                5120.0 + abs(pos.x - origin_x * 4096.0)
+            ),
+            pos.z
+        )
+
+    @staticmethod
+    def _ball_y_to_x(origin, pos):
+        if 4096.0 - abs(pos.x) < 5120.0 - abs(pos.y):
+            origin_y = 1 if origin.y >= 0 else -1
+            return Vector(
+                (1 if pos.x >= 0 else -1) * (
+                    4096.0 + abs(pos.y - origin_y * 5120.0)
+                ),
+                origin_y * 5120.0,
+                pos.z
+            )
+        return Vector(
+            pos.x, (1 if pos.y >= 0 else -1) * 5120.0, pos.z
+        )
 
     def run(self, agent: VirxERLU, manual=False):
         if self.start_time < 0:
             self.start_time = agent.time
-            print("[WALL DRIVE] START", flush=True)
+            print("[NOOB WALL SHOT] START", flush=True)
 
         agent.shooting = True
         T = self.intercept_time - agent.time
         prediction = agent.ball_prediction_struct
-        if prediction is None or not prediction.slices:
-            self.stop(agent, "no ball prediction")
+        slices = getattr(prediction, "slices", None) if prediction is not None else None
+        if not slices or T <= 0.12 or T > 5.2:
+            agent.pop()
+            agent.shooting = False
+            print("[NOOB WALL SHOT] Abort: prediction/intercept expired", flush=True)
             return
 
-        if T <= -0.10 or T > 4.5:
-            self.stop(agent, "intercept window expired")
-            return
-
-        predicted_time = self.intercept_time
-        ball_slice = min(
-            prediction.slices,
-            key=lambda item: abs(item.game_seconds - predicted_time)
-        )
-        physics = ball_slice.physics
+        index = max(0, min(len(slices) - 1, math.ceil(T * 120) - 1))
+        physics = slices[index].physics
         ball = Vector(
             physics.location.x, physics.location.y, physics.location.z
         )
         ball_velocity = Vector(
             physics.velocity.x, physics.velocity.y, physics.velocity.z
         )
-        self.ball_location = ball
         car = agent.me
-
-        surface = self.wall_surface_for_ball(ball)
-        if (
-            surface is None
-            or ball.z < self.MIN_BALL_HEIGHT
-            or ball.z > self.MAX_BALL_HEIGHT
-        ):
-            self.stop(
-                agent,
-                f"predicted ball is not on a reachable side wall "
-                f"ball=({ball.x:.0f},{ball.y:.0f},{ball.z:.0f})"
-            )
+        surface = self._wall_surface(ball, agent.team)
+        if surface is None:
+            agent.pop()
+            agent.shooting = False
+            print("[NOOB WALL SHOT] Abort: ball left wall-shot surface", flush=True)
             return
 
         axis, wall_side, wall_gap = surface
         wall_velocity = (
             ball_velocity.x if axis == "x" else ball_velocity.y
         ) * wall_side
-        if wall_gap > 45.0 and wall_velocity < 100.0:
-            self.stop(agent, "ball is not travelling toward the selected wall")
+        if wall_gap > 45 and wall_velocity < 100:
+            agent.pop()
+            agent.shooting = False
+            print("[NOOB WALL SHOT] Abort: ball no longer travelling to wall", flush=True)
             return
 
-        attached_wall = self.car_wall_surface(car)
-
-        # A car that has actually left the wall is no longer in a wall-drive
-        # state. Do not steer toward a stale wall target while free-falling.
-        # Hand control to the normal recovery routine; shot selection can
-        # reconsider the ball after the landing.
-        if car.airborne and attached_wall is None:
-            if self.lost_wall_time < 0:
-                self.lost_wall_time = agent.time
-            elif agent.time - self.lost_wall_time >= 0.10:
-                print(
-                    f"[WALL DRIVE] lost wall contact; recovering | "
-                    f"car=({car.location.x:.0f},{car.location.y:.0f},"
-                    f"{car.location.z:.0f}) velocity=({car.velocity.x:.0f},"
-                    f"{car.velocity.y:.0f},{car.velocity.z:.0f})",
-                    flush=True
-                )
-                agent.pop()
-                agent.shooting = False
-                agent.push(recovery())
-                return
-        else:
-            self.lost_wall_time = -1.0
-
-        if attached_wall is not None and attached_wall != (axis, wall_side):
-            self.stop(
-                agent,
-                f"different wall attached={attached_wall} "
-                f"ball_wall={(axis, wall_side)}"
-            )
+        goal = agent.foe_goal.location
+        deviation = abs(ball.y - goal.y)
+        target_height = deviation * math.tan(
+            min(deviation / 5120.0, 1.0) * math.pi / 4.0
+        )
+        shot_target = Vector(goal.x, goal.y, target_height)
+        shot_direction = (shot_target - ball).normalize()
+        if shot_direction.magnitude() < 0.001:
+            agent.pop()
+            agent.shooting = False
             return
 
-        goal_direction = (
-            agent.foe_goal.location - ball
-        ).flatten().normalize()
-        if goal_direction.magnitude() < 0.01:
-            goal_direction = Vector(0, -side(agent.team), 0)
-
-        # The target is the car centre for a nose-first wall contact. The
-        # 185-unit standoff includes ball radius and hitbox reach.
-        contact_target = Vector(
-            ball.x - goal_direction.x * 185.0,
-            ball.y - goal_direction.y * 185.0,
-            max(110.0, ball.z - goal_direction.z * 185.0)
+        contact_offset = (
+            92.75 if self.selected_mode in {"double", "aerial"}
+            else 134.85
         )
-        if axis == "x":
-            contact_target.x = wall_side * self.WALL_X
+        target_og_pos = ball - shot_direction * contact_offset
+        jump_index = 1 if self.selected_mode == "double" else 0
+        jump_time, _ = self._jump_time_wall(
+            min(4096.0 - abs(target_og_pos.x),
+                5120.0 - abs(target_og_pos.y)),
+            jump_index
+        )
+        target_og_pos += Vector(z=325.0 * jump_time * jump_time)
+
+        # Noob Black unfolds the floor-to-wall and wall-to-corner geometry
+        # before measuring distance. This is the key part of its wall-shot
+        # reachability model; do not replace it with straight 3D distance.
+        if car.location.z <= 50:
+            target_pos = self._ball_from_ground(target_og_pos)
+            car_pos = car.location.flatten()
+            route_mode = "ground"
+        elif 4096.0 - abs(car.location.x) < 5120.0 - abs(car.location.y):
+            target_pos = self._ball_x_to_y(car.location, target_og_pos)
+            car_pos = Vector(
+                (1 if car.location.x >= 0 else -1) * 4096.0,
+                car.location.y, car.location.z
+            )
+            route_mode = "x-wall"
         else:
-            contact_target.y = wall_side * 5075.0
+            target_pos = self._ball_y_to_x(car.location, target_og_pos)
+            car_pos = Vector(
+                car.location.x,
+                (1 if car.location.y >= 0 else -1) * 5120.0,
+                car.location.z
+            )
+            route_mode = "y-wall"
 
-        if ball.z < 500 and T > 0.55:
-            climb = max(420.0, min(720.0, 420.0 + ball.z * 0.6))
-            contact_target.z = min(1250.0, contact_target.z + climb)
-
-        # Treat the rounded floor-to-wall section as part of the wall
-        # route as soon as the car starts climbing it. Position alone is a
-        # useful fallback at the wall lip, where the up vector can lag.
-        wall_coordinate = car.location.x if axis == "x" else car.location.y
-        wall_up_component = car.up.x if axis == "x" else car.up.y
-        wall_lip = 3780.0 if axis == "x" else 4740.0
-        transition_progress = cap(
-            (abs(wall_coordinate) - wall_lip)
-            / self.WALL_TRANSITION_RADIUS,
-            0.0,
-            1.0
-        )
-        transitioning = (
-            abs(wall_coordinate) > wall_lip - 60.0
-            and (
-                abs(wall_up_component) > 0.08
-                or abs(wall_coordinate) > wall_lip + 120.0
-            )
-        )
-        on_wall = attached_wall == (axis, wall_side) or transitioning
-
-        if on_wall:
-            # Keep the actual ball-side contact point as the destination.
-            # Steering only to the wall lip would make Volt stop at the
-            # bottom instead of climbing toward an elevated ball.
-            drive_target = contact_target
-            drive_phase = (
-                "WALL SURFACE" if attached_wall is not None
-                else "WALL TRANSITION"
-            )
-            progress = transition_progress
-            transition_angle = progress * (math.pi * 0.5)
-            transition_remaining = self.WALL_TRANSITION_RADIUS * (
-                math.pi * 0.5 - transition_angle
-            )
-            wall_tangent_distance = math.hypot(
-                drive_target.y - car.location.y,
-                drive_target.z - car.location.z
-            )
-            distance = transition_remaining + wall_tangent_distance
-        else:
-            # Aim at the predicted contact point on the wall, not a
-            # same-height waypoint at the wall lip. The car naturally
-            # follows the curved floor-to-wall surface on the way there.
-            drive_target = contact_target
-            drive_phase = "GROUND TO WALL"
-            wall_entry = Vector(
-                contact_target.x,
-                contact_target.y,
-                max(100.0, car.location.z)
-            )
-            if axis == "x":
-                wall_entry.x = wall_side * self.WALL_ENTRY_X
-            else:
-                wall_entry.y = wall_side * 4745.0
-            ground_distance = car.location.flat_dist(wall_entry)
-            transition_distance = self.WALL_TRANSITION_RADIUS * (
-                math.pi * 0.5
-            )
-            climb_distance = max(
-                0.0, contact_target.z - max(100.0, car.location.z)
-            )
-            distance = (
-                ground_distance + transition_distance + climb_distance
-            )
-
-        local_target = car.local_location(drive_target)
-        time_left = max(0.12, min(T, 3.0))
-        speed_required = min(2200.0, max(700.0, distance / time_left))
-
+        distance = target_pos.dist(car_pos)
+        local_target = car.local_location(target_pos)
+        speed_required = cap(distance / max(T - jump_time, 0.12), 500, 2200)
         local_angle = abs(math.atan2(local_target.y, local_target.x))
-        turn_speed_cap = (
-            900.0 if local_angle > 1.65 else
-            1200.0 if local_angle > 1.20 else
-            1600.0 if local_angle > 0.75 else
-            2200.0
+
+        attached = (
+            abs(car.location.x) > 3720
+            and abs(car.up.x) > 0.34
+            and car.up.x * car.location.x < 0
         )
-        speed_required = min(speed_required, turn_speed_cap)
-        speed = car.velocity.magnitude()
+        attached_y = (
+            abs(car.location.y) > 4740
+            and abs(car.up.y) > 0.34
+            and car.up.y * car.location.y < 0
+            and (1 if car.location.y >= 0 else -1) != side(agent.team)
+        )
+        on_wall = attached if axis == "x" else attached_y
 
         if on_wall:
-            # Rotate the controller's up reference continuously through
-            # the floor-to-wall curve. This gives the steering controller
-            # a climb target instead of continuing to drive flat at the lip.
-            angle = transition_progress * (math.pi * 0.5)
             surface_up = (
-                Vector(-wall_side * math.sin(angle), 0, math.cos(angle))
-                if axis == "x"
-                else Vector(0, -wall_side * math.sin(angle), math.cos(angle))
-            ).normalize()
-
-            target_angles = defaultPD(
-                agent,
-                local_target,
-                up=car.local(surface_up)
+                Vector(-wall_side, 0, 0)
+                if axis == "x" else Vector(0, -wall_side, 0)
             )
-            defaultThrottle(
-                agent,
-                speed_required,
-                target_angles,
-                local_target
+            angles = defaultPD(
+                agent, local_target, up=car.local(surface_up)
             )
-            controller_mode = "SURFACE PD"
-            yaw_error = abs(target_angles[1])
+            defaultThrottle(agent, speed_required, angles, local_target)
+            yaw_error = abs(angles[1])
         else:
             defaultDrive(agent, speed_required, local_target)
-            controller_mode = "GROUND PD"
             yaw_error = local_angle
 
-        # Boost only after the steering controller has chosen a viable line.
         needs_boost = (
             car.boost > 0
-            and distance > 550.0
-            and speed_required > speed + 140.0
+            and distance > 300
+            and speed_required > car.velocity.magnitude() + 100
             and yaw_error < 0.85
             and not agent.controller.handbrake
         )
+        agent.controller.boost = bool(needs_boost)
         if needs_boost:
             agent.controller.throttle = 1
-            agent.controller.boost = True
-        elif yaw_error > 1.15 or agent.controller.handbrake:
-            agent.controller.boost = False
 
-        if (
-            self.last_debug_time < 0
-            or agent.time - self.last_debug_time >= 0.35
-        ):
+        # Once the car has reached the wall contact route, let Volt's
+        # existing contact controller execute the actual hit.
+        if on_wall and distance < 320 and T < 1.65 and not self.handed_off:
+            self.handed_off = True
+            agent.pop()
+            if self.selected_mode == "aerial":
+                next_routine = Aerial(
+                    self.intercept_time, self.targets, fast_aerial=True
+                )
+            elif self.selected_mode == "double":
+                next_routine = double_jump(
+                    self.intercept_time, self.targets
+                )
+            else:
+                next_routine = jump_shot(
+                    self.intercept_time, self.targets
+                )
+            agent.push(next_routine)
+            print(
+                f"[NOOB WALL SHOT] Handoff mode={self.selected_mode} "
+                f"surface={axis}{wall_side:+d} distance={distance:.0f} "
+                f"T={T:.2f}",
+                flush=True
+            )
+            return
+
+        if not car.airborne and T <= jump_time and local_angle <= math.pi / 2:
+            agent.controller.jump = True
+
+        if car.airborne:
+            # Track the ball from the car's nose while the wall shot is
+            # being completed; the final shot routine takes over at contact.
+            defaultPD(
+                agent,
+                car.local(ball - car.location),
+                up=car.local(Vector(z=1))
+            )
+
+        if agent.time - self.last_debug_time >= 0.4:
             self.last_debug_time = agent.time
             print(
-                f"[WALL DRIVE] {drive_phase} surface={axis}{wall_side:+d} "
-                f"gap={wall_gap:.0f} target=({drive_target.x:.0f},"
-                f"{drive_target.y:.0f},{drive_target.z:.0f}) "
-                f"distance={distance:.0f} T={T:.2f} "
-                f"speed={speed_required:.0f} actual={speed:.0f} "
-                f"boost={car.boost:.0f} controller={controller_mode} "
-                f"steer={agent.controller.steer:.2f} "
-                f"yaw={agent.controller.yaw:.2f} "
-                f"throttle={agent.controller.throttle:.2f}",
+                f"[NOOB WALL SHOT] route={route_mode} "
+                f"surface={axis}{wall_side:+d} gap={wall_gap:.0f} "
+                f"mode={self.selected_mode} distance={distance:.0f} "
+                f"T={T:.2f} jump={jump_time:.2f} "
+                f"boost={car.boost:.0f} steer={agent.controller.steer:.2f}",
                 flush=True
             )
 
