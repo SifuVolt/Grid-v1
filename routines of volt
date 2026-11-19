@@ -4225,9 +4225,6 @@ class jump_shot:
                             hitbox_width = float(
                                 getattr(agent.me.hitbox, "width", 84.0)
                             )
-                            side_clearance = (
-                                92.75 + hitbox_width * 0.5
-                            )
                             depth_candidates = (0.0, 8.0, 16.0, 24.0)
                             best_depth = 0.0
                             best_depth_score = -999.0
@@ -4257,15 +4254,11 @@ class jump_shot:
                                 92.75 + hitbox_width * 0.5 - best_depth,
                                 92.75 + hitbox_width * 0.5 - 24.0
                             )
-                            longitudinal_standoff = (
-                                92.75
-                                + float(getattr(
-                                    agent.me.hitbox, "length", 118.01
-                                )) * 0.5
-                            )
+                            # Line the ball up beside the middle of the car,
+                            # not behind its rear bumper. This is the key
+                            # distinction from a normal forward shot.
                             side_contact_target = (
                                 self.ball_location
-                                - incoming_direction * longitudinal_standoff
                                 - side_impulse_direction * lateral_standoff
                             )
                             self.offset_target = Vector(
@@ -4705,7 +4698,10 @@ class jump_shot:
                     local_forward = agent.me.local(
                         self.trajectory_side_forward
                     ).flatten()
-                    expected_side = self.trajectory_side_direction
+                    local_impulse = agent.me.local(
+                        self.trajectory_side_world_direction
+                    ).flatten()
+                    expected_side = sign(local_impulse.y)
                     side_contact_ready = (
                         local_ball.x > -25
                         and local_ball.x < agent.me.hitbox.length * 0.65
