@@ -359,7 +359,17 @@ class wall_approach:
             ball.z + ball_velocity.z ** 2 / 1300.0 <= 129.0
             and wall_velocity >= 720.0
         )
-        if not (stable_wall_ball or rolling_up_wall_ball):
+        # Also accept a ball that has just left the wall. Noob's original
+        # stable/rolling filters reject this because its wall-normal velocity
+        # is outward, even though the same wall jump can still reach it.
+        detached_wall_ball = (
+            wall_gap <= 1000.0
+            and 250.0 <= ball.z <= 1900.0
+            and -1400.0 <= wall_velocity < -150.0
+        )
+        if not (
+            stable_wall_ball or rolling_up_wall_ball or detached_wall_ball
+        ):
             agent.pop()
             agent.shooting = False
             print("[NOOB WALL SHOT] Abort: Noob wall-shot condition ended", flush=True)
@@ -542,6 +552,7 @@ class wall_jump_shot:
         self.ball_location = ball_location
         self.start_time = -1.0
         self.jump_start = -1.0
+        self.jump_hold_duration = self.JUMP_HOLD
         self.phase = "jump"
         self.release_frames = 0
         self.dodge_start = -1.0
@@ -574,6 +585,12 @@ class wall_jump_shot:
         if self.start_time < 0:
             self.start_time = agent.time
             self.jump_start = agent.time
+            initial_time = self.intercept_time - agent.time
+            # Keep the three-frame jump release and final dodge window even
+            # when wall_approach hands off late; shorten only the jump hold.
+            self.jump_hold_duration = min(
+                self.JUMP_HOLD, max(0.02, initial_time - 0.13)
+            )
             print(
                 f"[WALL JUMP SHOT] START T={self.intercept_time-agent.time:.2f} "
                 f"car=({car.location.x:.0f},{car.location.y:.0f},"
@@ -636,7 +653,7 @@ class wall_jump_shot:
         xf = car.location + car.velocity * T + 0.5 * agent.gravity * T * T
         vf = car.velocity + agent.gravity * T
         jump_elapsed = max(0.0, agent.time - self.jump_start)
-        tau = max(0.0, self.JUMP_HOLD - jump_elapsed)
+        tau = max(0.0, self.jump_hold_duration - jump_elapsed)
 
         if not self.first_jump_impulse_applied:
             vf += car.up * jump_speed
@@ -683,7 +700,7 @@ class wall_jump_shot:
             )
 
         if self.phase == "jump":
-            agent.controller.jump = jump_elapsed < self.JUMP_HOLD
+            agent.controller.jump = jump_elapsed < self.jump_hold_duration
             agent.controller.throttle = 1
             if jump_elapsed >= self.JUMP_HOLD:
                 self.phase = "release"
