@@ -1097,6 +1097,12 @@ class Aerial:
         self.side_wall_launched = False
         self.wall_shot_active = False
         self.wall_shot_normal = None
+        # Conditional perpendicular side-flip plan. This only changes the
+        # contact setup and final dodge when the normal forward dodge misses.
+        self.side_flip_plan = False
+        self.side_flip_direction = None
+        self.side_flip_target = None
+        self.side_flip_goal_x = None
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -4135,6 +4141,118 @@ class jump_shot:
                 flush=True
             )
 
+        # -------------------------------------------------------------
+        # CONDITIONAL SIDE-FLIP PLAN
+        #
+        # Keep the normal Party Cannon-derived shot direction and contact
+        # target unless a forward dodge is predicted to miss the safe goal
+        # mouth and a perpendicular side dodge clearly fixes that miss.
+        # This is deliberately evaluated before takeoff and then locked.
+        # -------------------------------------------------------------
+        if not self.jumping and not self.side_mode:
+            self.side_flip_plan = False
+            self.side_flip_direction = None
+            self.side_flip_target = None
+            self.side_flip_goal_x = None
+
+            goal_posts = agent.foe_goal_shot
+            post_a = goal_posts[0] if isinstance(goal_posts[0], Vector) else Vector(*goal_posts[0])
+            post_b = goal_posts[1] if isinstance(goal_posts[1], Vector) else Vector(*goal_posts[1])
+            goal_y = (post_a.y + post_b.y) * 0.5
+            safe_min_x = min(post_a.x, post_b.x) + 110
+            safe_max_x = max(post_a.x, post_b.x) - 110
+
+            car_forward = agent.me.forward.flatten().normalize()
+            shot_forward = self.shot_vector.flatten().normalize()
+            alignment = car_forward.dot(shot_forward)
+            in_attacking_half = (
+                self.ball_location.y * side(agent.team) > 0
+            )
+            enough_setup_time = (
+                T > self.needed_jump_time + 0.25
+                and T < 2.75
+            )
+
+            if (
+                in_attacking_half
+                and enough_setup_time
+                and alignment >= 0.72
+                and abs(shot_forward.y) > 0.20
+            ):
+                dodge_speed = dodge_impulse(agent)
+                car_velocity = agent.me.velocity.flatten()
+                incoming_velocity = self.ball_velocity.flatten()
+
+                def projected_goal_x(car_dodge_direction):
+                    # Party Cannon's post-hit 1:2 car/ball velocity blend.
+                    outgoing = (
+                        car_velocity
+                        + car_dodge_direction * dodge_speed
+                        + incoming_velocity * 2
+                    ) / 3
+                    if abs(outgoing.y) < 1:
+                        return None
+                    travel_time = (goal_y - self.ball_location.y) / outgoing.y
+                    if travel_time <= 0:
+                        return None
+                    return self.ball_location.x + outgoing.x * travel_time
+
+                forward_x = projected_goal_x(car_forward)
+                if forward_x is not None and not (
+                    safe_min_x <= forward_x <= safe_max_x
+                ):
+                    lateral = Vector(-car_forward.y, car_forward.x, 0).normalize()
+                    candidates = []
+                    for candidate_direction in (lateral, -lateral):
+                        candidate_x = projected_goal_x(candidate_direction)
+                        if candidate_x is None:
+                            continue
+                        if safe_min_x <= candidate_x <= safe_max_x:
+                            improvement = abs(forward_x - (safe_min_x + safe_max_x) * 0.5) - abs(
+                                candidate_x - (safe_min_x + safe_max_x) * 0.5
+                            )
+                            candidates.append((
+                                improvement, candidate_direction, candidate_x
+                            ))
+
+                    if candidates:
+                        improvement, chosen_direction, chosen_goal_x = max(
+                            candidates, key=lambda item: item[0]
+                        )
+                        if improvement >= 100:
+                            hitbox = agent.me.hitbox
+                            half_width = float(
+                                getattr(hitbox, "width", 84.2)
+                            ) * 0.5
+                            # Put the ball beside the car's middle, opposite
+                            # the desired lateral impulse. Do not use the
+                            # normal forward-contact standoff here.
+                            side_target = (
+                                self.ball_location
+                                - chosen_direction * (92.75 + half_width)
+                            )
+                            side_target.z = self.offset_target.z
+                            self.side_flip_plan = True
+                            self.side_flip_direction = chosen_direction.normalize()
+                            self.side_flip_target = side_target
+                            self.side_flip_goal_x = chosen_goal_x
+                            print(
+                                f"[JUMP SIDE CONTACT PLAN] "
+                                f"forward_goal_x={forward_x:.0f} "
+                                f"side_goal_x={chosen_goal_x:.0f} "
+                                f"improvement={improvement:.0f} "
+                                f"direction=({self.side_flip_direction.x:.2f},"
+                                f"{self.side_flip_direction.y:.2f}) "
+                                f"target=({side_target.x:.0f},{side_target.y:.0f})",
+                                flush=True
+                            )
+
+        # Once takeoff starts, keep the selected side-contact point fixed.
+        # Do not let the ordinary hitbox target pull the car back behind the ball.
+        if self.jumping and self.side_flip_plan and self.side_flip_target is not None:
+            self.offset_target = self.side_flip_target.copy()
+            self.contact_approach_target = self.side_flip_target.copy()
+
         if self.side_mode:
             # Rebuild the lateral setup from the latest predicted intercept
             # every frame. The car approaches from the side opposite the goal.
@@ -4499,7 +4617,11 @@ class jump_shot:
                     < (92.75 + agent.me.hitbox.length) * 1.02
                 )
 
-                if close_enough and (local_target.x > 0 or self.side_mode):
+                if close_enough and (
+                    local_target.x > 0
+                    or self.side_mode
+                    or self.side_flip_plan
+                ):
                     # Aim the dodge at the predicted ball contact itself,
                     # not at the approach point behind the ball. The selected
                     # centre/left/right contact has already shaped that approach.
@@ -4509,13 +4631,62 @@ class jump_shot:
                         self.ball_location
                     ).flatten()
 
-                    if local_ball_for_dodge.magnitude() > 1:
-                        dodge_direction = local_ball_for_dodge.normalize()
-                    else:
-                        dodge_direction = Vector(x=1)
+                    if (
+                        self.side_flip_plan
+                        and self.side_flip_direction is not None
+                        and not self.side_mode
+                    ):
+                        local_side_direction = agent.me.local(
+                            self.side_flip_direction
+                        ).flatten()
+                        local_ball = agent.me.local_location(
+                            self.ball_location
+                        ).flatten()
+                        half_length = float(
+                            getattr(agent.me.hitbox, "length", 118.01)
+                        ) * 0.5
+                        half_width = float(
+                            getattr(agent.me.hitbox, "width", 84.2)
+                        ) * 0.5
+                        ball_is_beside_middle = (
+                            abs(local_ball.y) >= half_width * 0.55
+                            and abs(local_ball.x) <= half_length * 0.90
+                        )
+                        side_axis_is_lateral = (
+                            abs(local_side_direction.y) >= 0.72
+                            and abs(local_side_direction.x) <= 0.55
+                        )
 
-                    agent.controller.pitch = -dodge_direction.x
-                    agent.controller.yaw = dodge_direction.y
+                        if ball_is_beside_middle and side_axis_is_lateral:
+                            # Pure side dodge: no pitch/backflip component.
+                            # Existing tilt-back, PD yaw (A/D), and counter
+                            # air-roll logic above this point are untouched.
+                            agent.controller.pitch = 0
+                            agent.controller.yaw = sign(
+                                local_side_direction.y
+                            )
+                            agent.controller.roll = 0
+                            print(
+                                f"[JUMP SIDE FLIP] goal_x={self.side_flip_goal_x} "
+                                f"ball_local=({local_ball.x:.0f},{local_ball.y:.0f}) "
+                                f"yaw={agent.controller.yaw:+.0f}",
+                                flush=True
+                            )
+                        else:
+                            # Geometry did not put the ball beside the car;
+                            # retain the established directional dodge.
+                            agent.controller.pitch = -dodge_direction.x
+                            agent.controller.yaw = dodge_direction.y
+                            print(
+                                f"[JUMP SIDE FLIP FALLBACK] "
+                                f"ball_local=({local_ball.x:.0f},{local_ball.y:.0f}) "
+                                f"lateral={side_axis_is_lateral}",
+                                flush=True
+                            )
+                    else:
+                        agent.controller.pitch = -dodge_direction.x
+                        agent.controller.yaw = dodge_direction.y
+
                     agent.controller.jump = True
 
                     agent.last_flip_time = agent.time
