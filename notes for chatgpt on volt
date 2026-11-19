@@ -672,3 +672,5 @@ This file is the project handoff and change checklist. Read it before every code
   - wall-jump routine and handoff: `06a7ad9d2b5c9603d6ca3cb12336ca3229f3176c`
   - wall attachment and jump-hold timing correction: `365cea249ecb84ec548270716ad708775a1fad97`
 - Static source edit and GitHub re-fetch verification only. No Python compile, RLBot simulation, or in-game test has been performed. The wall jump/dodge timing, wall detach detection and directional impulse need match validation.
+
+- Follow-up: kept forward air throttle active during the wall-shot alignment phase; the controller still only boosts when the nose is aligned with the planned shot direction. Commit: `10bd463284aad08cd7b34ef52aba7be4010abebc`.
