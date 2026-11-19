@@ -380,7 +380,20 @@ def find_wall_drive(agent, cap_=5.0):
             ball_slice.physics.velocity.x
             if axis == "x" else ball_slice.physics.velocity.y
         ) * wall_side
-        if gap > 45.0 and wall_velocity < 100.0:
+        wall_jump_time, _ = _noob_wall_jump_time(
+            min(4096.0 - abs(ball_pos.x), 5120.0 - abs(ball_pos.y)), 0
+        )
+        stable_wall_ball = (
+            wall_jump_time <= 1.45
+            and abs(wall_velocity) < 150.0
+            and 400.0 <= ball_pos.z <= 1900.0
+        )
+        rolling_up_wall_ball = (
+            ball_pos.z + ball_slice.physics.velocity.z ** 2 / 1300.0
+            <= 129.0
+            and wall_velocity >= 720.0
+        )
+        if not (stable_wall_ball or rolling_up_wall_ball):
             air_t += (2 * i + 1) / 3600.0
             continue
 
