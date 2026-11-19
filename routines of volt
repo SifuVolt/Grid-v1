@@ -207,7 +207,7 @@ class wall_approach:
     WALL_ENTRY_X = 3825.0
     MIN_BALL_HEIGHT = 190.0
     MAX_BALL_HEIGHT = 2200.0
-    MAX_WALL_GAP = 650.0
+    MAX_WALL_GAP = 1800.0
     WALL_TRANSITION_RADIUS = 256.0
 
     def __init__(self, intercept_time, targets=None):
@@ -263,6 +263,7 @@ class wall_approach:
             abs(car.location.y) > 4740.0
             and abs(car.up.y) > 0.34
             and car.up.y * car.location.y < 0
+            and (1 if car.location.y >= 0 else -1) != side(agent.team)
         ):
             return "y", (1 if car.location.y >= 0 else -1)
         return None
@@ -317,9 +318,11 @@ class wall_approach:
             return
 
         axis, wall_side, wall_gap = surface
-        wall_velocity = ball_velocity.x * wall_side
-        if wall_gap > 45.0 and wall_velocity < -100.0:
-            self.stop(agent, "ball is moving away from the side wall")
+        wall_velocity = (
+            ball_velocity.x if axis == "x" else ball_velocity.y
+        ) * wall_side
+        if wall_gap > 45.0 and wall_velocity < 100.0:
+            self.stop(agent, "ball is not travelling toward the selected wall")
             return
 
         attached_wall = self.car_wall_surface(car)
@@ -372,7 +375,7 @@ class wall_approach:
         else:
             contact_target.y = wall_side * 5075.0
 
-        if ball.z < 500:
+        if ball.z < 500 and T > 0.55:
             climb = max(420.0, min(720.0, 420.0 + ball.z * 0.6))
             contact_target.z = min(1250.0, contact_target.z + climb)
 
