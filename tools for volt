@@ -144,9 +144,9 @@ def _wall_drive_eta(
 
 def find_wall_drive(agent, cap_=4.0):
     """
-    Find a wall intercept only when the ball prediction places the ball
-    physically against a side wall. A ball merely travelling toward a wall
-    is not a wall-drive candidate.
+    Find a side-wall intercept from the ball's predicted future position.
+    The ball may still be approaching the wall: Volt should target its
+    projected wall-side contact point and drive up to meet it.
     """
     car = agent.me
     debug_now = agent.time
@@ -200,7 +200,7 @@ def find_wall_drive(agent, cap_=4.0):
 
         # The ball's surface must already be within a small collision
         # tolerance of the wall. Do not chase a ball 500–1800 units away.
-        surface = wall_surface_for_ball(loc, 115.0, agent.team)
+        surface = wall_surface_for_ball(loc, 650.0, agent.team)
         if surface is None:
             reject_wall += 1
             continue
