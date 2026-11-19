@@ -276,10 +276,6 @@ def find_wall_drive(agent, cap_=4.0):
                 0
             )
             ground_distance = ground_delta.magnitude()
-            ground_eta = _wall_drive_eta(
-                ground_distance, car, ground_delta, on_wall=False
-            )
-
             # The floor-to-wall transition is a curved surface, not a
             # vertical climb at a constant guessed speed. Allow time to
             # follow the transition arc, then accelerate along the wall.
