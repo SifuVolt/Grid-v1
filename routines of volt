@@ -230,10 +230,23 @@ class wall_approach:
         # toward it while Volt drives up the wall to meet its future position.
         radius = 92.75
         wall_side = 1 if ball.x >= 0 else -1
-        gap = 4096.0 - abs(ball.x) - radius
-        if gap < -8.0 or gap > self.MAX_WALL_GAP:
-            return None
-        return "x", wall_side, max(0.0, gap)
+        gap_x = 4096.0 - abs(ball.x) - radius
+        gap_y = 5120.0 - abs(ball.y) - radius
+        candidates = [
+            ("x", wall_side, gap_x),
+            ("y", 1 if ball.y >= 0 else -1, gap_y)
+        ]
+        candidates.sort(key=lambda item: item[2])
+        for axis, candidate_side, gap in candidates:
+            if gap < -8.0 or gap > self.MAX_WALL_GAP:
+                continue
+            if axis == "y":
+                if abs(ball.x) < 900 and ball.z < 700:
+                    continue
+                if candidate_side == side(agent.team):
+                    continue
+            return axis, candidate_side, max(0.0, gap)
+        return None
 
     def car_wall_surface(self, car):
         # The car's up vector rotates continuously through the curved
@@ -246,6 +259,12 @@ class wall_approach:
             and car.up.x * car.location.x < 0
         ):
             return "x", (1 if car.location.x >= 0 else -1)
+        if (
+            abs(car.location.y) > 4740.0
+            and abs(car.up.y) > 0.34
+            and car.up.y * car.location.y < 0
+        ):
+            return "y", (1 if car.location.y >= 0 else -1)
         return None
 
     def stop(self, agent, reason):
@@ -344,25 +363,36 @@ class wall_approach:
         # The target is the car centre for a nose-first wall contact. The
         # 185-unit standoff includes ball radius and hitbox reach.
         contact_target = Vector(
-            wall_side * self.WALL_X,
+            ball.x - goal_direction.x * 185.0,
             ball.y - goal_direction.y * 185.0,
             max(110.0, ball.z - goal_direction.z * 185.0)
         )
+        if axis == "x":
+            contact_target.x = wall_side * self.WALL_X
+        else:
+            contact_target.y = wall_side * 5075.0
+
+        if ball.z < 500:
+            climb = max(420.0, min(720.0, 420.0 + ball.z * 0.6))
+            contact_target.z = min(1250.0, contact_target.z + climb)
 
         # Treat the rounded floor-to-wall section as part of the wall
         # route as soon as the car starts climbing it. Position alone is a
         # useful fallback at the wall lip, where the up vector can lag.
+        wall_coordinate = car.location.x if axis == "x" else car.location.y
+        wall_up_component = car.up.x if axis == "x" else car.up.y
+        wall_lip = 3780.0 if axis == "x" else 4740.0
         transition_progress = cap(
-            (abs(car.location.x) - 3780.0)
+            (abs(wall_coordinate) - wall_lip)
             / self.WALL_TRANSITION_RADIUS,
             0.0,
             1.0
         )
         transitioning = (
-            abs(car.location.x) > 3720.0
+            abs(wall_coordinate) > wall_lip - 60.0
             and (
-                abs(car.up.x) > 0.08
-                or abs(car.location.x) > 3900.0
+                abs(wall_up_component) > 0.08
+                or abs(wall_coordinate) > wall_lip + 120.0
             )
         )
         on_wall = attached_wall == (axis, wall_side) or transitioning
@@ -393,10 +423,14 @@ class wall_approach:
             drive_target = contact_target
             drive_phase = "GROUND TO WALL"
             wall_entry = Vector(
-                wall_side * self.WALL_ENTRY_X,
+                contact_target.x,
                 contact_target.y,
                 max(100.0, car.location.z)
             )
+            if axis == "x":
+                wall_entry.x = wall_side * self.WALL_ENTRY_X
+            else:
+                wall_entry.y = wall_side * 4745.0
             ground_distance = car.location.flat_dist(wall_entry)
             transition_distance = self.WALL_TRANSITION_RADIUS * (
                 math.pi * 0.5
@@ -427,10 +461,10 @@ class wall_approach:
             # the floor-to-wall curve. This gives the steering controller
             # a climb target instead of continuing to drive flat at the lip.
             angle = transition_progress * (math.pi * 0.5)
-            surface_up = Vector(
-                -wall_side * math.sin(angle),
-                0,
-                math.cos(angle)
+            surface_up = (
+                Vector(-wall_side * math.sin(angle), 0, math.cos(angle))
+                if axis == "x"
+                else Vector(0, -wall_side * math.sin(angle), math.cos(angle))
             ).normalize()
 
             target_angles = defaultPD(
