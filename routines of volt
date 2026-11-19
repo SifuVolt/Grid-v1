@@ -3955,6 +3955,9 @@ class jump_shot:
         # It is independent of the existing side_shot subclass.
         self.trajectory_side_flip = False
         self.trajectory_side_direction = 0
+        self.trajectory_side_world_direction = None
+        self.trajectory_side_forward = None
+        self.trajectory_side_depth = 0.0
         self.last_trajectory_side_debug_time = -1
         self.patience = shot_patience()
         self.wall_shot_active = False
@@ -4196,7 +4199,7 @@ class jump_shot:
                     if desired_lateral.magnitude() > 0.001:
                         desired_lateral = desired_lateral.normalize()
                         if desired_lateral.dot(goal_center - self.ball_location) < 0:
-                            desired_lateral *= -1
+                            desired_lateral = desired_lateral * -1
 
                         # Only take over when the normal path is actually
                         # outside (or dangerously close to) the goal mouth.
