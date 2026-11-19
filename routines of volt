@@ -4205,9 +4205,13 @@ class jump_shot:
                         # Keep this for genuine cross-goal opportunities:
                         # the ball must be moving laterally, and the estimated
                         # side-flip impulse must improve its goalward path.
+                        left_of_goal = Vector(
+                            -goal_direction.y,
+                            goal_direction.x,
+                            0
+                        ).normalize()
                         cross_goal_speed = abs(
-                            incoming_direction.dot(left_of_travel)
-                            * incoming_speed
+                            incoming.dot(left_of_goal)
                         )
                         if (
                             cross_goal_speed >= 300
@@ -4471,6 +4475,20 @@ class jump_shot:
 
             velocity = defaultDrive(agent, drive_speed, local_final_target)[1]
 
+            if self.trajectory_side_flip:
+                # Once the side setup point is reached, stop steering at the
+                # ball diagonally. Hold the car's forward axis along the
+                # ball's travel so the selected left/right dodge produces
+                # the intended goalward lateral impulse.
+                setup_distance = agent.me.location.flat_dist(
+                    self.offset_target
+                )
+                if setup_distance < 420:
+                    local_side_forward = agent.me.local(
+                        self.trajectory_side_forward
+                    ).flatten()
+                    defaultPD(agent, local_side_forward)
+
             if velocity == 0:
                 velocity = 1
 
@@ -4687,7 +4705,7 @@ class jump_shot:
                     local_forward = agent.me.local(
                         self.trajectory_side_forward
                     ).flatten()
-                    expected_side = -self.trajectory_side_direction
+                    expected_side = self.trajectory_side_direction
                     side_contact_ready = (
                         local_ball.x > -25
                         and local_ball.x < agent.me.hitbox.length * 0.65
