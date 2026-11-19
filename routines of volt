@@ -4658,14 +4658,13 @@ class jump_shot:
                         )
 
                         if ball_is_beside_middle and side_axis_is_lateral:
-                            # Pure side dodge: no pitch/backflip component.
-                            # Existing tilt-back, PD yaw (A/D), and counter
-                            # air-roll logic above this point are untouched.
+                            # Side dodge: remove the forward/back pitch input
+                            # and use only the required lateral yaw pulse.
+                            # Leave the existing roll/air-roll controller alone.
                             agent.controller.pitch = 0
                             agent.controller.yaw = sign(
                                 local_side_direction.y
                             )
-                            agent.controller.roll = 0
                             print(
                                 f"[JUMP SIDE FLIP] goal_x={self.side_flip_goal_x} "
                                 f"ball_local=({local_ball.x:.0f},{local_ball.y:.0f}) "
