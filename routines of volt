@@ -207,7 +207,7 @@ class wall_approach:
     WALL_ENTRY_X = 3825.0
     MIN_BALL_HEIGHT = 190.0
     MAX_BALL_HEIGHT = 2200.0
-    MAX_WALL_GAP = 160.0
+    MAX_WALL_GAP = 650.0
     WALL_TRANSITION_RADIUS = 256.0
 
     def __init__(self, intercept_time, targets=None):
@@ -225,8 +225,9 @@ class wall_approach:
         self.targets = getattr(shot, "targets", self.targets)
 
     def wall_surface_for_ball(self, ball):
-        # The ball centre must be close to the side-wall collision plane.
-        # Being merely within driving distance of the wall is not enough.
+        # Plan against the projected side-wall contact point. The ball
+        # does not need to be touching the wall yet; it may still be moving
+        # toward it while Volt drives up the wall to meet its future position.
         radius = 92.75
         wall_side = 1 if ball.x >= 0 else -1
         gap = 4096.0 - abs(ball.x) - radius
@@ -348,16 +349,34 @@ class wall_approach:
             max(110.0, ball.z - goal_direction.z * 185.0)
         )
 
-        on_wall = attached_wall == (axis, wall_side)
-        if on_wall:
-            drive_target = contact_target
-            drive_phase = "WALL SURFACE"
-            progress = cap(
-                (abs(car.location.x) - 3780.0)
-                / self.WALL_TRANSITION_RADIUS,
-                0.0,
-                1.0
+        # Treat the rounded floor-to-wall section as part of the wall
+        # route as soon as the car starts climbing it. Position alone is a
+        # useful fallback at the wall lip, where the up vector can lag.
+        transition_progress = cap(
+            (abs(car.location.x) - 3780.0)
+            / self.WALL_TRANSITION_RADIUS,
+            0.0,
+            1.0
+        )
+        transitioning = (
+            abs(car.location.x) > 3720.0
+            and (
+                abs(car.up.x) > 0.08
+                or abs(car.location.x) > 3900.0
             )
+        )
+        on_wall = attached_wall == (axis, wall_side) or transitioning
+
+        if on_wall:
+            # Keep the actual ball-side contact point as the destination.
+            # Steering only to the wall lip would make Volt stop at the
+            # bottom instead of climbing toward an elevated ball.
+            drive_target = contact_target
+            drive_phase = (
+                "WALL SURFACE" if attached_wall is not None
+                else "WALL TRANSITION"
+            )
+            progress = transition_progress
             transition_angle = progress * (math.pi * 0.5)
             transition_remaining = self.WALL_TRANSITION_RADIUS * (
                 math.pi * 0.5 - transition_angle
@@ -368,16 +387,26 @@ class wall_approach:
             )
             distance = transition_remaining + wall_tangent_distance
         else:
-            # Reach the beginning of the curved transition first. The
-            # route planner has already budgeted for the transition arc
-            # and subsequent climb before it commits to this intercept.
-            drive_target = Vector(
+            # Aim at the predicted contact point on the wall, not a
+            # same-height waypoint at the wall lip. The car naturally
+            # follows the curved floor-to-wall surface on the way there.
+            drive_target = contact_target
+            drive_phase = "GROUND TO WALL"
+            wall_entry = Vector(
                 wall_side * self.WALL_ENTRY_X,
                 contact_target.y,
                 max(100.0, car.location.z)
             )
-            drive_phase = "GROUND TO WALL"
-            distance = car.location.flat_dist(drive_target)
+            ground_distance = car.location.flat_dist(wall_entry)
+            transition_distance = self.WALL_TRANSITION_RADIUS * (
+                math.pi * 0.5
+            )
+            climb_distance = max(
+                0.0, contact_target.z - max(100.0, car.location.z)
+            )
+            distance = (
+                ground_distance + transition_distance + climb_distance
+            )
 
         local_target = car.local_location(drive_target)
         time_left = max(0.12, min(T, 3.0))
@@ -394,16 +423,10 @@ class wall_approach:
         speed = car.velocity.magnitude()
 
         if on_wall:
-            # Approximate the rounded floor-to-wall transition with a
-            # quarter-circle normal. This makes the desired up vector
-            # rotate smoothly instead of snapping to a vertical-wall normal.
-            progress = cap(
-                (abs(car.location.x) - 3780.0)
-                / self.WALL_TRANSITION_RADIUS,
-                0.0,
-                1.0
-            )
-            angle = progress * (math.pi * 0.5)
+            # Rotate the controller's up reference continuously through
+            # the floor-to-wall curve. This gives the steering controller
+            # a climb target instead of continuing to drive flat at the lip.
+            angle = transition_progress * (math.pi * 0.5)
             surface_up = Vector(
                 -wall_side * math.sin(angle),
                 0,
