@@ -619,7 +619,7 @@ This file is the project handoff and change checklist. Read it before every code
 
 - Tightened wall-drive candidate selection: the predicted ball must be within 115 units of the side-wall collision plane at the selected intercept slice. Merely approaching a wall from up to 1,800 units away no longer qualifies.
 - Reworked route ETA into separate ground approach, quarter-circle floor-to-wall transition, and wall-climb segments. ETA accounts for heading error, projected velocity, boost acceleration/consumption, throttle acceleration, speed cap, and a conservative arrival margin.
-- Reworked wall steering to use a gradually rotating surface-up reference through the curved transition instead of snapping directly from world-up to wall-normal.
+- Reworked wall steering to use a gradually rotating surface-up reference through the curved transition instead of snapping directly from world-up to wall-normal. Wall travel distance is measured along the transition arc and wall tangent, not as a straight line through the arena.
 - Corrected the wall-drive debug path so controller mode and yaw error are assigned before being printed.
 - Improved wall attachment detection to recognize the curved transition earlier. The aerial handoff still waits for a more stable wall orientation (`abs(car.up.x) > 0.65`) to avoid launching during the transition.
 - If the car is airborne but no longer attached to the side wall for at least 0.10 seconds, the wall-drive routine exits and hands control to the existing recovery routine. Normal shot selection can then reassess after landing rather than steering toward a stale wall intercept.
