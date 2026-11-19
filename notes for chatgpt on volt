@@ -624,3 +624,12 @@ This file is the project handoff and change checklist. Read it before every code
 - Improved wall attachment detection to recognize the curved transition earlier. The aerial handoff still waits for a more stable wall orientation (`abs(car.up.x) > 0.65`) to avoid launching during the transition.
 - If the car is airborne but no longer attached to the side wall for at least 0.10 seconds, the wall-drive routine exits and hands control to the existing recovery routine. Normal shot selection can then reassess after landing rather than steering toward a stale wall intercept.
 - This is a more realistic surface-aware approximation inspired by Party Cannon's Drive/Field approach, not a full collision/physics simulation or a literal C# port. It has not been compiled or tested in-game. Tune transition radius/timing only from actual match diagnostics.
+
+
+## Wall-drive target and climb correction (2026-11-19)
+
+- Relaxed the wall-drive ball-surface gate from 115 to 650 units. A predicted ball may still be approaching the side wall; the finder accepts it when the wall-normal velocity is not carrying it away from that wall.
+- Raised the live wall_approach gap limit to the same 650 units so the routine does not cancel a valid predicted intercept selected by the finder.
+- Changed the ground approach target from a same-height waypoint at the wall lip to the actual predicted wall-side car contact target. This gives the controller an elevated destination to drive toward instead of stopping at the bottom of the wall.
+- Once the car enters the curved wall transition, switch to surface PD using a continuously rotating up reference. The transition can be detected from the car up vector or from reaching the wall lip, so it does not depend on the old stricter attachment test becoming true first.
+- The target remains the predicted ball contact pose; this is still a simplified surface/ETA model and needs in-game validation. No compile or match test has been performed.
