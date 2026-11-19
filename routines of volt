@@ -600,13 +600,14 @@ class wall_jump_shot:
         # wall jump falls back to the normal jump-shot controller, not a blind
         # airborne dodge.
         wall_attached = (
-            not car.airborne
-            and (
-                (abs(car.location.x) > 3720 and abs(car.up.x) > 0.34)
-                or (abs(car.location.y) > 4740 and abs(car.up.y) > 0.34)
-            )
+            (abs(car.location.x) > 3720 and abs(car.up.x) > 0.34)
+            or (abs(car.location.y) > 4740 and abs(car.up.y) > 0.34)
         )
-        if self.phase == "jump" and not wall_attached and agent.time-self.jump_start < 0.12:
+        if (
+            self.phase == "jump"
+            and agent.time - self.jump_start < 0.025
+            and not wall_attached
+        ):
             self._abort(agent, "car was not attached at launch")
             return
 
@@ -621,7 +622,7 @@ class wall_jump_shot:
                 local_shot,
                 up=car.local(Vector(z=1))
             )
-            if car.airborne or agent.time - self.jump_start >= self.JUMP_HOLD:
+            if agent.time - self.jump_start >= self.JUMP_HOLD:
                 self.phase = "release"
                 self.release_frames = 0
                 agent.controller.jump = False
