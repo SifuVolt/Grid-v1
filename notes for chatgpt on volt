@@ -580,3 +580,14 @@ This file is the project handoff and change checklist. Read it before every code
 - The candidate dodge axis is perpendicular to the ball's incoming direction and points toward the goal's lateral centre. Volt's setup point is on the opposite side of the ball, so a ball right of the goal should cause Volt to get to its right and side-flip left.
 - Candidate lateral contact depths are evaluated by their estimated effect on the projected goal-mouth crossing. The selected side setup point bypasses generic flank routing so that normal shot approach logic cannot overwrite it.
 - This is still a simplified trajectory/impulse estimate, not a collision-accurate physics solver. No Python compile or in-game test has been run.
+
+## Conditional perpendicular side flip in jump_shot (2026-11-19)
+
+- The user reverted the separate goal-mouth side-flip planner/class. Do not reintroduce a separate routine or planner for this behavior.
+- The conditional correction now lives directly in the existing `jump_shot.run` dodge decision. The established jump tilt-back, PD yaw alignment, A/D steering, and small counter-direction air roll remain unchanged.
+- At the normal dodge moment, the routine estimates the outgoing ball velocity for the existing forward dodge using the current car velocity plus the forward dodge impulse, blended with twice the predicted ball velocity (matching the 1:2 car/ball blend used by the existing Party Cannon shot prediction).
+- It projects that outgoing velocity to the opponent goal plane. If the front-dodge path is predicted to miss the safe post-to-post width, it tests both pure side-flip impulses along the axis perpendicular to the car's current forward axis.
+- A side flip is selected only if the car's horizontal forward axis is sufficiently aligned with the planned shot direction and one side candidate projects inside the safe goal mouth with a meaningful improvement over the forward dodge.
+- The selected side flip uses `pitch=0`, `yaw=+/-1`, and `roll=0`. Otherwise the existing forward/directional dodge is preserved exactly.
+- Diagnostics: `[JUMP SIDE FLIP CHECK]` reports the projected forward miss and best side candidate; `[JUMP SIDE FLIP]` confirms the pure side flip was selected.
+- This is an initial velocity-based approximation, not a Rocket League collision simulation. No compile or in-game test has been run. Validate whether the correct side is selected and whether the ball actually enters the goal; tune only from match observations.
