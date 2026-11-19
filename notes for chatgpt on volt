@@ -633,3 +633,13 @@ This file is the project handoff and change checklist. Read it before every code
 - Changed the ground approach target from a same-height waypoint at the wall lip to the actual predicted wall-side car contact target. This gives the controller an elevated destination to drive toward instead of stopping at the bottom of the wall.
 - Once the car enters the curved wall transition, switch to surface PD using a continuously rotating up reference. The transition can be detected from the car up vector or from reaching the wall lip, so it does not depend on the old stricter attachment test becoming true first.
 - The target remains the predicted ball contact pose; this is still a simplified surface/ETA model and needs in-game validation. No compile or match test has been performed.
+
+
+## Wall-drive candidate coverage correction (2026-11-19)
+
+- The prior finder only considered side walls and required ball height >=190. This excluded the low opponent-back-wall play shown in testing (ball near y=4392, z around 120), so no wall-drive routine could be selected.
+- Candidate surfaces now include side walls and the opponent back wall; our own back wall remains excluded. Goal-mouth positions are excluded from the back-wall candidate.
+- Candidate wall gap expanded to 1800 units and the finder now requires ball velocity toward the selected wall when it is not already in contact. Low balls from ground level through 2200 are eligible.
+- For low balls under 500, route ETA aims for a controlled elevated run-up 420–720 units above the eventual contact height, then the routine switches down to the actual contact height during the final 0.55 seconds.
+- Wall attachment and surface steering now recognise the opponent back wall as well as side walls. Team-role challenger gating remains intact: a non-elected teammate still yields rather than double-challenging.
+- This remains a simplified arena-surface route model. No compile or in-game test has been performed.
