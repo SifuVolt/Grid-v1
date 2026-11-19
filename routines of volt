@@ -477,6 +477,10 @@ class wall_approach:
                 next_routine = double_jump(
                     self.intercept_time, self.targets
                 )
+            elif self.selected_mode == "wall_jump":
+                next_routine = wall_jump_shot(
+                    self.intercept_time, self.targets, self.ball_location
+                )
             else:
                 next_routine = jump_shot(
                     self.intercept_time, self.targets
@@ -512,6 +516,200 @@ class wall_approach:
                 f"boost={car.boost:.0f} steer={agent.controller.steer:.2f}",
                 flush=True
             )
+
+class wall_jump_shot:
+    """
+    Single-jump wall shot.
+
+    Launches from the wall using the car's wall-normal jump impulse, rotates
+    toward the planned goalward shot line, then uses a directional dodge at
+    the predicted contact. The wall finder and wall_approach retain Noob
+    Black's contact prediction and unfolded surface reachability.
+    """
+
+    JUMP_HOLD = 0.06
+    RELEASE_FRAMES = 3
+    DODGE_HOLD = 0.08
+    MAX_START_TIME = 1.25
+
+    def __init__(self, intercept_time, targets=None, ball_location=None):
+        self.intercept_time = intercept_time
+        self.targets = targets
+        self.ball_location = ball_location
+        self.start_time = -1.0
+        self.jump_start = -1.0
+        self.phase = "jump"
+        self.release_frames = 0
+        self.dodge_start = -1.0
+        self.last_debug = -1.0
+        self.shot_vector = None
+        self.offset_target = None
+        self.logged_start = False
+
+    def update(self, shot):
+        self.intercept_time = shot.intercept_time
+        self.targets = getattr(shot, "targets", self.targets)
+
+    def _abort(self, agent, reason):
+        print(f"[WALL JUMP SHOT] Abort: {reason}", flush=True)
+        agent.pop()
+        agent.shooting = False
+        agent.shot_weight = -1
+        agent.shot_time = -1
+        if agent.me.airborne:
+            agent.push(recovery())
+        else:
+            agent.push(jump_shot(self.intercept_time, self.targets))
+
+    def run(self, agent: VirxERLU, manual=False):
+        car = agent.me
+        if self.start_time < 0:
+            self.start_time = agent.time
+            self.jump_start = agent.time
+            print(
+                f"[WALL JUMP SHOT] START T={self.intercept_time-agent.time:.2f} "
+                f"car=({car.location.x:.0f},{car.location.y:.0f},"
+                f"{car.location.z:.0f})",
+                flush=True
+            )
+
+        T = self.intercept_time - agent.time
+        if T <= -0.15 or T > 2.0:
+            self._abort(agent, "intercept outside launch window")
+            return
+
+        ball_slice = _safe_prediction_slice(agent, max(0.0, T))
+        if ball_slice is None:
+            self._abort(agent, "missing ball prediction")
+            return
+        raw = ball_slice.physics.location
+        self.ball_location = Vector(raw.x, raw.y, raw.z)
+
+        goal = _relative_goal_aim_point(agent, self.targets)
+        self.shot_vector = (goal - self.ball_location).flatten().normalize()
+        if self.shot_vector.magnitude() < 0.001:
+            self._abort(agent, "invalid shot direction")
+            return
+
+        # Match jump_shot's normal centre-contact standoff.
+        self.offset_target = self.ball_location - self.shot_vector * 134.85
+        local_ball = car.local_location(self.ball_location)
+        local_shot = car.local(self.shot_vector)
+
+        # The routine must begin while the car is attached to a wall. A failed
+        # wall jump falls back to the normal jump-shot controller, not a blind
+        # airborne dodge.
+        wall_attached = (
+            not car.airborne
+            and (
+                (abs(car.location.x) > 3720 and abs(car.up.x) > 0.34)
+                or (abs(car.location.y) > 4740 and abs(car.up.y) > 0.34)
+            )
+        )
+        if self.phase == "jump" and not wall_attached and agent.time-self.jump_start < 0.12:
+            self._abort(agent, "car was not attached at launch")
+            return
+
+        if self.phase == "jump":
+            # Use the wall's own normal for the takeoff; the car's up vector
+            # points away from the surface while attached.
+            agent.controller.jump = True
+            agent.controller.throttle = 1
+            agent.controller.boost = False
+            defaultPD(
+                agent,
+                local_shot,
+                up=car.local(Vector(z=1))
+            )
+            if car.airborne or agent.time - self.jump_start >= self.JUMP_HOLD:
+                self.phase = "release"
+                self.release_frames = 0
+                agent.controller.jump = False
+
+        elif self.phase == "release":
+            agent.controller.jump = False
+            self.release_frames += 1
+            defaultPD(
+                agent,
+                local_shot,
+                up=car.local(Vector(z=1))
+            )
+            if self.release_frames >= self.RELEASE_FRAMES:
+                self.phase = "align"
+
+        elif self.phase == "align":
+            # Orient the nose toward the shot line. Keep the world-up reference
+            # so the car levels out after leaving the wall instead of aiming
+            # back into the surface.
+            defaultPD(
+                agent,
+                local_shot,
+                up=car.local(Vector(z=1))
+            )
+            forward_alignment = car.forward.dot(self.shot_vector)
+            if (
+                car.boost > 0
+                and forward_alignment > 0.72
+                and T > 0.10
+                and local_ball.x > 0
+            ):
+                agent.controller.boost = True
+                agent.controller.throttle = 1
+            else:
+                agent.controller.boost = False
+
+            close_to_contact = (
+                car.location.dist(self.offset_target)
+                <= 92.75 + car.hitbox.length + 90
+            )
+            if T <= 0.16 and close_to_contact and local_ball.x > 0:
+                dodge = local_ball.flatten().normalize()
+                if dodge.magnitude() < 0.001:
+                    dodge = Vector(x=1)
+                agent.controller.pitch = -dodge.x
+                agent.controller.yaw = dodge.y
+                agent.controller.roll = 0
+                agent.controller.jump = True
+                self.phase = "dodge"
+                self.dodge_start = agent.time
+                agent.last_flip_time = agent.time
+                print(
+                    f"[WALL JUMP SHOT] DODGE T={T:.3f} "
+                    f"local_ball=({local_ball.x:.2f},{local_ball.y:.2f}) "
+                    f"distance={car.location.dist(self.offset_target):.0f}",
+                    flush=True
+                )
+            elif T <= 0.04 and not close_to_contact:
+                self._abort(agent, "missed contact window")
+                return
+
+        elif self.phase == "dodge":
+            agent.controller.jump = True
+            if agent.time - self.dodge_start >= self.DODGE_HOLD:
+                agent.controller.jump = False
+                print(
+                    f"[WALL JUMP SHOT] DODGE COMPLETE "
+                    f"T={T:.3f} boost={car.boost:.0f}",
+                    flush=True
+                )
+                agent.pop()
+                agent.shooting = False
+                agent.shot_weight = -1
+                agent.shot_time = -1
+                agent.push(recovery())
+                return
+
+        if agent.time - self.last_debug >= 0.35:
+            self.last_debug = agent.time
+            print(
+                f"[WALL JUMP SHOT] phase={self.phase} T={T:.2f} "
+                f"airborne={car.airborne} wall_up=({car.up.x:.2f},"
+                f"{car.up.y:.2f},{car.up.z:.2f}) "
+                f"align={car.forward.dot(self.shot_vector):.2f} "
+                f"distance={car.location.dist(self.offset_target):.0f}",
+                flush=True
+            )
+
 
 class wall_dash:
     JUMP_TIME = 0.07
