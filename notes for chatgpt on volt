@@ -62,20 +62,15 @@ This file is the project handoff and change checklist. Read it before every code
 - For directional jump-shot dodge decisions, compare ball position to the interception point, not merely the car.
 - User dislikes backflip-heavy dodge behavior and excessive setup that loses good immediate shots.
 
-## 5. Wall behavior — current intended architecture
+## 5. Wall behavior — live implementation
 
-- Volt must NOT have a separate wall-drive shot routine or planner that sends the car to a wall independently of the shot routines.
-- Party Cannon's approach is integrated into normal GroundShot, JumpShot, and AerialShot geometry/orientation. It does not require a standalone WallShot action.
-- Wall proximity may adjust the shot's contact direction/target geometry; it must not make the car abandon normal positioning or leave the goal open to chase a wall.
-- The own back wall should not be treated as a driveable wall for defensive positioning.
-- Current Party Cannon-inspired helper in `routines of volt` is named `ShotSurfaceGeometry`. It adjusts ground, jump, and aerial shot geometry relative to nearby arena surfaces. Current model covers floor, side walls, and back walls with axis-aligned planes; it is not a full beveled-corner/goal mesh.
-- The previous standalone `wall_approach`, `wall_shot`, wall-drive finder, and Aerial side-wall takeoff were removed.
-- Current commits on `partycannon-python-port` at time of writing:
-  - `02f726e`: remove wall-drive selection from agent decision code.
-  - `23693fb`: Party Cannon-derived wall-relative jump orientation.
-  - `ac83cd6`: integrate surface geometry into ground/aerial shots; remove standalone wall routines.
-  - `23ff275`: remove obsolete wall-drive and wall-shot functions from `tools for volt`.
-- Verify the current branch before assuming these commits or edits are still present; the user may revert.
+- The active branch currently contains a standalone `wall_approach` routine, selected by `tools.find_wall_drive()` and committed through the agent's shot-selection path. Do not assume the older removal notes below describe the current live branch.
+- The wall-drive routine is limited to side walls. It must not turn the own back wall into an attacking route or pull the goalie away from the goal line.
+- Wall-drive selection must require the predicted ball centre to be physically close to the side-wall collision plane. A ball merely travelling toward a wall is not a valid wall-drive intercept.
+- Car reachability must include the ground approach, rounded floor-to-wall transition, wall climb, current heading/velocity, acceleration, boost budget, and a safety margin. A straight-line distance or fixed climb-speed estimate is not sufficient.
+- The routine must distinguish ground approach, curved transition, stable wall attachment, and free flight after losing the wall. Do not continue wall steering while the car is falling away from the wall; hand off to recovery and let normal shot selection reconsider after landing.
+- Party Cannon's `Drive.cs`, `Car.cs`, and `Field.cs` are the reference for surface-aware distance, turn-radius, landing prediction, and smooth surface transitions. Volt's current arena model is still a side-wall approximation, not a full mesh simulation.
+- Preserve ordinary ground/jump/aerial shot geometry and defensive behaviour when no physically reachable wall intercept exists.
 
 ## 6. Current Aerial implementation notes
 
@@ -618,3 +613,14 @@ This file is the project handoff and change checklist. Read it before every code
 - The existing airborne tilt-back/power posture, defaultPD A/D steering, and counter-direction air-roll block were left unchanged. The only A/D-related override is the yaw pulse required to execute the selected side flip at the final dodge frame; roll is not assigned by the side-flip branch.
 - Diagnostics: `[JUMP SIDE CONTACT PLAN]`, `[JUMP SIDE FLIP]`, and `[JUMP SIDE FLIP FALLBACK]`.
 - Static source verification only. No compile, simulation, or in-game test has been performed. The outgoing-ball estimate is a trajectory heuristic, not a full Rocket League collision simulation; validate setup alignment, ball-adjacent contact, and goal-mouth correction in-game.
+
+
+## Wall-drive physics rebuild (2026-11-19)
+
+- Tightened wall-drive candidate selection: the predicted ball must be within 115 units of the side-wall collision plane at the selected intercept slice. Merely approaching a wall from up to 1,800 units away no longer qualifies.
+- Reworked route ETA into separate ground approach, quarter-circle floor-to-wall transition, and wall-climb segments. ETA accounts for heading error, projected velocity, boost acceleration/consumption, throttle acceleration, speed cap, and a conservative arrival margin.
+- Reworked wall steering to use a gradually rotating surface-up reference through the curved transition instead of snapping directly from world-up to wall-normal.
+- Corrected the wall-drive debug path so controller mode and yaw error are assigned before being printed.
+- Improved wall attachment detection to recognize the curved transition earlier. The aerial handoff still waits for a more stable wall orientation (`abs(car.up.x) > 0.65`) to avoid launching during the transition.
+- If the car is airborne but no longer attached to the side wall for at least 0.10 seconds, the wall-drive routine exits and hands control to the existing recovery routine. Normal shot selection can then reassess after landing rather than steering toward a stale wall intercept.
+- This is a more realistic surface-aware approximation inspired by Party Cannon's Drive/Field approach, not a full collision/physics simulation or a literal C# port. It has not been compiled or tested in-game. Tune transition radius/timing only from actual match diagnostics.
