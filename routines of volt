@@ -3951,6 +3951,11 @@ class jump_shot:
         self.quick_shot = False
         self.side_mode = False
         self.last_side_debug_time = -1
+        # Dynamic side-flip contact setup; remains part of jump_shot.
+        self.side_flip_plan = False
+        self.side_flip_direction = None
+        self.side_flip_correction_angle = 0.0
+        self.side_flip_lead = 0.0
         self.patience = shot_patience()
         self.wall_shot_active = False
         self.wall_shot_normal = None
@@ -4135,6 +4140,157 @@ class jump_shot:
                 flush=True
             )
 
+        # For a sharp trajectory correction, stop approaching from behind.
+        # Instead, route the car alongside the ball so its side hitbox is
+        # adjacent to the ball when the pure A/D dodge is triggered.
+        self.side_flip_plan = False
+        self.side_flip_direction = None
+        self.side_flip_correction_angle = 0.0
+        self.side_flip_lead = 0.0
+
+        if not self.side_mode and self.ball_velocity.flatten().magnitude() > 100:
+            try:
+                post_a, post_b = agent.foe_goal_shot
+                if not isinstance(post_a, Vector):
+                    post_a = Vector(*post_a)
+                if not isinstance(post_b, Vector):
+                    post_b = Vector(*post_b)
+
+                goal_center = (post_a + post_b) * 0.5
+                safe_half_width = max(
+                    0.0, abs(post_a.x - post_b.x) * 0.5 - 92.75
+                )
+                goal_sign = 1 if goal_center.y > self.ball_location.y else -1
+                shot_forward = self.shot_vector.flatten().normalize()
+                side_axis = Vector(-shot_forward.y, shot_forward.x, 0).normalize()
+                impulse = max(0.0, dodge_impulse(agent))
+
+                if (
+                    shot_forward.magnitude() > 0.5
+                    and side_axis.magnitude() > 0.5
+                    and impulse > 1
+                ):
+                    # Predict the ordinary forward-dodge path using the
+                    # planned front-flip axis, then see whether a perpendicular
+                    # side impulse can bring that path into the goal mouth.
+                    front_car_velocity = (
+                        agent.me.velocity + shot_forward * impulse
+                    )
+                    front_ball_velocity = (
+                        front_car_velocity + self.ball_velocity * 2
+                    ) / 3
+                    front_miss = None
+
+                    if front_ball_velocity.y * goal_sign > 1:
+                        front_time = (
+                            goal_center.y - self.ball_location.y
+                        ) / front_ball_velocity.y
+                        if front_time > 0:
+                            front_cross_x = (
+                                self.ball_location.x
+                                + front_ball_velocity.x * front_time
+                            )
+                            front_miss = abs(front_cross_x - goal_center.x)
+
+                    best_side = None
+                    best_side_miss = None
+                    if (
+                        front_miss is not None
+                        and front_miss > safe_half_width - 35
+                    ):
+                        for side_sign in (-1, 1):
+                            side_direction = side_axis * side_sign
+                            side_car_velocity = (
+                                agent.me.velocity + side_direction * impulse
+                            )
+                            side_ball_velocity = (
+                                side_car_velocity + self.ball_velocity * 2
+                            ) / 3
+
+                            if side_ball_velocity.y * goal_sign <= 1:
+                                continue
+
+                            side_time = (
+                                goal_center.y - self.ball_location.y
+                            ) / side_ball_velocity.y
+                            if side_time <= 0:
+                                continue
+
+                            side_cross_x = (
+                                self.ball_location.x
+                                + side_ball_velocity.x * side_time
+                            )
+                            side_miss = abs(side_cross_x - goal_center.x)
+
+                            if (
+                                side_miss <= safe_half_width
+                                and side_miss < front_miss - 35
+                                and (
+                                    best_side_miss is None
+                                    or side_miss < best_side_miss
+                                )
+                            ):
+                                best_side = side_direction
+                                best_side_miss = side_miss
+
+                    if best_side is not None:
+                        natural_direction = front_ball_velocity.flatten().normalize()
+                        correction_dot = cap(
+                            natural_direction.dot(shot_forward), -1, 1
+                        )
+                        correction_angle = math.acos(correction_dot)
+
+                        # A larger required change means a deeper "past the
+                        # ball" setup. At roughly 90 degrees, the ball sits
+                        # beside the car rather than ahead of its nose.
+                        lead_blend = cap(
+                            correction_angle / (math.pi * 0.5), 0, 1
+                        )
+                        half_length = float(
+                            getattr(agent.me.hitbox, "length", 118.01)
+                        ) * 0.5
+                        half_width = float(
+                            getattr(agent.me.hitbox, "width", 84.2)
+                        ) * 0.5
+                        lateral_standoff = 92.75 + half_width
+                        longitudinal_lead = half_length * (
+                            0.25 + 0.85 * lead_blend
+                        )
+
+                        self.side_flip_plan = True
+                        self.side_flip_direction = best_side.normalize()
+                        self.side_flip_correction_angle = correction_angle
+                        self.side_flip_lead = longitudinal_lead
+
+                        # Put the ball beside the car on the side opposite
+                        # the dodge impulse, and move the car forward past the
+                        # ball as the correction angle grows.
+                        self.offset_target = (
+                            self.ball_location
+                            - self.side_flip_direction * lateral_standoff
+                            + shot_forward * longitudinal_lead
+                        )
+                        self.contact_point = (
+                            self.ball_location
+                            - self.side_flip_direction * 92.75
+                        )
+                        self.contact_approach_target = self.offset_target.copy()
+
+                        print(
+                            f"[JUMP SIDE CONTACT PLAN] correction="
+                            f"{math.degrees(correction_angle):.1f}deg "
+                            f"front_miss={front_miss:.0f} "
+                            f"side_miss={best_side_miss:.0f} "
+                            f"lead={longitudinal_lead:.0f} "
+                            f"side=({self.side_flip_direction.x:.2f},"
+                            f"{self.side_flip_direction.y:.2f})",
+                            flush=True
+                        )
+            except (AttributeError, TypeError, ValueError, ZeroDivisionError):
+                # If goal geometry is unavailable, retain the ordinary contact.
+                self.side_flip_plan = False
+                self.side_flip_direction = None
+
         if self.side_mode:
             # Rebuild the lateral setup from the latest predicted intercept
             # every frame. The car approaches from the side opposite the goal.
@@ -4210,7 +4366,12 @@ class jump_shot:
         Tj = T - self.needed_jump_time * 1.15
         agent.dbg_2d(f"Needed jump time: {round(self.needed_jump_time, 2)}")
 
-        if Tj > 0 and self.targets is not None and not self.side_mode:
+        if (
+            Tj > 0
+            and self.targets is not None
+            and not self.side_mode
+            and not self.side_flip_plan
+        ):
             # Normal jump shots may use the generic flank route. A side shot
             # must preserve its deliberately selected lateral setup point.
             final_target = _shot_approach_target(
@@ -4554,7 +4715,8 @@ class jump_shot:
                         forward_alignment = horizontal_forward.dot(planned_forward)
 
                         if (
-                            front_miss is not None
+                            self.side_flip_plan
+                            and front_miss is not None
                             and front_miss > safe_half_width - 25
                             and forward_alignment > 0.72
                             and flip_impulse > 1
