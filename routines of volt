@@ -3951,6 +3951,11 @@ class jump_shot:
         self.quick_shot = False
         self.side_mode = False
         self.last_side_debug_time = -1
+        # A trajectory-side flip is a conditional, pure lateral dodge.
+        # It is independent of the existing side_shot subclass.
+        self.trajectory_side_flip = False
+        self.trajectory_side_direction = 0
+        self.last_trajectory_side_debug_time = -1
         self.patience = shot_patience()
         self.wall_shot_active = False
         self.wall_shot_normal = None
@@ -4135,6 +4140,136 @@ class jump_shot:
                 flush=True
             )
 
+        # Only use a pure side dodge when the ball's current trajectory
+        # is genuinely projected to miss the useful goal mouth. A large
+        # angular difference by itself is not enough: a slow/stationary ball,
+        # a ball travelling away from goal, or an already-safe trajectory
+        # must retain the ordinary jump-shot contact and dodge.
+        self.trajectory_side_flip = False
+        self.trajectory_side_direction = 0
+        if not self.side_mode and self.ball_location.z <= 420:
+            try:
+                post_a, post_b = agent.foe_goal_shot
+                post_a = post_a if isinstance(post_a, Vector) else Vector(*post_a)
+                post_b = post_b if isinstance(post_b, Vector) else Vector(*post_b)
+                goal_center = (post_a + post_b) * 0.5
+                goal_direction = (
+                    goal_center - self.ball_location
+                ).flatten().normalize()
+                incoming = self.ball_velocity.flatten()
+                incoming_speed = incoming.magnitude()
+
+                if (
+                    incoming_speed >= 500
+                    and goal_direction.magnitude() > 0.001
+                ):
+                    incoming_direction = incoming.normalize()
+                    forward_alignment = incoming_direction.dot(goal_direction)
+                    shot_alignment = incoming_direction.dot(
+                        self.shot_vector.flatten().normalize()
+                    )
+
+                    # Intersect the ball's current horizontal trajectory with
+                    # the goal plane, then measure its miss in goal-relative
+                    # lateral coordinates.
+                    goalward_speed = incoming.dot(goal_direction)
+                    time_to_goal = (
+                        (goal_center - self.ball_location).dot(goal_direction)
+                        / goalward_speed
+                        if goalward_speed > 150 else -1
+                    )
+
+                    if 0.05 < time_to_goal <= 3.0 and forward_alignment > 0.65:
+                        projected_crossing = (
+                            self.ball_location + incoming * time_to_goal
+                        )
+                        left_of_goal = Vector(
+                            -goal_direction.y, goal_direction.x, 0
+                        ).normalize()
+                        lateral_error = (
+                            projected_crossing - goal_center
+                        ).dot(left_of_goal)
+                        half_goal_width = (
+                            post_a - post_b
+                        ).flatten().magnitude() * 0.5
+
+                        # Leave a ball-radius safety margin at each post.
+                        # Correct only a projected post miss / near-post path
+                        # with a meaningful incoming-to-shot angle.
+                        miss_threshold = max(0, half_goal_width - 150)
+                        needs_lateral_correction = (
+                            abs(lateral_error) > miss_threshold
+                            and shot_alignment < 0.9063
+                        )
+
+                        if needs_lateral_correction:
+                            # Positive means the ball must move toward the
+                            # goal's left; negative means toward its right.
+                            correction_sign = -sign(lateral_error)
+                            lateral_from_shot = Vector(
+                                -self.shot_vector.y,
+                                self.shot_vector.x,
+                                0
+                            ).normalize()
+                            hitbox_width = float(
+                                getattr(agent.me.hitbox, "width", 84.0)
+                            )
+                            # Put Volt's centre on the opposite side of the
+                            # desired ball impulse. The front-side corner of
+                            # the hitbox then meets the ball as the car makes
+                            # its pure lateral dodge.
+                            lateral_standoff = (
+                                92.75 + hitbox_width * 0.45
+                            )
+                            longitudinal_standoff = contact_standoff
+                            side_contact_target = (
+                                self.ball_location
+                                - self.shot_vector * longitudinal_standoff
+                                - lateral_from_shot * (
+                                    correction_sign * lateral_standoff
+                                )
+                            )
+                            self.offset_target = Vector(
+                                side_contact_target.x,
+                                side_contact_target.y,
+                                hitbox_target.z
+                            )
+                            self.contact_approach_target = (
+                                self.offset_target.copy()
+                            )
+                            self.contact_point = (
+                                self.ball_location
+                                + (
+                                    self.offset_target - self.ball_location
+                                ).normalize() * 92.75
+                            )
+                            self.trajectory_side_flip = True
+                            self.trajectory_side_direction = correction_sign
+
+                            if (
+                                self.last_trajectory_side_debug_time < 0
+                                or agent.time
+                                - self.last_trajectory_side_debug_time >= 0.35
+                            ):
+                                self.last_trajectory_side_debug_time = agent.time
+                                print(
+                                    f"[JUMP SIDE FLIP PLAN] "
+                                    f"correction={'left' if correction_sign > 0 else 'right'} "
+                                    f"angle_dot={shot_alignment:.3f} "
+                                    f"goal_miss={lateral_error:.0f} "
+                                    f"goal_limit={miss_threshold:.0f} "
+                                    f"ball_speed={incoming_speed:.0f} "
+                                    f"T_goal={time_to_goal:.2f} "
+                                    f"side_offset={lateral_standoff:.0f} "
+                                    f"setup=({self.offset_target.x:.0f},"
+                                    f"{self.offset_target.y:.0f})",
+                                    flush=True
+                                )
+            except (AttributeError, TypeError, ValueError, ZeroDivisionError):
+                # Missing goal-post data must never disturb the normal shot.
+                self.trajectory_side_flip = False
+                self.trajectory_side_direction = 0
+
         if self.side_mode:
             # Rebuild the lateral setup from the latest predicted intercept
             # every frame. The car approaches from the side opposite the goal.
@@ -4210,7 +4345,12 @@ class jump_shot:
         Tj = T - self.needed_jump_time * 1.15
         agent.dbg_2d(f"Needed jump time: {round(self.needed_jump_time, 2)}")
 
-        if Tj > 0 and self.targets is not None and not self.side_mode:
+        if (
+            Tj > 0
+            and self.targets is not None
+            and not self.side_mode
+            and not self.trajectory_side_flip
+        ):
             # Normal jump shots may use the generic flank route. A side shot
             # must preserve its deliberately selected lateral setup point.
             final_target = _shot_approach_target(
@@ -4499,7 +4639,11 @@ class jump_shot:
                     < (92.75 + agent.me.hitbox.length) * 1.02
                 )
 
-                if close_enough and (local_target.x > 0 or self.side_mode):
+                if close_enough and (
+                    local_target.x > 0
+                    or self.side_mode
+                    or self.trajectory_side_flip
+                ):
                     # Aim the dodge at the predicted ball contact itself,
                     # not at the approach point behind the ball. The selected
                     # centre/left/right contact has already shaped that approach.
@@ -4514,8 +4658,43 @@ class jump_shot:
                     else:
                         dodge_direction = Vector(x=1)
 
-                    agent.controller.pitch = -dodge_direction.x
-                    agent.controller.yaw = dodge_direction.y
+                    if self.trajectory_side_flip:
+                        # A true side dodge has no forward/backward pitch.
+                        # Resolve the desired world-space correction into the
+                        # car's local frame so left/right remains correct
+                        # regardless of team side or arena orientation.
+                        lateral_from_shot = Vector(
+                            -self.shot_vector.y,
+                            self.shot_vector.x,
+                            0
+                        ).normalize()
+                        correction_direction = (
+                            lateral_from_shot
+                            * self.trajectory_side_direction
+                        )
+                        local_correction = agent.me.local(
+                            correction_direction
+                        ).flatten()
+                        side_input = sign(local_correction.y)
+                        if side_input == 0:
+                            side_input = sign(local_ball_for_dodge.y)
+                        if side_input == 0:
+                            side_input = 1
+                        agent.controller.pitch = 0
+                        agent.controller.yaw = side_input
+                        agent.controller.roll = 0
+                        print(
+                            f"[JUMP SIDE FLIP EXECUTE] "
+                            f"direction={'left' if side_input < 0 else 'right'} "
+                            f"local_correction=({local_correction.x:.2f},"
+                            f"{local_correction.y:.2f}) "
+                            f"ball_local=({local_ball_for_dodge.x:.0f},"
+                            f"{local_ball_for_dodge.y:.0f})",
+                            flush=True
+                        )
+                    else:
+                        agent.controller.pitch = -dodge_direction.x
+                        agent.controller.yaw = dodge_direction.y
                     agent.controller.jump = True
 
                     agent.last_flip_time = agent.time
