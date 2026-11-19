@@ -605,3 +605,16 @@ This file is the project handoff and change checklist. Read it before every code
 - This uses a velocity-based estimate, not a full Rocket League collision simulation. No compile or in-game test has been run; validate ball-adjacent positioning and whether the side flip contacts the intended side of the ball.
 
 - Follow-up stability fix: once the jump begins, the selected side-flip plan, lateral direction, and lead distance are no longer recalculated from changing airborne car velocity. The locked side-contact target is restored each frame after the normal hitbox contact target is rebuilt, so the car is not pulled back behind the ball mid-jump.
+
+
+## Conditional goal-mouth side flip in jump_shot (2026-11-19) — current implementation
+
+- Added the conditional side-flip planner directly inside the existing `jump_shot` class. No new routine, class, shot finder, or separate planner was introduced.
+- The normal jump-shot contact target and directional dodge remain the default. Before takeoff, the routine predicts the forward-dodge outgoing ball path using the existing predicted ball velocity, current car velocity, dodge impulse, and Party Cannon's 1:2 car/ball post-hit velocity blend.
+- A side flip is considered only when the ball is in the attacking half, there is enough setup time, the car is already sufficiently aligned with the planned shot direction, and the forward-dodge projection misses the safe post-to-post goal width.
+- Both perpendicular side impulses are projected to the goal plane. The side flip is selected only when one projects inside the safe goal mouth and improves the projected goal-line position by at least 100 units.
+- When selected, the approach target moves beside the ball by ball radius plus half the car hitbox width. This puts the ball beside the middle of the car rather than asking the front bumper to approach from behind a lower corner. The selected target and direction are locked once the jump begins.
+- At the final dodge only, the routine uses a pure lateral dodge (`pitch=0`, `yaw=+/-1`, `roll=0`) if the ball is still beside the middle of the hitbox and the selected direction is still lateral in car-local coordinates. If that contact geometry is not present, it falls back to the existing directional dodge.
+- The existing airborne tilt-back/power posture, defaultPD A/D steering, and counter-direction air-roll block were left unchanged. The only A/D-related override is the yaw pulse required to execute the selected side flip at the final dodge frame.
+- Diagnostics: `[JUMP SIDE CONTACT PLAN]`, `[JUMP SIDE FLIP]`, and `[JUMP SIDE FLIP FALLBACK]`.
+- Static source verification only. No compile, simulation, or in-game test has been performed. The outgoing-ball estimate is a trajectory heuristic, not a full Rocket League collision simulation; validate setup alignment, ball-adjacent contact, and goal-mouth correction in-game.
