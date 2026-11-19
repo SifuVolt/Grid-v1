@@ -4500,24 +4500,148 @@ class jump_shot:
                 )
 
                 if close_enough and (local_target.x > 0 or self.side_mode):
-                    # Aim the dodge at the predicted ball contact itself,
-                    # not at the approach point behind the ball. The selected
-                    # centre/left/right contact has already shaped that approach.
-                    # This also gives quick shots a directional flip without
-                    # adding the S-tilt they do not have time to perform.
-                    local_ball_for_dodge = agent.me.local_location(
-                        self.ball_location
-                    ).flatten()
+                    # Default to the existing forward/directional dodge. Only
+                    # replace it when its predicted post-contact path would
+                    # miss the goal mouth and a perpendicular side flip fixes it.
+                    side_flip_yaw = None
+                    front_miss = None
+                    selected_side_miss = None
 
-                    if local_ball_for_dodge.magnitude() > 1:
-                        dodge_direction = local_ball_for_dodge.normalize()
+                    try:
+                        post_a, post_b = agent.foe_goal_shot
+                        if not isinstance(post_a, Vector):
+                            post_a = Vector(*post_a)
+                        if not isinstance(post_b, Vector):
+                            post_b = Vector(*post_b)
+
+                        goal_center = (post_a + post_b) * 0.5
+                        goal_half_width = abs(post_a.x - post_b.x) * 0.5
+                        safe_half_width = max(0.0, goal_half_width - 92.75)
+                        goal_sign = 1 if goal_center.y > self.ball_location.y else -1
+                        goal_plane_y = goal_center.y
+
+                        # Use the same 1:2 car/ball velocity blend as the
+                        # existing Party Cannon post-contact prediction.
+                        flip_impulse = max(0.0, dodge_impulse(agent))
+                        ball_velocity = self.ball_velocity
+                        front_car_velocity = (
+                            agent.me.velocity + agent.me.forward * flip_impulse
+                        )
+                        front_ball_velocity = (
+                            front_car_velocity + ball_velocity * 2
+                        ) / 3
+
+                        if front_ball_velocity.y * goal_sign > 1:
+                            front_time = (
+                                goal_plane_y - self.ball_location.y
+                            ) / front_ball_velocity.y
+                            if front_time > 0:
+                                front_cross_x = (
+                                    self.ball_location.x
+                                    + front_ball_velocity.x * front_time
+                                )
+                                front_miss = abs(front_cross_x - goal_center.x)
+
+                        # A side flip must be perpendicular to the current
+                        # front-flip axis. Test both physical sides, then map
+                        # the winning world impulse back to the controller's
+                        # local A/D yaw sign.
+                        side_axis = agent.me.up.cross(
+                            agent.me.forward
+                        ).normalize()
+                        horizontal_forward = agent.me.forward.flatten().normalize()
+                        planned_forward = self.shot_vector.flatten().normalize()
+                        forward_alignment = horizontal_forward.dot(planned_forward)
+
+                        if (
+                            front_miss is not None
+                            and front_miss > safe_half_width - 25
+                            and forward_alignment > 0.72
+                            and flip_impulse > 1
+                            and side_axis.magnitude() > 0.5
+                        ):
+                            for side_sign in (-1, 1):
+                                side_car_velocity = (
+                                    agent.me.velocity
+                                    + side_axis * (flip_impulse * side_sign)
+                                )
+                                side_ball_velocity = (
+                                    side_car_velocity + ball_velocity * 2
+                                ) / 3
+
+                                if side_ball_velocity.y * goal_sign <= 1:
+                                    continue
+
+                                side_time = (
+                                    goal_plane_y - self.ball_location.y
+                                ) / side_ball_velocity.y
+                                if side_time <= 0:
+                                    continue
+
+                                side_cross_x = (
+                                    self.ball_location.x
+                                    + side_ball_velocity.x * side_time
+                                )
+                                side_miss = abs(
+                                    side_cross_x - goal_center.x
+                                )
+
+                                if (
+                                    side_miss <= safe_half_width
+                                    and side_miss < front_miss - 45
+                                    and (
+                                        selected_side_miss is None
+                                        or side_miss < selected_side_miss
+                                    )
+                                ):
+                                    local_side = agent.me.local(
+                                        side_axis * side_sign
+                                    )
+                                    side_flip_yaw = (
+                                        1 if local_side.y > 0 else -1
+                                    )
+                                    selected_side_miss = side_miss
+
+                        if front_miss is not None and front_miss > safe_half_width - 25:
+                            print(
+                                f"[JUMP SIDE FLIP CHECK] front_miss={front_miss:.0f} "
+                                f"safe_half={safe_half_width:.0f} "
+                                f"side_miss={selected_side_miss} "
+                                f"yaw={side_flip_yaw}",
+                                flush=True
+                            )
+                    except (AttributeError, TypeError, ValueError, ZeroDivisionError):
+                        # Missing goal geometry must never interrupt a normal shot.
+                        side_flip_yaw = None
+
+                    if side_flip_yaw is not None:
+                        # Pure A/D side dodge: pitch is zero, so the dodge
+                        # impulse is perpendicular to the ideal front flip.
+                        agent.controller.pitch = 0
+                        agent.controller.yaw = side_flip_yaw
+                        agent.controller.roll = 0
+                        print(
+                            f"[JUMP SIDE FLIP] yaw={side_flip_yaw} "
+                            f"front_miss={front_miss:.0f} "
+                            f"side_miss={selected_side_miss:.0f}",
+                            flush=True
+                        )
                     else:
-                        dodge_direction = Vector(x=1)
+                        # Preserve the existing forward/directional dodge
+                        # whenever its predicted path is already safe.
+                        local_ball_for_dodge = agent.me.local_location(
+                            self.ball_location
+                        ).flatten()
 
-                    agent.controller.pitch = -dodge_direction.x
-                    agent.controller.yaw = dodge_direction.y
+                        if local_ball_for_dodge.magnitude() > 1:
+                            dodge_direction = local_ball_for_dodge.normalize()
+                        else:
+                            dodge_direction = Vector(x=1)
+
+                        agent.controller.pitch = -dodge_direction.x
+                        agent.controller.yaw = dodge_direction.y
+
                     agent.controller.jump = True
-
                     agent.last_flip_time = agent.time
                     self.dodging = True
                     self.counter = 4
