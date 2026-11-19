@@ -571,3 +571,12 @@ This file is the project handoff and change checklist. Read it before every code
 - The special path remains inside jump_shot; normal jump shots, ordinary directional dodges, and side_shot remain the fallback when the cross-goal setup is not selected.
 - Added [JUMP SIDE FLIP PLAN] and [JUMP SIDE FLIP EXECUTE] diagnostics for selected side, ball/cross-goal speed, estimated goalward contribution, chosen depth, setup point, and final local contact geometry.
 - Static source inspection and GitHub re-fetch only. No Python compile, RLBot simulation, or in-game test has been run. The user must pull/copy the latest branch before testing.
+
+
+## Goal-mouth miss side-flip selection (2026-11-19)
+
+- Replaced the previous cross-goal-speed activation gate. The side-flip planner now evaluates whether the ball's predicted natural path crosses outside (or dangerously close to) the opponent goal mouth, including balls travelling directly toward goal from a wide angle.
+- It projects the ball to the goal plane using its predicted velocity and compares the lateral crossing miss against the usable goal width (post-to-post width minus ball radius).
+- The candidate dodge axis is perpendicular to the ball's incoming direction and points toward the goal's lateral centre. Volt's setup point is on the opposite side of the ball, so a ball right of the goal should cause Volt to get to its right and side-flip left.
+- Candidate lateral contact depths are evaluated by their estimated effect on the projected goal-mouth crossing. The selected side setup point bypasses generic flank routing so that normal shot approach logic cannot overwrite it.
+- This is still a simplified trajectory/impulse estimate, not a collision-accurate physics solver. No Python compile or in-game test has been run.
