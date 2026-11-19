@@ -2115,31 +2115,6 @@ class Bot(VirxERLU):
             return
 
     
-        # Start a gradual ground carry only when the opponents are genuinely
-        # out of the play. In team modes, ground_carry.find enforces the
-        # elected-challenger role. It may replace a normal ground_shot, but
-        # never an aerial, jump/dodge, recovery, or defensive routine.
-        current_name_for_carry = (
-            self.stack[0].__class__.__name__
-            if not self.is_clear()
-            else None
-        )
-        if (
-            (self.is_clear() or self.odd_tick == 0)
-            and current_name_for_carry != "ground_carry"
-            and current_name_for_carry in {None, "ground_shot"}
-        ):
-            carry = routines.ground_carry.find(self)
-            if carry is not None:
-                print(
-                    f"[GROUND CARRY START] player={self.me.index} "
-                    f"foes={len(self.foes)} ball={self.ball.location}",
-                    flush=True
-                )
-                self.clear()
-                self.push(carry)
-                return
-
         # An active shot is committed after its initial opponent check.
         # Teammate ownership is still allowed to cancel it in the yield path.
         committed_active_shot = False
@@ -2188,30 +2163,20 @@ class Bot(VirxERLU):
         }
 
         if self.is_clear() or self.odd_tick == 0:
-            # Once ground_carry owns the stack, let its live trajectory and
-            # opponent-window checks decide when it finishes. Do not replace
-            # it with a cached shot or wall candidate on the next search tick.
-            carry_is_active = current_routine_name == "ground_carry"
-            shot = None if carry_is_active else self.teamplay_shot
+            shot = self.teamplay_shot
 
             # The cached teamplay candidate may be a later ground shot.
             # Recheck the live prediction first so a reachable wall touch
             # can replace it instead of waiting for the ball to fall.
             wall_allowed = (
-                not carry_is_active
-                and (
-                    not self.friends
-                    or self.get_grid_active_challenger() == self.me.index
-                )
+                not self.friends
+                or self.get_grid_active_challenger() == self.me.index
             )
             if wall_allowed:
                 wall_drive = tools.find_wall_drive(self)
                 if wall_drive is not None:
                     shot = wall_drive
-            elif (
-                not carry_is_active
-                and self.time - getattr(self, "_last_wall_drive_gate_debug", -999.0) >= 0.5
-            ):
+            elif self.time - getattr(self, "_last_wall_drive_gate_debug", -999.0) >= 0.5:
                 self._last_wall_drive_gate_debug = self.time
                 print(
                     f"[WALL DRIVE SKIP] team-role gate | "
