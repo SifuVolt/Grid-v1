@@ -591,3 +591,15 @@ This file is the project handoff and change checklist. Read it before every code
 - The selected side flip uses `pitch=0`, `yaw=+/-1`, and `roll=0`. Otherwise the existing forward/directional dodge is preserved exactly.
 - Diagnostics: `[JUMP SIDE FLIP CHECK]` reports the projected forward miss and best side candidate; `[JUMP SIDE FLIP]` confirms the pure side flip was selected.
 - This is an initial velocity-based approximation, not a Rocket League collision simulation. No compile or in-game test has been run. Validate whether the correct side is selected and whether the ball actually enters the goal; tune only from match observations.
+
+## Deeper side-flip contact geometry in jump_shot (2026-11-19)
+
+- User reported the previous conditional side flip still approached from behind the ball, often contacting the lower-left/right area instead of setting up with the ball adjacent to the car.
+- The behavior remains inside the existing `jump_shot` class. No separate class or routine was added.
+- Before the approach target is finalized, jump_shot now predicts the ordinary forward-dodge path using the planned shot-forward axis. If that path is near/outside the safe goal mouth and a perpendicular side-flip prediction brings it inside, it activates `side_flip_plan`.
+- For a planned side flip, the car's target is moved to the side of the ball opposite the intended lateral impulse, using ball radius plus half the car hitbox width as the lateral standoff. The car is also moved forward past the ball along the planned shot axis.
+- The longitudinal lead increases with the angle between the predicted natural outgoing trajectory and the desired shot direction. A large correction (approaching 90 degrees) moves the car further past the ball so the ball is beside the car rather than in front of its nose.
+- The generic `_shot_approach_target` flank adjustment is bypassed while this side-contact plan is active, so it cannot pull the car back behind the ball.
+- The dodge-time side-flip check now requires the early side-contact plan to be active. If the plan is not active, the original forward/directional dodge remains.
+- Diagnostics: `[JUMP SIDE CONTACT PLAN]` reports correction angle, front/side projected misses, lead distance and selected lateral direction.
+- This uses a velocity-based estimate, not a full Rocket League collision simulation. No compile or in-game test has been run; validate ball-adjacent positioning and whether the side flip contacts the intended side of the ball.
