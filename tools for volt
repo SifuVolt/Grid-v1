@@ -10,23 +10,24 @@ def wall_surface_for_ball(loc, max_gap=650.0, team=None):
     The ceiling and the goal interiors are deliberately not wall surfaces.
     """
     radius = 92.75
-    # Wall routes are side-wall-only. Neither team's back wall is
-    # treated as a driveable wall target.
+    # Side walls and the opponent's back wall are driveable. Our own
+    # back wall is deliberately excluded so defensive positioning never
+    # turns into a wall-drive attack.
     candidates = [
         ("x", 1 if loc.x >= 0 else -1, 4096.0 - abs(loc.x) - radius),
+        ("y", 1 if loc.y >= 0 else -1, 5120.0 - abs(loc.y) - radius),
     ]
     candidates.sort(key=lambda item: item[2])
 
     for axis, wall_side, gap in candidates:
         if gap < -5 or gap > max_gap:
             continue
-        # The back-wall opening is the goal, not a driveable wall.
-        if axis == "y" and abs(loc.x) < 900 and loc.z < 700:
-            continue
-        # Never drive up our own back wall; it causes the goalie to leave
-        # the goal line and misclassifies defensive positioning as attack.
-        if axis == "y" and team is not None and wall_side == side(team):
-            continue
+        if axis == "y":
+            # The goal mouth is not a driveable wall surface.
+            if abs(loc.x) < 900 and loc.z < 700:
+                continue
+            if team is not None and wall_side == side(team):
+                continue
         return axis, wall_side, max(0.0, gap)
     return None
 
@@ -39,8 +40,13 @@ def car_wall_surface(car, team=None):
         and car.up.x * car.location.x < 0
     ):
         return "x", (1 if car.location.x >= 0 else -1)
-    # Back walls are never valid wall-drive surfaces, including
-    # the opponent's back wall.
+    if (
+        abs(car.location.y) > 4740
+        and abs(car.up.y) > 0.34
+        and car.up.y * car.location.y < 0
+        and (team is None or (1 if car.location.y >= 0 else -1) != side(team))
+    ):
+        return "y", (1 if car.location.y >= 0 else -1)
     return None
 
 
@@ -198,14 +204,15 @@ def find_wall_drive(agent, cap_=4.0):
         if intercept_in <= 0:
             continue
 
-        # The ball's surface must already be within a small collision
-        # tolerance of the wall. Do not chase a ball 500–1800 units away.
-        surface = wall_surface_for_ball(loc, 650.0, agent.team)
+        # Predict both driveable wall families. A ball may be low and
+        # still be a valid setup: the route climbs above it, then descends
+        # for the wall-side contact rather than requiring it to be airborne.
+        surface = wall_surface_for_ball(loc, 1800.0, agent.team)
         if surface is None:
             reject_wall += 1
             continue
 
-        if not 190 <= loc.z <= 2200:
+        if not 0 <= loc.z <= 2200:
             reject_height += 1
             continue
 
@@ -215,7 +222,9 @@ def find_wall_drive(agent, cap_=4.0):
             continue
 
         wall_velocity = vel.x if axis == "x" else vel.y
-        if wall_gap > 45 and wall_velocity * wall_side < -100:
+        # When the ball is still away from the wall, only accept a slice
+        # whose velocity is carrying it toward that wall.
+        if wall_gap > 45 and wall_velocity * wall_side < 100:
             reject_wall += 1
             continue
 
@@ -235,41 +244,60 @@ def find_wall_drive(agent, cap_=4.0):
 
         # The target is the car's centre at the intended nose-contact pose.
         wall_target = Vector(
-            wall_side * 4050.0,
+            predicted_ball.x - goal_direction.x * 185.0,
             predicted_ball.y - goal_direction.y * 185.0,
             max(110.0, predicted_ball.z - goal_direction.z * 185.0)
         )
+        if axis == "x":
+            wall_target.x = wall_side * 4050.0
+        else:
+            wall_target.y = wall_side * 5075.0
+
+        # Low wall plays use a modest elevated run-up, then descend into
+        # the actual contact height. Keep the rise bounded so it remains
+        # a wall touch, not an unnecessary aerial.
+        if predicted_ball.z < 500:
+            climb = max(420.0, min(720.0, 420.0 + predicted_ball.z * 0.6))
+            wall_target.z = min(1250.0, wall_target.z + climb)
 
         if attached_wall is not None:
             # Measure travel along the wall surface, not through the air.
             # If the car is still on the rounded transition, include the
             # remaining quarter-circle arc before measuring wall travel.
+            wall_coordinate = car.location.x if axis == "x" else car.location.y
             progress = cap(
-                (abs(car.location.x) - 3780.0) / 256.0, 0.0, 1.0
+                (abs(wall_coordinate) - (3780.0 if axis == "x" else 4740.0))
+                / 256.0, 0.0, 1.0
             )
             transition_angle = progress * (math.pi * 0.5)
             transition_remaining = 256.0 * (
                 math.pi * 0.5 - transition_angle
             )
-            wall_distance = math.hypot(
-                wall_target.y - car.location.y,
-                wall_target.z - car.location.z
+            tangent_delta = (
+                Vector(0, wall_target.y - car.location.y, wall_target.z - car.location.z)
+                if axis == "x"
+                else Vector(wall_target.x - car.location.x, 0, wall_target.z - car.location.z)
             )
+            wall_distance = tangent_delta.magnitude()
             transition_speed = max(
                 600.0, min(1100.0, car.velocity.magnitude())
             )
             transition_eta = transition_remaining / transition_speed
             eta = transition_eta + _wall_drive_eta(
-                wall_distance, car, wall_target - car.location,
+                wall_distance, car, tangent_delta,
                 on_wall=True
             )
         else:
             # Ground approach to the curved wall transition.
             wall_entry = Vector(
-                wall_side * 3825.0,
+                wall_target.x,
                 wall_target.y,
                 max(100.0, car.location.z)
             )
+            if axis == "x":
+                wall_entry.x = wall_side * 3825.0
+            else:
+                wall_entry.y = wall_side * 4745.0
             ground_delta = Vector(
                 wall_entry.x - car.location.x,
                 wall_entry.y - car.location.y,
