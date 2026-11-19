@@ -647,6 +647,7 @@ class wall_jump_shot:
                 local_shot,
                 up=car.local(Vector(z=1))
             )
+            agent.controller.throttle = 1
             forward_alignment = car.forward.dot(self.shot_vector)
             if (
                 car.boost > 0
