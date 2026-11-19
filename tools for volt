@@ -416,7 +416,16 @@ def find_wall_drive(agent, cap_=5.0):
             <= 129.0
             and wall_velocity >= 720.0
         )
-        if not (stable_wall_ball or rolling_up_wall_ball):
+        # A ball moving away from the wall is still a valid wall-jump target
+        # while it remains inside the wall launch's reachable envelope.
+        detached_wall_ball = (
+            gap <= 1000.0
+            and 250.0 <= ball_pos.z <= 1900.0
+            and -1400.0 <= wall_velocity < -150.0
+        )
+        if not (
+            stable_wall_ball or rolling_up_wall_ball or detached_wall_ball
+        ):
             air_t += (2 * i + 1) / 3600.0
             continue
 
