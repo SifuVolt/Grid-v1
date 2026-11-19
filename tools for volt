@@ -34,8 +34,8 @@ def wall_surface_for_ball(loc, max_gap=650.0, team=None):
 def car_wall_surface(car, team=None):
     """Return the vertical wall the car is attached to, or None."""
     if (
-        abs(car.location.x) > 3500
-        and abs(car.up.x) > 0.65
+        abs(car.location.x) > 3720
+        and abs(car.up.x) > 0.34
         and car.up.x * car.location.x < 0
     ):
         return "x", (1 if car.location.x >= 0 else -1)
