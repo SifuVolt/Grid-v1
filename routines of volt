@@ -4143,12 +4143,17 @@ class jump_shot:
         # For a sharp trajectory correction, stop approaching from behind.
         # Instead, route the car alongside the ball so its side hitbox is
         # adjacent to the ball when the pure A/D dodge is triggered.
-        self.side_flip_plan = False
-        self.side_flip_direction = None
-        self.side_flip_correction_angle = 0.0
-        self.side_flip_lead = 0.0
+        if not self.jumping:
+            self.side_flip_plan = False
+            self.side_flip_direction = None
+            self.side_flip_correction_angle = 0.0
+            self.side_flip_lead = 0.0
 
-        if not self.side_mode and self.ball_velocity.flatten().magnitude() > 100:
+        if (
+            not self.jumping
+            and not self.side_mode
+            and self.ball_velocity.flatten().magnitude() > 100
+        ):
             try:
                 post_a, post_b = agent.foe_goal_shot
                 if not isinstance(post_a, Vector):
@@ -4290,6 +4295,29 @@ class jump_shot:
                 # If goal geometry is unavailable, retain the ordinary contact.
                 self.side_flip_plan = False
                 self.side_flip_direction = None
+
+        # Keep the selected side-contact geometry fixed once the jump begins.
+        # The ordinary contact target is rebuilt above each frame, so restore
+        # the locked side setup until the dodge has been executed.
+        if (
+            self.side_flip_plan
+            and self.side_flip_direction is not None
+            and not self.side_mode
+        ):
+            locked_forward = self.shot_vector.flatten().normalize()
+            hitbox_width = float(
+                getattr(agent.me.hitbox, "width", 84.2)
+            )
+            self.offset_target = (
+                self.ball_location
+                - self.side_flip_direction * (92.75 + hitbox_width * 0.5)
+                + locked_forward * self.side_flip_lead
+            )
+            self.contact_point = (
+                self.ball_location
+                - self.side_flip_direction * 92.75
+            )
+            self.contact_approach_target = self.offset_target.copy()
 
         if self.side_mode:
             # Rebuild the lateral setup from the latest predicted intercept
