@@ -674,3 +674,13 @@ This file is the project handoff and change checklist. Read it before every code
 - Static source edit and GitHub re-fetch verification only. No Python compile, RLBot simulation, or in-game test has been performed. The wall jump/dodge timing, wall detach detection and directional impulse need match validation.
 
 - Follow-up: kept forward air throttle active during the wall-shot alignment phase; the controller still only boosts when the nose is aligned with the planned shot direction. Commit: `10bd463284aad08cd7b34ef52aba7be4010abebc`.
+
+
+## Wall jump-shot contact/reachability correction (2026-11-20)
+- Reworked `wall_jump_shot` to use Volt's existing `Aerial` calculations for the Party Cannon outgoing shot direction, `WallShot.adjust_aerial` wall-angle correction, and `_party_cannon_hitbox_target` contact centre. It no longer uses a flat goal vector plus a fixed 134.85-unit standoff.
+- The routine now predicts the car centre at the intercept using the same first-jump impulse, remaining jump-hold acceleration, gravity, and forward-projection boost calculation as `Aerial`. The final dodge uses Aerial's local hitbox-contact target and timing (`T <= 0.10`). Jump hold is shortened only when the finder hands off late, preserving the three-frame release before the dodge.
+- Updated Noob wall reachability to test the same Aerial hitbox-aware contact target (including Aerial's wall correction) while retaining Noob's 60 Hz ball scan, 120 Hz travel profile, jump-time equations, gravity compensation, and unfolded wall/floor transforms. The wall-jump approach uses the matching Aerial standoff.
+- Added an eligibility case for balls that have just detached from the wall and are moving outward, provided they remain within 1000 units of the wall, 250–1900 units high, and their outward wall-normal speed is between 150 and 1400 units/s. This is checked both by the finder and by the active wall approach so the candidate is not immediately discarded.
+- Normal `jump_shot`, double-jump and aerial handoffs are otherwise unchanged.
+- Commits: routines `d3bf37a8420e2e4890ab0c8ba529e9d38a7ff7f3`; tools `36325f8a4f48828ae38a3e37738de6ade8135082` (plus this follow-up eligibility/timing correction).
+- GitHub source re-fetch only. No Python compile, RLBot simulation, or in-game test has been performed.
