@@ -559,3 +559,15 @@ This file is the project handoff and change checklist. Read it before every code
 - For the special setup, Volt's centre is placed on the opposite side of the desired impulse, using the existing longitudinal hitbox standoff and a lateral standoff based on ball radius plus 45% of the car hitbox width. The normal flank approach is bypassed only while this special geometry is active.
 - At the existing final dodge trigger, the controller uses pitch=0 and pure local left/right yaw input, with roll=0. The desired world-space correction is transformed into the car's local frame so the dodge direction is team/arena independent. The existing jump timing, pitchback/orientation phase, boost logic, contact aim, and ordinary dodge remain otherwise unchanged.
 - This uses a geometric contact heuristic, not a full Rocket League collision/impulse simulation. Actual side-hit impulse strength and the left/right control sign must be confirmed in-game; tune the lateral standoff only from observed contact outcomes. Static source edits and re-fetch verification only; no compile, simulation, or in-game test has been performed.
+
+
+## Revised side-flip shot setup (2026-11-19)
+
+- Reworked the previous goal-plane-miss-only lateral dodge. It now targets low, fast balls close to the opponent goal that are travelling laterally across the goalmouth.
+- The planned side-flip axis is derived from the ball's current travel direction. Volt's forward axis is aligned with that travel direction; the perpendicular side-dodge direction is selected by whichever side has a positive component toward the opponent goal.
+- Volt's setup target is now directly beside the ball, opposite the desired side-flip impulse, with the ball aligned beside the car's middle rather than behind its rear bumper. This specifically addresses the failure where the car followed behind the ball and produced a weak rear contact/backflip.
+- Once near the setup point, the controller aligns the car's forward axis with the ball's travel. The side dodge is not allowed to execute until the ball is beside the car, on the intended side, and the car is sufficiently aligned.
+- Added a small candidate-depth comparison. It estimates outgoing direction/speed for several lateral contact depths and trades stronger impulse against premature overlap. This is a heuristic, not a Rocket League collision solver; the selected depth and impulse constants need in-game validation.
+- The special path remains inside jump_shot; normal jump shots, ordinary directional dodges, and side_shot remain the fallback when the cross-goal setup is not selected.
+- Added [JUMP SIDE FLIP PLAN] and [JUMP SIDE FLIP EXECUTE] diagnostics for selected side, ball/cross-goal speed, estimated goalward contribution, chosen depth, setup point, and final local contact geometry.
+- Static source inspection and GitHub re-fetch only. No Python compile, RLBot simulation, or in-game test has been run. The user must pull/copy the latest branch before testing.
