@@ -445,6 +445,7 @@ def find_wall_drive(agent, cap_=5.0):
     aerial_available = (
         target_f[3] is not None
         and target_t[3] < max_t
+        and wait_for_fall[jump_index] >= 0
         and car.boost / 100.0 * 3.0 >= (
             target_t[3] + 0.1 * (not car.airborne)
         )
