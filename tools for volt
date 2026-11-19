@@ -459,7 +459,7 @@ def find_wall_drive(agent, cap_=5.0):
         selected_index = jump_index
         selected_time = target_t[selected_index]
         selected_ball = target_f[selected_index]
-        selected_mode = "double" if selected_index == 1 else "single"
+        selected_mode = "double" if selected_index == 1 else "wall_jump"
 
     raw = selected_ball.physics.location
     selected_pos = Vector(raw.x, raw.y, raw.z)
