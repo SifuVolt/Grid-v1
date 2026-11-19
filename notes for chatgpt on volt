@@ -654,4 +654,7 @@ This file is the project handoff and change checklist. Read it before every code
   - tools finder: `cbd951fd94e66ca610fc48785a1bde35ae525545`
   - routines controller: `399a88354e9fdfa7bd6dcfff4d13d3c756dd6df1`
   - stable/rolling wall eligibility correction: `d0facd36fcaa1d3132eabcb74f58b545d547251c`
+  - aerial budget follows Noob's fall-state gate: `f3528a1eeb53f28265975d46304318c47e8f0b88`
+  - execution preserves stable-wall eligibility: `d15dcf51ac1f1ce84139e957fa8611ccf211090c`
+  - handoff requires matching wall side: `e5ff51dfc8f3c9f0f20d09b9fd8e36b9b656f569`
 - Not compiled or tested in a match. Re-fetch and syntax-check locally before running; this is a substantial port and the first console trace should verify `[NOOB WALL FIND]` and `[NOOB WALL SHOT]` logs.
