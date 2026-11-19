@@ -347,10 +347,22 @@ class wall_approach:
         wall_velocity = (
             ball_velocity.x if axis == "x" else ball_velocity.y
         ) * wall_side
-        if wall_gap > 45 and wall_velocity < 100:
+        wall_jump_time, _ = self._jump_time_wall(
+            min(4096.0 - abs(ball.x), 5120.0 - abs(ball.y)), 0
+        )
+        stable_wall_ball = (
+            wall_jump_time <= 1.45
+            and abs(wall_velocity) < 150.0
+            and 400.0 <= ball.z <= 1900.0
+        )
+        rolling_up_wall_ball = (
+            ball.z + ball_velocity.z ** 2 / 1300.0 <= 129.0
+            and wall_velocity >= 720.0
+        )
+        if not (stable_wall_ball or rolling_up_wall_ball):
             agent.pop()
             agent.shooting = False
-            print("[NOOB WALL SHOT] Abort: ball no longer travelling to wall", flush=True)
+            print("[NOOB WALL SHOT] Abort: Noob wall-shot condition ended", flush=True)
             return
 
         goal = agent.foe_goal.location
