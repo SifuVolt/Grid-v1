@@ -658,3 +658,17 @@ This file is the project handoff and change checklist. Read it before every code
   - execution preserves stable-wall eligibility: `d15dcf51ac1f1ce84139e957fa8611ccf211090c`
   - handoff requires matching wall side: `e5ff51dfc8f3c9f0f20d09b9fd8e36b9b656f569`
 - Not compiled or tested in a match. Re-fetch and syntax-check locally before running; this is a substantial port and the first console trace should verify `[NOOB WALL FIND]` and `[NOOB WALL SHOT]` logs.
+
+
+
+## Wall-launched jump shot (2026-11-20)
+- Added a dedicated `wall_jump_shot` routine. The Noob Black wall finder still performs its original 60 Hz prediction scan, wall jump-time calculation, 120 Hz travel-profile reachability and unfolded wall geometry.
+- When the finder selects the single-jump wall contact, it now labels the mode `wall_jump`. `wall_approach` continues driving the Noob Black route and hands off only after reaching the matching wall surface and the existing close-contact/time gate.
+- The new routine starts with a short jump from the wall, holds jump for 0.06 s, releases for at least three controller frames, aligns the nose with the goalward shot vector using world-up as its orientation reference, and then performs a directional dodge toward the predicted ball contact. The contact standoff is 134.85 units, matching the single-jump wall-shot geometry.
+- Double-jump and aerial selections still use their previous handoffs. The normal ground `jump_shot` routine is not modified.
+- Diagnostics: `[WALL JUMP SHOT] START`, periodic phase/aim output, `DODGE`, `DODGE COMPLETE`, and abort reason.
+- Commits:
+  - finder selects wall-jump mode for single-jump candidates: `72d1558e49980c8aa1e661ca92d735970e729d07`
+  - wall-jump routine and handoff: `06a7ad9d2b5c9603d6ca3cb12336ca3229f3176c`
+  - wall attachment and jump-hold timing correction: `365cea249ecb84ec548270716ad708775a1fad97`
+- Static source edit and GitHub re-fetch verification only. No Python compile, RLBot simulation, or in-game test has been performed. The wall jump/dodge timing, wall detach detection and directional impulse need match validation.
