@@ -352,7 +352,21 @@ class wall_approach:
         if on_wall:
             drive_target = contact_target
             drive_phase = "WALL SURFACE"
-            distance = car.location.dist(drive_target)
+            progress = cap(
+                (abs(car.location.x) - 3780.0)
+                / self.WALL_TRANSITION_RADIUS,
+                0.0,
+                1.0
+            )
+            transition_angle = progress * (math.pi * 0.5)
+            transition_remaining = self.WALL_TRANSITION_RADIUS * (
+                math.pi * 0.5 - transition_angle
+            )
+            wall_tangent_distance = math.hypot(
+                drive_target.y - car.location.y,
+                drive_target.z - car.location.z
+            )
+            distance = transition_remaining + wall_tangent_distance
         else:
             # Reach the beginning of the curved transition first. The
             # route planner has already budgeted for the transition arc
