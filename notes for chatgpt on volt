@@ -603,3 +603,5 @@ This file is the project handoff and change checklist. Read it before every code
 - The dodge-time side-flip check now requires the early side-contact plan to be active. If the plan is not active, the original forward/directional dodge remains.
 - Diagnostics: `[JUMP SIDE CONTACT PLAN]` reports correction angle, front/side projected misses, lead distance and selected lateral direction.
 - This uses a velocity-based estimate, not a full Rocket League collision simulation. No compile or in-game test has been run; validate ball-adjacent positioning and whether the side flip contacts the intended side of the ball.
+
+- Follow-up stability fix: once the jump begins, the selected side-flip plan, lateral direction, and lead distance are no longer recalculated from changing airborne car velocity. The locked side-contact target is restored each frame after the normal hitbox contact target is rebuilt, so the car is not pulled back behind the ball mid-jump.
