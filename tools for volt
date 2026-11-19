@@ -1,4 +1,4 @@
-from util.routines import Aerial, double_jump, ground_shot, jump_shot, side_shot, virxrlcu, wall_approach
+from util.routines import Aerial, WallShot, double_jump, ground_shot, jump_shot, side_shot, virxrlcu, wall_approach
 from util.utils import Vector, math, side, cap
 from util.grid_double_jump import find_double_jump as grid_find_double_jump
 
@@ -320,16 +320,41 @@ def find_wall_drive(agent, cap_=5.0):
         )
         return Vector(goal.x, goal_y, height)
 
-    def reachable_ground(ball_pos, time_value, contact_offset, double):
-        shot_target = target_point(ball_pos)
-        offset = (shot_target - ball_pos).normalize()
-        if offset.magnitude() < 0.001:
+    contact_aim = Aerial(
+        agent.time, agent.foe_goal_shot, fast_aerial=False
+    )
+    hitbox_half_length = float(
+        getattr(car.hitbox, "length", 118.01)
+    ) * 0.5
+    contact_standoff = 92.75 + hitbox_half_length
+
+    def aerial_contact_target(ball_pos, ball_slice, time_value):
+        physics = ball_slice.physics
+        ball_velocity = Vector(
+            physics.velocity.x, physics.velocity.y, physics.velocity.z
+        )
+        direction = contact_aim._party_cannon_shot_direction(
+            agent, ball_pos, ball_velocity, max(time_value, 1.0 / 120.0)
+        ).normalize()
+        if direction.magnitude() < 0.001:
+            return None
+        direction, _, _ = WallShot.adjust_aerial(
+            ball_pos, direction, approach_distance=contact_standoff
+        )
+        return contact_aim._party_cannon_hitbox_target(
+            agent, ball_pos, direction
+        )
+
+    def reachable_ground(ball_pos, ball_slice, time_value, double):
+        approach = aerial_contact_target(ball_pos, ball_slice, time_value)
+        if approach is None:
             return False, 0.0
-        approach = ball_pos - offset * contact_offset
         jump_time, _ = _noob_wall_jump_time(
             _noob_wall_get_dist(approach), double
         )
-        approach.z += 325.0 * jump_time * jump_time
+        # Preserve Noob Black's wall-jump gravity compensation and unfolded
+        # surface-distance calculation, but use Aerial's real hitbox contact.
+        approach = approach + Vector(z=325.0 * jump_time * jump_time)
         transformed_target = used_ball_transform(car_location, approach)
         required_distance = transformed_target.dist(car_surface)
         ticks_charging = max(0, min(600, round(time_value * 120)))
@@ -343,12 +368,10 @@ def find_wall_drive(agent, cap_=5.0):
         )
         return available_distance >= required_distance, jump_time
 
-    def reachable_aerial(ball_pos, time_value, elapsed_air):
-        shot_target = target_point(ball_pos)
-        offset = (shot_target - ball_pos).normalize()
-        if offset.magnitude() < 0.001:
+    def reachable_aerial(ball_pos, ball_slice, time_value, elapsed_air):
+        contact = aerial_contact_target(ball_pos, ball_slice, time_value)
+        if contact is None:
             return False
-        contact = ball_pos - offset * 92.75
         predicted_car = (
             car_location
             + car_velocity * time_value
@@ -399,7 +422,7 @@ def find_wall_drive(agent, cap_=5.0):
 
         if target_t[0] == max_t:
             can_hit, jump_time = reachable_ground(
-                ball_pos, time_value, 134.85, 0
+                ball_pos, ball_slice, time_value, 0
             )
             if can_hit:
                 if jump_time > 1.45:
@@ -411,7 +434,7 @@ def find_wall_drive(agent, cap_=5.0):
 
         if target_t[1] == max_t:
             can_hit, jump_time = reachable_ground(
-                ball_pos, time_value, 92.75, 1
+                ball_pos, ball_slice, time_value, 1
             )
             if can_hit:
                 if jump_time > 1.45:
@@ -422,7 +445,7 @@ def find_wall_drive(agent, cap_=5.0):
                     target_f[1] = ball_slice
 
         if target_t[3] == max_t:
-            if reachable_aerial(ball_pos, time_value, air_t):
+            if reachable_aerial(ball_pos, ball_slice, time_value, air_t):
                 target_t[3] = time_value
                 target_f[3] = ball_slice
             else:
