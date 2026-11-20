@@ -698,3 +698,5 @@ This file is the project handoff and change checklist. Read it before every code
   - routines: afdd129ef7683f24004eacbce7282d3a6fc53213 (remove wall_jump_shot, add wall-launch Aerial handoff); 893df64ba9f96b271b1ff851b8d5829aa2b00b35 (match detached eligibility and permit late wall launch)
   - tools: f201c8d6de63133481b750fa52199f9fa59d7532 (separate detached candidates); 8846cb4e7f6acd31ad9d70ee792126c79684d432 (include separated balls near the aerial apex)
 - Static GitHub edits and source re-fetch verification only. No Python compile, RLBot simulation, or in-game test has been performed.
+- Follow-up bounds: the detached launch-aerial candidate is currently limited to side walls (axis x), because Volt's existing Aerial wall-takeoff controller is a side-wall controller. The Noob finder still retains its original back-wall handling for attached-ball shots. Detached candidate reachability also requires Noob's double-jump wall time <=1.45 s, preserving the fast wall-shot timing envelope.
+- Follow-up tools commit: 3fb5ef336456ac6d3b8ed8f010c58a52ac5e07ee.
