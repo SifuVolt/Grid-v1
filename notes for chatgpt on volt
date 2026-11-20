@@ -728,3 +728,13 @@ This file is the project handoff and change checklist. Read it before every code
 - The module is isolated from the current controller: no steering, throttle, boost, or live match behaviour was changed.
 - GitHub commits: physics module `12a7b01a9b79cb00bf3bb51c22123af15f8a72ac`; module exposure in `src/main.rs` follows.
 - These changes have not been compiled locally or tested in-game. After the local working tree is cleaned of rustfmt-only changes, pull and run `cargo fmt`, `cargo check`, and `cargo test`.
+
+## 18. Rust free-flight ball prediction (2026-11-20)
+
+- Added `src/prediction/mod.rs` to the separate Rust repository and exposed it as `pub mod prediction` in `src/main.rs`.
+- `BallTrajectory::free_flight` generates ball position/velocity samples from constant-acceleration ballistic equations using the shared `PhysicsConfig.gravity`; default intended sampling cadence is 60 Hz, matching RL ball-prediction slice cadence.
+- `BallTrajectory::at_time` interpolates between generated samples and rejects times outside the trajectory horizon.
+- This is explicitly only a collision-free free-flight segment. It does not fabricate floor/wall bounce restitution, goal-frame collisions, or field bounds. Those require a proper collision model or authoritative RLBot prediction data before use for actual shot decisions.
+- Added four unit tests for ballistic equations, endpoint inclusion, interpolation, and invalid sampling inputs.
+- GitHub commits: prediction module `edf75998ba60467b442784874ba0568090b5deff`; module exposure `3a4bc80c01815ba4b63d4c5eee8b5fb55563d030`.
+- Changes have not been compiled locally or tested in-game. User should pull and run `cargo fmt`, `cargo check`, and `cargo test`.
