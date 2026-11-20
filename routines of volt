@@ -350,27 +350,16 @@ class wall_approach:
         wall_jump_time, _ = self._jump_time_wall(
             min(4096.0 - abs(ball.x), 5120.0 - abs(ball.y)), 0
         )
-        touching_wall = wall_gap <= 15.0
         stable_wall_ball = (
-            touching_wall
-            and wall_jump_time <= 1.45
+            wall_jump_time <= 1.45
             and abs(wall_velocity) < 150.0
             and 400.0 <= ball.z <= 1900.0
         )
         rolling_up_wall_ball = (
-            touching_wall
-            and ball.z + ball_velocity.z ** 2 / 1300.0 <= 129.0
+            ball.z + ball_velocity.z ** 2 / 1300.0 <= 129.0
             and wall_velocity >= 720.0
         )
-        # The finder and active approach use the same detached-ball envelope.
-        detached_wall_ball = (
-            15.0 < wall_gap <= 1000.0
-            and 250.0 <= ball.z <= 1900.0
-            and -1400.0 <= wall_velocity < 150.0
-        )
-        if not (
-            stable_wall_ball or rolling_up_wall_ball or detached_wall_ball
-        ):
+        if not (stable_wall_ball or rolling_up_wall_ball):
             agent.pop()
             agent.shooting = False
             print("[NOOB WALL SHOT] Abort: Noob wall-shot condition ended", flush=True)
@@ -388,14 +377,10 @@ class wall_approach:
             agent.shooting = False
             return
 
-        if self.selected_mode in {"double", "aerial", "wall_launch_aerial"}:
-            contact_offset = (
-                92.75 + float(getattr(car.hitbox, "length", 118.01)) * 0.5
-                if self.selected_mode == "wall_launch_aerial"
-                else 92.75
-            )
-        else:
-            contact_offset = 134.85
+        contact_offset = (
+            92.75 if self.selected_mode in {"double", "aerial"}
+            else 134.85
+        )
         target_og_pos = ball - shot_direction * contact_offset
         jump_index = 1 if self.selected_mode == "double" else 0
         jump_time, _ = self._jump_time_wall(
@@ -481,23 +466,10 @@ class wall_approach:
 
         # Once the car has reached the wall contact route, let Volt's
         # existing contact controller execute the actual hit.
-        launch_aerial = self.selected_mode == "wall_launch_aerial"
-        handoff_distance = 650 if launch_aerial else 320
-        handoff_time = 2.0 if launch_aerial else 1.65
-        if (
-            on_wall
-            and distance < handoff_distance
-            and T < handoff_time
-            and not self.handed_off
-        ):
+        if on_wall and distance < 320 and T < 1.65 and not self.handed_off:
             self.handed_off = True
             agent.pop()
-            if launch_aerial:
-                next_routine = Aerial(
-                    self.intercept_time, self.targets, fast_aerial=True,
-                    wall_launch=True
-                )
-            elif self.selected_mode == "aerial":
+            if self.selected_mode == "aerial":
                 next_routine = Aerial(
                     self.intercept_time, self.targets, fast_aerial=True
                 )
@@ -506,7 +478,6 @@ class wall_approach:
                     self.intercept_time, self.targets
                 )
             else:
-                # This is the original attached-ball Noob wall-shot path.
                 next_routine = jump_shot(
                     self.intercept_time, self.targets
                 )
@@ -519,12 +490,7 @@ class wall_approach:
             )
             return
 
-        if (
-            self.selected_mode != "wall_launch_aerial"
-            and not car.airborne
-            and T <= jump_time
-            and local_angle <= math.pi / 2
-        ):
+        if not car.airborne and T <= jump_time and local_angle <= math.pi / 2:
             agent.controller.jump = True
 
         if car.airborne:
@@ -1172,13 +1138,9 @@ class double_jump:
 
 
 class Aerial:
-    def __init__(
-        self, intercept_time, targets=None, fast_aerial=True,
-        wall_launch=False
-    ):
+    def __init__(self, intercept_time, targets=None, fast_aerial=True):
         self.intercept_time = intercept_time
         self.fast_aerial = fast_aerial
-        self.wall_launch = wall_launch
         self.targets = targets
         self.shot_vector = None
         self.target = None
@@ -1203,7 +1165,6 @@ class Aerial:
         self.intercept_time = shot.intercept_time
         self.fast_aerial = shot.fast_aerial
         self.targets = shot.targets
-        self.wall_launch = getattr(shot, "wall_launch", self.wall_launch)
 
     @staticmethod
     def _party_cannon_shot_power_modifier(speed):
@@ -1355,9 +1316,7 @@ class Aerial:
         # genuinely close to one of the two side walls and above the floor.
         wall_side = 1 if ball.x >= 0 else -1
         wall_gap = 4096.0 - abs(ball.x) - 92.75
-        max_wall_gap = 1000.0 if self.wall_launch else 700.0
-        min_ball_height = 250.0 if self.wall_launch else 300.0
-        if not (-5 <= wall_gap <= max_wall_gap) or ball.z < min_ball_height:
+        if not (-5 <= wall_gap <= 700) or ball.z < 300:
             self.side_wall_route = False
             return False
 
@@ -1378,11 +1337,7 @@ class Aerial:
 
         # A late intercept is better handled by the normal aerial than by
         # trying to climb a wall that cannot be reached in time.
-        if (
-            time_remaining <= 0.35
-            and not self.jumping
-            and not self.wall_launch
-        ):
+        if time_remaining <= 0.35 and not self.jumping:
             return False
 
         goal_direction = (
@@ -4062,8 +4017,6 @@ class jump_shot:
         self.patience = shot_patience()
         self.wall_shot_active = False
         self.wall_shot_normal = None
-        self.contact_corner_side = 0
-        self.contact_lateral_speed = 0.0
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -4304,82 +4257,6 @@ class jump_shot:
                     0.5 * self.needed_jump_time ** 2
                 )
             self.contact_approach_target = self.offset_target.copy()
-
-        # If lateral ball momentum will pull the shot off its intended line,
-        # use the upper front corner on the opposite side of that movement.
-        # The offset is calculated from the ball/corner sphere intersection,
-        # not as an arbitrary sideways shift of the car target.
-        self.contact_corner_side = 0
-        self.contact_lateral_speed = 0.0
-        if not self.side_mode and not self.wall_shot_active:
-            shot_forward = self.shot_vector.flatten().normalize()
-            shot_right = shot_forward.cross(Vector(z=1)).normalize()
-            if shot_forward.magnitude() > 0.001 and shot_right.magnitude() > 0.001:
-                # This is the predicted ball velocity at the selected
-                # interception slice, rather than the live pre-bounce velocity.
-                lateral_speed = self.ball_velocity.dot(shot_right)
-                self.contact_lateral_speed = lateral_speed
-                lateral_threshold = 180.0
-                if abs(lateral_speed) > lateral_threshold:
-                    # Incoming leftward velocity needs the car's top-right
-                    # corner; incoming rightward velocity needs top-left.
-                    corner_side = 1 if lateral_speed < 0 else -1
-                    hitbox = agent.me.hitbox
-                    half_width = float(getattr(hitbox, "width", 84.2)) * 0.5
-                    half_height = float(getattr(hitbox, "height", 36.16)) * 0.5
-                    ball_radius = 92.75
-
-                    # Reach close to the real upper outer corner while staying
-                    # slightly inside the hitbox's rounded/bevelled edge.
-                    max_lateral = min(half_width * 0.92, ball_radius * 0.45)
-                    max_vertical = min(half_height * 0.88, ball_radius * 0.20)
-
-                    # Blend into corner contact as lateral momentum increases.
-                    # Full corner contact is used once the lateral speed is
-                    # strong enough to materially bend the outgoing shot.
-                    corner_strength = cap(
-                        (abs(lateral_speed) - lateral_threshold) / 520.0,
-                        0.0,
-                        1.0
-                    )
-                    corner_lateral = max_lateral * corner_strength
-                    corner_vertical = max_vertical * corner_strength
-                    corner_forward = math.sqrt(max(
-                        1.0,
-                        ball_radius * ball_radius
-                        - corner_lateral * corner_lateral
-                        - corner_vertical * corner_vertical
-                    ))
-
-                    # _party_cannon_hitbox_target already includes the
-                    # hitbox's longitudinal and local-centre offsets. Move
-                    # the car so the selected upper corner meets the sphere.
-                    self.offset_target += (
-                        shot_forward * (ball_radius - corner_forward)
-                        - shot_right * (corner_side * corner_lateral)
-                        - Vector(z=corner_vertical)
-                    )
-                    self.contact_approach_target = self.offset_target.copy()
-
-                    # Keep the displayed/recorded ball contact point consistent
-                    # with the selected corner's actual sphere intersection.
-                    self.contact_point = (
-                        self.ball_location
-                        - shot_forward * corner_forward
-                        - shot_right * (corner_side * corner_lateral)
-                        - Vector(z=corner_vertical)
-                    )
-                    self.contact_corner_side = corner_side
-                    corner_name = "top-right" if corner_side > 0 else "top-left"
-                    print(
-                        f"[JUMP CORNER CONTACT] corner={corner_name} "
-                        f"lateral_speed={lateral_speed:.0f} "
-                        f"strength={corner_strength:.2f} "
-                        f"side_offset={corner_lateral:.1f} "
-                        f"top_offset={corner_vertical:.1f} "
-                        f"T={T:.3f}",
-                        flush=True
-                    )
 
         print(
             f"[JUMP SHOT AIM FIX] "
