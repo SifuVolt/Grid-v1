@@ -4258,6 +4258,85 @@ class jump_shot:
                 )
             self.contact_approach_target = self.offset_target.copy()
 
+        # Select the useful part of the car's FRONT from the goal direction
+        # expressed in the car's live orientation. This replaces velocity-
+        # based corner guessing: A/D yaw and E/Q air-roll change the car's
+        # right/up axes, so the contact target follows those axes every frame.
+        contact_face_side = 0.0
+        contact_face_height = 0.0
+        contact_forward_alignment = 0.0
+        if not self.side_mode and not self.wall_shot_active:
+            shot_forward = self.shot_vector.flatten().normalize()
+            car_forward = agent.me.forward.normalize()
+            car_up = agent.me.up.normalize()
+            car_right = car_forward.cross(car_up).normalize()
+
+            if (
+                shot_forward.magnitude() > 0.001
+                and car_forward.magnitude() > 0.001
+                and car_up.magnitude() > 0.001
+                and car_right.magnitude() > 0.001
+            ):
+                # Rebuild an orthogonal frame to avoid small basis errors
+                # leaking into the lateral and vertical contact projections.
+                car_up = car_right.cross(car_forward).normalize()
+
+                forward_alignment = shot_forward.dot(car_forward)
+                lateral_alignment = shot_forward.dot(car_right)
+                vertical_alignment = shot_forward.dot(car_up)
+                contact_forward_alignment = forward_alignment
+
+                # Wait until the nose is generally facing the intended shot.
+                # The face offset then fades in smoothly as yaw/pitch align.
+                facing_strength = cap(
+                    (forward_alignment - 0.15) / 0.55,
+                    0.0,
+                    1.0
+                )
+
+                hitbox = agent.me.hitbox
+                half_length = float(getattr(hitbox, "length", 118.01)) * 0.5
+                half_width = float(getattr(hitbox, "width", 84.2)) * 0.5
+                half_height = float(getattr(hitbox, "height", 36.16)) * 0.5
+
+                # Aim the contact toward the side/top/bottom of the front
+                # face that corresponds to the goal direction in the car's
+                # rotated frame. These offsets rotate with yaw and air-roll.
+                side_strength = cap(
+                    (abs(lateral_alignment) - 0.06) / 0.34,
+                    0.0,
+                    1.0
+                ) * facing_strength
+                height_strength = cap(
+                    (abs(vertical_alignment) - 0.05) / 0.28,
+                    0.0,
+                    1.0
+                ) * facing_strength
+
+                contact_face_side = (
+                    (1 if lateral_alignment >= 0 else -1)
+                    * half_width * 0.85 * side_strength
+                )
+                contact_face_height = (
+                    (1 if vertical_alignment >= 0 else -1)
+                    * half_height * 0.85 * height_strength
+                )
+
+                # The normal hitbox target assumes the front face is aligned
+                # to shot_forward. Replace that assumed frame with the car's
+                # current forward/right/up frame. Add this as a delta so any
+                # existing contact-label approach offset is preserved.
+                self.offset_target += (
+                    shot_forward * half_length
+                    - car_forward * half_length
+                    - car_right * contact_face_side
+                    - car_up * contact_face_height
+                )
+                self.contact_approach_target = self.offset_target.copy()
+                self.contact_point = (
+                    self.ball_location - shot_forward * 92.75
+                )
+
         print(
             f"[JUMP SHOT AIM FIX] "
             f"ball=({self.ball_location.x:.0f},{self.ball_location.y:.0f}) "
