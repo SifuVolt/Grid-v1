@@ -686,3 +686,15 @@ This file is the project handoff and change checklist. Read it before every code
 - GitHub source re-fetch only. No Python compile, RLBot simulation, or in-game test has been performed.
 
 - Follow-up controller correction: the Aerial forward-projection boost rule now runs during the wall jump hold and release phases as well as alignment, and the jump-release phase starts at the shortened handoff-specific hold duration. Commit: routines `afb6c2b74f5f264b9042792bc5992b41fa7d116f`.
+
+## Two-mode Noob wall shot: attached-ball hit vs detached-ball wall-launch aerial (2026-11-20)
+- User identified the original Noob Black wall-shot baseline as the 5,722-line routines of volt file at parent commit 8a93d39bfba8ac640f7bc181267f4dfa44f5bf89, immediately before the first wall_jump_shot addition. Use this as the reference for preserving the original attached-ball path.
+- Removed the experimental wall_jump_shot routine and its handoff. Attached/rolling wall-ball candidates retain the original single / double / aerial mode selection; the single mode returns to the original jump_shot handoff. The Noob wall approach, 60 Hz ball scan, 120 Hz travel profile, wall jump-time equations, and unfolded floor/wall geometry remain in place.
+- The finder separates balls touching the wall (collision-radius gap <=15 units) from detached balls (gap >15 and <=1000 units, height 250–1900, wall-normal velocity -1400 to <150 units/s). Detached candidates are checked with Noob's double-jump wall reachability and selected as wall_launch_aerial when they are the earliest reachable contact.
+- For wall_launch_aerial, wall_approach drives to the matching wall as before, but hands off earlier (650-unit unfolded target distance, T<2.0) to Volt's existing Aerial routine. It does not issue its own premature jump. The Aerial instance is flagged wall_launch=True; its side-wall takeoff logic accepts the wider detached-ball envelope, climbs to the predicted ball lane/height, jumps off the wall when launch-ready, and then uses the existing Party Cannon shot-direction estimate, WallShot wall correction, hitbox-centre contact target, fast-aerial jump/release/double-jump sequence, forward-projection boost control and final dodge.
+- The ordinary attached-ball route does not use the new flag or modified Aerial takeoff envelope. If the ball is touching the wall, it stays on the original Noob wall-shot route.
+- Diagnostics: [NOOB WALL FIND] reachable mode=wall_launch_aerial, [NOOB WALL SHOT] Handoff mode=wall_launch_aerial, and existing [AERIAL SIDE WALL] climb/launch plus Aerial boost/contact diagnostics.
+- Commits:
+  - routines: afdd129ef7683f24004eacbce7282d3a6fc53213 (remove wall_jump_shot, add wall-launch Aerial handoff); 893df64ba9f96b271b1ff851b8d5829aa2b00b35 (match detached eligibility and permit late wall launch)
+  - tools: f201c8d6de63133481b750fa52199f9fa59d7532 (separate detached candidates); 8846cb4e7f6acd31ad9d70ee792126c79684d432 (include separated balls near the aerial apex)
+- Static GitHub edits and source re-fetch verification only. No Python compile, RLBot simulation, or in-game test has been performed.
