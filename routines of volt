@@ -1160,7 +1160,6 @@ class Aerial:
         self.side_wall_launched = False
         self.wall_shot_active = False
         self.wall_shot_normal = None
-        self.contact_face_label = None
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -4018,6 +4017,7 @@ class jump_shot:
         self.patience = shot_patience()
         self.wall_shot_active = False
         self.wall_shot_normal = None
+        self.contact_face_label = None
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
