@@ -1,0 +1,808 @@
+# Volt — Working Notes for ChatGPT
+
+Repository: https://github.com/SifuVolt/Grid-v1
+Active branch: `partycannon-python-port`
+Primary bot: Volt (Python, RLBot v5, VirxERLU)
+
+This file is the project handoff and change checklist. Read it before every code change and update it whenever a durable decision, architecture change, regression, or useful test result is established.
+
+## 1. Editing rules
+
+- Fetch the latest target file from the active branch immediately before editing. Never rely on an old copy or a previous conversation's SHA.
+- Make focused edits. Do not replace entire routines or files unless explicitly requested.
+- Preserve the existing working baseline. The user frequently reverts experiments; inspect the live branch before assuming a prior change is still present.
+- Prefer source-faithful ports from Party Cannon, Noob Black, RedUtils, or VirxERLU when requested. Do not invent a loose approximation and describe it as a carbon copy.
+- After each GitHub edit, fetch the file again and verify the actual content and blob SHA. Report commit SHA(s).
+- GitHub commits do not update the user's local OneDrive folder. The user must pull/copy the commit before local testing.
+- Never claim code compiled or worked in-game unless that was actually tested. Static text checks are not runtime tests.
+- User prefers targeted snippets/changes and precise explanations, not full routine/main file dumps.
+- When adding a new routine, user has sometimes explicitly preferred a class rather than standalone helper functions. Geometry/math helpers are acceptable when they do not control or own a routine.
+- Avoid changing existing calculated variables unnecessarily. Explain any unavoidable changes.
+- Add concise CMD diagnostics using `print(..., flush=True)` when useful; do not rely only on renderer debug.
+
+## 2. Project/runtime facts
+
+- Project is Volt, not the separate Grid bot project.
+- Local path seen previously: `...OneDrive\\Desktop\\RLBOTS\\Volt`.
+- RLBot v5, Python 3.11.9, packet rate 240; VirxERLU simulation timestep is approximately `dt = 1/120`.
+- `bot.toml` previously used `venv\\Scripts\\python.exe main.py`, agent id `BotMaker/ABot`, tag `1v1`.
+- Dependencies previously included `VirxERLU-CLib>=1.12.0` and numpy.
+- Common VirxERLU physics values cited by the user/source: max speed 2300, throttle acceleration about 66.67, braking about -3500, boost acceleration about 33.33 per second (check the live agent fields/constants before relying on a number), jump duration about 0.2 s, jump speed about 291.67, jump acceleration about 1458.33.
+- Volt's car wrapper exposes `airborne`; do not assume `on_ground` or `has_wheel_contact` exists.
+- Local files do not automatically sync with GitHub.
+
+## 3. Main files and responsibilities
+
+- `instructions for chatgpt on volt`: this is the bot's agent/decision code despite the filename. It controls teamplay, shot selection, routine stack decisions, defensive roles, and when shot finders are called.
+- `routines of volt`: custom routines/actions including `Aerial`, `jump_shot`, `ground_shot`, side shots, defense/recovery and shot-surface geometry.
+- `tools for volt`: shot finding, intercept filtering/scoring, target/contact selection, and helper logic used by the agent. It should not independently launch wall-drive routines.
+- `tools for volt` currently imports shot routines and contains the find_shot/find_any_shot pipeline. Do not reintroduce standalone wall approach/shot selection.
+- `routines of volt` has the `ShotSurfaceGeometry` helper for nearest-surface shot-vector correction. It is geometry only, not a movement routine.
+
+## 4. Durable behavior requirements
+
+### General decision-making / teamplay
+- Only the dedicated cover/goalie role should be passive; other teammates should remain aggressive within role selection.
+- A transition player should wait about 0.17–0.20 s after the first teammate shot before acting (not the old ~0.10 s).
+- Transition bump/demolition target: when transition player is out of defense, a teammate has possession/shot, and enemy defenders block the route, target the closest relevant defender; maximum two defenders.
+- Team statuses used include `NO_SHOT`, `SHOT_FOUND`, `ANY_SHOT_FOUND`, `LOW_BOOST`, `DEFEND`, and `SHOT_ABANDONED`. A real teammate `SHOT_FOUND` should take precedence over `ANY_SHOT_FOUND`.
+- Defense should not use wall-dash behavior (`allow_wall_dash=False`).
+- Emergency clear/save logic matters in deep own-half situations; do not weaken it while changing attack routines.
+- Goalie must not rotate unnecessarily in goal to face the ball when the ball is travelling toward the own goal. Prioritize protecting the net over needless aerial/boost detours.
+
+### Shots and mechanics
+- Shot planner horizon should generally consider 1–3 s opportunities, not only ~0.45 s.
+- Low boost (below roughly 12) should discourage complex shot types where possible.
+- Jump-shot shot vector should point toward the opponent goal; tilt-back then flip/dodge. Very quick shots may skip the tilt-back and use a forward flip.
+- Ground-shot should use the jump-shot shot vector/contact target logic where relevant and refresh stale contact data.
+- Aerial should aim the car's hitbox/nose at a deliberate ball contact point and predict the resulting shot direction toward goal. Avoid aiming at the ball centre blindly.
+- Aerial should be boost-aware and should not spend boost wastefully gaining all its momentum after takeoff if sufficient runway exists before takeoff.
+- Aerial orientation should be time-aware: use enough alignment for the available time, but do not over-rotate or miss a fast contact trying to achieve perfect orientation.
+- Side shots should be used only when the geometry and field position make sense, especially in the attacking half. Avoid weak side-flips in the own half.
+- For directional jump-shot dodge decisions, compare ball position to the interception point, not merely the car.
+- User dislikes backflip-heavy dodge behavior and excessive setup that loses good immediate shots.
+
+## 5. Wall behavior — live implementation
+
+- The active branch currently contains a standalone `wall_approach` routine, selected by `tools.find_wall_drive()` and committed through the agent's shot-selection path. Do not assume the older removal notes below describe the current live branch.
+- The wall-drive routine is limited to side walls. It must not turn the own back wall into an attacking route or pull the goalie away from the goal line.
+- Wall-drive selection must require the predicted ball centre to be physically close to the side-wall collision plane. A ball merely travelling toward a wall is not a valid wall-drive intercept.
+- Car reachability must include the ground approach, rounded floor-to-wall transition, wall climb, current heading/velocity, acceleration, boost budget, and a safety margin. A straight-line distance or fixed climb-speed estimate is not sufficient.
+- The routine must distinguish ground approach, curved transition, stable wall attachment, and free flight after losing the wall. Do not continue wall steering while the car is falling away from the wall; hand off to recovery and let normal shot selection reconsider after landing.
+- Party Cannon's `Drive.cs`, `Car.cs`, and `Field.cs` are the reference for surface-aware distance, turn-radius, landing prediction, and smooth surface transitions. Volt's current arena model is still a side-wall approximation, not a full mesh simulation.
+- Preserve ordinary ground/jump/aerial shot geometry and defensive behaviour when no physically reachable wall intercept exists.
+
+## 6. Current Aerial implementation notes
+
+- The live `Aerial` class in `routines of volt` uses Party Cannon-inspired shot direction prediction and hitbox standoff targeting.
+- It predicts the ball at `intercept_time`, derives `self.shot_vector`, applies `ShotSurfaceGeometry.adjust_aerial`, then computes a hitbox-aware `self.target`.
+- Its current launch condition is in the `if self.jumping or not agent.me.airborne:` block. On the first grounded tick it sets `self.jumping = True` and starts the jump immediately; this is why it currently launches from the floor without a distinct ground acceleration phase.
+- Current jump simulation adds first jump impulse/hold acceleration and optional second jump impulse; fast aerial holds the first jump then pulses the second jump. It then orients toward the predicted hitbox target and uses Party Cannon-style boost estimation / forward-projection boost control.
+- The current live branch does not contain the earlier proposed ground-speed build phase. The first grounded tick enters the existing jump sequence immediately. Do not assume the old 0.38 s ground setup, 1150 forward-speed threshold, or 0.88 alignment threshold are present unless they are re-added and verified in the live file.
+
+## 7. Known regressions / pitfalls to avoid
+
+- NumPy Vector construction can fail with inhomogeneous shapes (e.g. `Vector(target_center)`); use consistent scalar components or the project's established constructor pattern.
+- `targets[0]` may be None; validate before indexing/converting.
+- Do not reference `tools` in a scope where it is not imported/defined.
+- Initialize variables on every control-flow path (past `slice_n` before assignment).
+- Clamp prediction slice indices; prior double-jump code indexed `slices[round(T*120)-1]` and could go out of range.
+- Aerial state fields must be initialized in `__init__` before use (past error: missing `aerial_started`).
+- Avoid undefined helper names such as `_centered_shot_vector` and unbound locals such as `vf`.
+- Be careful with VirxERLU Vector3 iteration/constructor assumptions.
+- Do not add unsupported car fields such as `on_ground` or `has_wheel_contact`.
+- Changes to aerial finder/selection must not accidentally make jump_shot start aerialing.
+- Changes to side-flip logic previously caused excessive backflips and lost tilt-back shots.
+- The user has reverted failed aerial, wall, reset, and shot experiments; always fetch the current live source first.
+
+## 8. Validation checklist for every change
+
+1. Read this notes file.
+2. Fetch current target file(s) and current blob SHA(s) from `partycannon-python-port`.
+3. Confirm the exact live implementation and call sites; do not trust old snippets.
+4. Make the smallest change that satisfies the request.
+5. Check syntax-sensitive indentation, names, imports, and every new state variable.
+6. Search for stale references and unintended duplicate paths.
+7. Fetch changed files again and verify exact content.
+8. Report commit SHA, files changed, what changed, what was intentionally left alone, and what was not tested.
+9. Tell user they need to pull/copy the commit locally before running the bot.
+10. Update this file with any new durable decisions, regressions, or test outcomes.
+
+## 9. Current work queue
+
+- Test the underside Redirect with an airborne ball behind Volt that is travelling toward goal but projected close to/outside a post.
+- Confirm the redirect's shallow contact changes the ball's path without noticeably reducing its speed.
+- Confirm ordinary aerials remain unchanged when the ball is in front, grounded, travelling away from goal, or already projected safely inside the goal mouth.
+- Tune the underside tilt and contact standoff only from in-game observations.
+
+
+
+## 10. Airborne underside redirect (2026-11-14)
+
+- The user reverted the earlier upside-down/front-wheel Redirect experiment. Do not assume that implementation is present or reintroduce its wheel offsets.
+- The current Redirect is a separate subclass of `Aerial`; ordinary Aerial behaviour remains the fallback and is otherwise unchanged.
+- Shot selection considers Redirect only for a goal-directed aerial candidate when the predicted ball is behind Volt in local coordinates (local y < -150), airborne (z > 250), moving at more than 600 uu/s, and travelling generally toward the opponent goal.
+- It also projects the predicted ball trajectory to the opponent goal line. Redirect is selected only when the projected path is near the goal mouth but close to/outside a post, the required correction is modest (at most 35 degrees), and the intercept is reachable within the current time limits.
+- Redirect approaches the predicted ball position from above. Its forward axis follows the ball's existing horizontal travel direction; its underside is tilted slightly toward the required lateral correction. The contact target is offset by ball radius plus half the hitbox height.
+- Redirect deliberately skips the final dodge. The intended touch is a shallow trajectory correction that preserves most of the ball's existing speed, rather than a powerful shot that kills its momentum.
+- The geometry is an initial model, not a validated collision simulation. In-game tests must establish whether the car actually contacts with its underside and whether the ball retains enough speed.
+- Untargeted aerial selection remains normal Aerial. Redirect is only selected in the goal-directed `find_shot` path.
+- The live branch still contains `wall_approach` and wall-drive selection logic; inspect the live code before any wall-related edit.
+
+## 11. Fast aerial takeoff adjustment (2026-11-14)
+
+- The Aerial launch now forces boost immediately during the first 0.25 seconds after the first jump begins, provided boost is available and the routine is not in its dodge phase.
+- The car briefly pitches back for the first 0.10 seconds of takeoff, then the existing target-tracking orientation resumes.
+- The existing held first-jump duration, second-jump pulse/counter sequence, predicted jump physics, and post-launch Party Cannon boost controller remain unchanged.
+- This is a launch responsiveness adjustment, not a rewrite of aerial steering or shot/contact selection. It has not yet been compiled or tested in-game.
+
+## 12. Tactical strategy revamp — first implementation (2026-11-14)
+
+- Replaced the former Noob Black-inspired deepest-player/ball-dependency role calculation with Volt's dynamic first-man / last-man / support assignment.
+- First man is selected from predicted reachable ball slices using travel distance, turn delay, speed, boost and vertical reach. A short hysteresis window prevents role swapping when ETAs are nearly equal.
+- Last man is selected by estimated ability to cover the projected goal-mouth lane, not simply by deepest position. A separate support role is assigned in 3v3.
+- Retired the scripted 3v3 transition bump and guessed-contact receive sequence. The third player now continuously occupies a separated support lane and can respond to the actual next play.
+- Added a new `tactical_rotation` routine: 1v1 uses a moving shadow/goal-mouth target; 2v2 uses first-man pressure plus a goal-side anchor; 3v3 adds a separated support lane. It uses turn-aware speed and conservative boost so defensive players do not abandon their lane for boost.
+- Existing shot finding and shot-execution routines remain in place. This is a first strategic layer replacement, not a validated final balance pass.
+- No compile, simulation, or in-game tests have been run yet. Review the role assignments and defensive positioning in live matches before tuning the distances/weights.
+
+
+## 13. Simple challenger / shadow / boost rotation (2026-11-14)
+
+- Replaced the complicated ball-dependency role election with a simple three-role rotation.
+- Challenger is selected by a realistic approach score using distance, horizontal facing/turn cost, speed and boost reserve; a short hysteresis margin prevents near-equal candidates swapping every packet.
+- Shadow is selected from the remaining players by goal-side position, centrality and ability to face the play. It uses the existing defensive positioning routine.
+- In 3v3, the third player is kept out of the ball challenge and sent to a safe active boost pad while the challenger and shadow contest. If no safe pad is available, it holds a separated support lane.
+- In 2v2, one player challenges and the other shadows. In 1v1, the sole player remains the challenger.
+- Removed the old scripted transition bump/receive sequence from the active run path.
+- Teammates outside the challenger role are blocked from normal shot selection; emergency defence remains higher priority.
+- This is a structural first pass. It has not been compiled or tested in-game.
+
+
+## 14. Immediate first-man challenge handoff (2026-11-14) — historical/reverted
+
+- This earlier handoff experiment is not present in the current live `instructions for chatgpt on volt` file; do not assume its `CHALLENGE_RELEASED` status or handoff lock is active.
+- On the reverted live branch, first man was being held by role election even after its own intercept became unwinnable. Teammates could remain in cover/transition positions while an opponent took the ball.
+- Added a live lost-challenge check comparing the active routine's remaining intercept estimate, the car's ETA, teammate ETAs and opponent ETAs.
+- When the elected challenger is beaten to the ball, or a teammate has a clearly earlier viable route, it broadcasts `CHALLENGE_RELEASED` immediately.
+- Teammates exclude that released player from first-man selection for a short handoff window, while still considering the player for the normal deepest/cover/transition rotation. The next eligible teammate becomes challenger.
+- The former challenger cancels its stale shot and returns to the existing defensive/rotation routine. A short takeover grace period prevents every teammate from immediately releasing in sequence against the same opponent.
+- Emergency defence remains higher priority and is not released by this logic.
+- This is a timing/ETA handoff, not a guarantee of a successful touch. No compile or in-game test has been run.
+
+
+## 15. Risk-first challenger commitment (2026-11-14) — historical/reverted
+
+- This earlier `RISK_CHALLENGE` experiment is not present in the current live `instructions for chatgpt on volt` file; do not assume that status is active.
+- The elected first man must not stop pressuring simply because the prediction system cannot find a likely winning touch. If no reliable shot/intercept is available, it replaces passive `grid_defense`, `goto_boost`, or `cover_followup_wait` positioning with the existing `short_shot` routine as a direct, low-confidence challenge toward the opponent goal. It does not override an active teammate-owned shot or emergency defence.
+- While that routine is active, the challenger broadcasts `RISK_CHALLENGE` with a low score and a rough contact-time estimate. This means "I am committing to pressure, but do not assume I will win or touch the ball."
+- The designated goalie remains the defensive fallback. If the goalie is itself elected as challenger because it is already facing the ball better, the next-deepest teammate is promoted to goalie so the fallback role is never left empty. In 3v3, the transition player treats `RISK_CHALLENGE` as an active commitment and prepares for the loose-ball follow-up; it does not start the transition bump play for a risk challenge.
+- `RISK_CHALLENGE` is an accepted teamplay status and is included in the message's `shot_type` field. Teammates recognize it as an active commitment rather than interpreting it as `NO_SHOT`.
+- Emergency defence remains higher priority and is not replaced by this risk-first behaviour.
+- This uses the existing `short_shot` routine and message protocol. Its boost/speed-gain branch previously referenced undefined `T` and `time` names; those checks now use the routine's elapsed time. It has not been compiled or tested in-game.
+
+
+## 16. Contested shot message and goalie late-intercept fallback (2026-11-14)
+
+- Added `SHOT_CONTESTED`: the challenger keeps executing its active shot, but estimates whether the nearest opponent can reach the predicted contact point at least 0.15s before its own intercept. It broadcasts the expected contact time instead of abandoning the shot.
+- The race estimate uses the active routine's `intercept_time` and corresponding predicted ball slice; for `short_shot`, which has no predicted intercept, it compares ETAs to the current ball. Opponent ETA uses distance, facing, horizontal speed and height.
+- Only the elected goalie reacts to `SHOT_CONTESTED`, and only while the ball is in our half (`ball_depth > 0`). The message carries both the challenger's expected contact time and the estimated opponent contact ETA. The goalie holds its goal-side `goalie_followup_wait` position until 0.10s after the opponent's estimated touch (or the challenger's contact time if no opponent ETA is available), then calls `fast_intercept_finder.find` with that later earliest time to select the first reachable follow-up touch from the refreshed ball prediction.
+- If the ball is on the opponent half, the goalie ignores the contested message and continues its normal role. If the message expires or the ball crosses midfield before a fallback has launched, the waiting routine or unlaunched fallback is cleared; an already launched jump/aerial is allowed to finish. Immediate goal danger remains higher priority.
+- In 2v2/3v3, if the deepest player is also elected challenger due to its facing angle, the next-deepest teammate is promoted to goalie so the fallback is always a different car.
+- The 3v3 transition player does not treat `SHOT_CONTESTED` as a normal offensive shot announcement; its existing transition behaviour remains separate.
+- This uses the existing `goalie_followup_wait` and `fast_intercept_finder` routines. The opponent ETA is an approximation, not a full opponent physics simulation. No compile or in-game test has been run.
+
+## 17. Party Cannon JumpShot reference (pinned commit)
+
+- Source: `RedUtils/Actions/JumpShot.cs` at `ea84e4325ddb60565bbac6fb9766dc45f38b58cb`.
+- It predicts the post-hit ball velocity and travel time toward the target, derives a shot direction, places the car target about 165 units behind the ball along that direction, adjusts for surface normal/jump height, then subtracts another 25 units of horizontal shot direction for contact power/reliability.
+- It updates target and shot direction every 0.2s while approaching with a timed `Arrive` action. It only jumps when the predicted jump position is within roughly 50 units of the target and the remaining time matches the required jump time.
+- In the air it aims along `DodgeDirection`, rolls its roof away from the dodge direction relative to the contact surface, holds jump until close to contact, releases for at least three frames, then dodges in the flattened shot direction about 0.05s before contact.
+- The timed `Arrive` creates `Drive(..., wasteBoost: true)`; boost is still gated by required target speed, forward alignment and speed. The jump-shot's airborne phase itself does not continuously boost.
+- Party Cannon uses `BoostAccel=991.667`, `BoostConsumption=33.3/s`, `AirThrottleAccel=66.667`, and `MaxSpeed=2300`. Its ETA model assumes the available boost can be spent to reach maximum speed; it does not enforce a fixed reserve for every action.
+
+
+## 18. Party Cannon JumpShot and boost-management port (2026-11-14)
+
+- Replaced the live `jump_shot` class in `routines of volt` with a Party Cannon-derived implementation, pinned to `ea84e4325ddb60565bbac6fb9766dc45f38b58cb`.
+- The shot prediction uses the Party Cannon 6:1 car/ball velocity blend for estimating shot power, the exact piecewise `ShotPowerModifier`, the 1:2 car/ball blend for outgoing ball velocity, ball gravity during time-to-goal prediction, and a shot direction from the predicted post-hit ball location to Volt's existing goal aim point.
+- Contact geometry uses Party Cannon's 165-unit standoff, surface-relative shot and dodge angles, 12.46 pitch angular acceleration, 5.5 maximum angular velocity, the 40-unit surface clearance correction, the additional 25-unit horizontal offset, and wall/ceiling gravity compensation. Arena geometry uses the live ball prediction and standard Soccar surface planes.
+- Jump timing ports Party Cannon's `TimeToJump` equation using Volt's existing `jump_speed`, `jump_acc`, `jump_max_duration`, and `agent.gravity`, plus Party Cannon's 325 sticky acceleration constant. Jump readiness compares the predicted jump position against the planned contact location and requires low velocity along the selected surface normal.
+- Approach uses a timed target speed (distance / time remaining), Party Cannon's arrival-target shift based on turn radius and jump recovery time, Volt's existing `defaultDrive` / `defaultPD` / `defaultThrottle`, and Party Cannon's boost alignment gate (<0.3 radians on ground; <0.8 airborne), forward-only condition, and explicit no-boost jump/dodge phase.
+- The jump phase aims along Party Cannon's DodgeDirection with the roof oriented away from it, holds jump until the contact window, releases for at least three frames, then dodges along the final shot direction at the 0.05-second contact window. The old custom hitbox-corner dodge-selection and repeated jump-shot boost logic were removed from this class.
+- Preserved the `side_shot` subclass as a separate lateral-approach variant; `ground_shot`, `Aerial`, and the existing aerial boost estimator were not rewritten by this change.
+- Added prediction-shift cancellation at 60 units and re-planning if boost increases during the approach. Jump-shot target updates occur at 0.2-second intervals, matching Party Cannon's update cadence.
+- Used Volt's live variables rather than introducing a parallel physics model: `agent.boost_accel`, `agent.gravity`, `agent.me.velocity`, orientation, hitbox, boost amount, prediction slices, and the existing jump/throttle constants. Party Cannon-only physical constants are retained only where Volt has no corresponding field (pitch angular acceleration, max angular velocity, sticky acceleration, and ball max speed).
+- GitHub commits:
+  - `c228da0`: initial Party Cannon JumpShot calculations, arrival, jump and boost port.
+  - `110f562`: prediction-shift validation and one-frame dodge-edge correction.
+  - `e98f70b`: Party Cannon's 270-unit jump-shot contact-height limit.
+- Static source checks confirmed the new calculation paths, imports, preserved side-shot subclass, and removal of the old hitbox-dodge block. No Python compile, simulation, or in-game test has been performed. Pull the branch locally before testing.
+
+
+## 19. Standalone fast aerial power shot (2026-11-16)
+
+- Added `FastAerialPowerShot` as an independent 673-line class copied and adapted from the full Aerial controller. It does not inherit from `Aerial` or `jump_shot`.
+- It owns its prediction tracking, Party Cannon shot-direction and hitbox-contact calculations, orientation, boost estimation, wall-route handling and recovery.
+- It uses exactly one jump impulse, releases jump for at least three frames, then performs one directional dodge through the contact target. It does not perform a second-jump impulse.
+- Targeted and untargeted searches test airborne balls above 130 units with a dedicated C-parser pass that enables only single-jump reachability. ETA must be between 0.30 and 1.25 seconds, and the existing boost-budget parser must confirm the contact.
+- The new routine is selected ahead of ordinary shot types when its single-jump candidate is reachable. Otherwise, the existing ground, double-jump and full-aerial choices remain available.
+- Static source checks only; no compile, simulation or in-game test has been performed.
+
+
+## 20. Fast aerial power-shot opponent margin (2026-11-17)
+
+- The standalone `FastAerialPowerShot` is explicitly treated like `jump_shot` by the opponent-ETA filter in `useful_non_aerial_shot`.
+- Both receive the same 0.50-second safety margin after the opponent's estimated arrival time; other non-aerial shot types retain 0.35 seconds.
+- This prevents the fast aerial candidate from being evaluated with the smaller generic margin if its parser shot type is changed or missing while the dedicated fast-aerial flag is present.
+- This changes candidate rejection during shot selection only; it does not change jump-shot execution, the fast aerial routine's own timeout/viability checks, or opponent physics estimates.
+- Static source verification only; no compile or in-game test has been performed.
+
+
+## 11. Fast aerial power-shot nose-only dodge (2026-11-17)
+
+- The independent `FastAerialPowerShot` must only initiate its final contact flip when the front-nose centre is aligned with the predicted incoming ball surface; do not accept roof, rear, side, or generic car-centre proximity as a valid contact.
+- At the dodge window, compare the local front-nose centre (hitbox half-length plus local hitbox offset) with the predicted ball surface point (ball centre minus 92.75 units along the outgoing shot vector).
+- Require tight lateral/vertical nose alignment and the car's forward axis to face the outgoing shot vector. Drive the final dodge along that shot vector rather than the car-centre approach marker.
+- This is scoped to `FastAerialPowerShot`; ordinary `Aerial` and `jump_shot` remain unchanged.
+
+
+## 14. Falling-ball jump-shot profile (2026-11-17)
+
+- When the selected single-jump intercept is airborne and descending (ball z > 150 and vertical velocity < -80), `jump_shot` uses a dedicated falling-ball jump-shot profile rather than ordinary Aerial-style orientation.
+- The routine retains the Party Cannon-derived shot direction and hitbox contact target. During the first 0.12 seconds of a non-quick jump it aligns to the contact and pitches back; after that it returns to 3D contact orientation and uses the existing boost projection, nose-contact dodge, and recovery logic.
+- Shot candidate scoring gives descending airborne single-jump candidates a stronger time preference (0.85 per second rather than 0.22) while preserving existing shot-angle, weak-contact, teammate, and goal-quality penalties.
+- The change is scoped to descending airborne single-jump shots. Grounded shots, double jumps, ordinary Aerial routines, and side shots retain their existing paths.
+- No compile or in-game test has been run yet. Validate that the car jumps before the ball reaches the floor, tilts back only during initial takeoff, then aligns and dodges through the predicted contact. Tune from match diagnostics rather than loosening contact geometry blindly.
+
+
+## Noob Black single-jump replacement (2026-11-17)
+- Replaced the normal `jump_shot` class with a port of Noob Black V3 single-jump execution from commit `9c8a02b5a81f1d4854cb2f6474b99dd83d3e0c6e`.
+- Kept the former Volt jump_shot implementation under `_VoltJumpShot` solely as the base for `side_shot`, so the dedicated side-shot behavior is not replaced by the new normal jump routine.
+- The new normal jump routine uses Noob Black's boost-aware 120 Hz acceleration tables, target-height/shot-direction calculation, 134.85-unit approach offset, jump-time calculation, 24-frame jump hold, post-release contact prediction, and directional dodge.
+- Added Noob Black's 60 Hz predicted-slice single-jump reachability scan to both `find_shot` and `find_any_shot`. It selects the earliest reachable single-jump contact and replaces only another single-jump candidate or an empty result. Existing ground, double-jump, aerial, and side-shot selection remains intact.
+- The original Noob Black routine also contains wall, flick, double-jump, aerial, strategy, and goalie behavior; those are not part of this single-jump port.
+- This is a targeted adaptation to Volt's VirxERLU API, not a line-for-line copy of Noob Black's full RLBot v5 bot. Compilation and in-game testing must still be performed locally.
+
+
+## Jump-shot directional flip and aerial far-post aim (2026-11-17)
+
+- Updated the normal `jump_shot` post-takeoff orientation to match the existing `double_jump` tracking behaviour: after the first jump it uses `defaultPD` toward the planned contact/approach point rather than simply tracking the ball centre.
+- The jump-shot still uses its existing first-jump physics, hold/release timing, contact-window checks and hitbox safety checks. At the dodge window, the normal shot now derives the dodge from the local shot vector, producing a forward W-style flip or a W+A / W+D diagonal when the shot direction requires lateral input. It avoids turning a slightly misaligned normal shot into an unintended backflip; the existing explicit emergency/rear-contact backflip cases remain.
+- Updated normal `Aerial` shot-direction prediction to bias toward the far side of the goal: if the predicted ball is right of the goal centre, aim left; if left, aim right. Balls within 180 units of the goal centre's lateral line retain the direct centre aim. The target offset is capped to keep it inside the posts.
+- The aerial-only side bias is passed explicitly by `Aerial.run`; the jump-shot's use of the shared Party Cannon shot-direction calculation does not enable that bias.
+- Preserved `double_jump`, `side_shot`, the separate fast-aerial power-shot class, and shot selection.
+- Static fetch verification confirmed the aerial-only flag, jump-shot contact orientation, directional dodge calculation, and the continued presence of the existing routine classes. No Python compile or in-game test has been performed; pull the branch locally before testing.
+
+
+## Reapplied jump-shot orientation / aerial far-side aim on reverted routines (2026-11-17)
+
+- The user reverted `routines of volt` to the earlier Party Cannon-derived jump-shot implementation. Reapplied the requested changes to that live implementation rather than assuming the later Noob Black single-jump class was still present.
+- In the reverted `jump_shot`, the post-takeoff orientation now matches the existing `double_jump` routine: `defaultPD` tracks the full 3D local contact/approach target (`self.offset_target`) instead of flattening the ball-centre direction and forcing a positive-pitch S input.
+- The jump-shot's normal final dodge now uses the local outgoing `self.shot_vector`, producing a forward W flip or a W+A / W+D diagonal. The existing explicit pure-backflip and urgent defensive-backflip exceptions remain unchanged.
+- In `Aerial`, the Party Cannon shot-direction method accepts an aerial-only side-bias flag. When the predicted ball is more than 180 units laterally from the opponent goal centre, it moves the aim point toward the opposite side of the goal, capped to remain 150 units inside the posts (maximum 450-unit shift). A ball already near the centre line retains the direct goal-centre aim.
+- In both `find_shot` and `find_any_shot`, double-jump candidates receive a 0.25 score penalty while Volt has boost, including the separately generated Grid double-jump candidate. This makes a viable single `jump_shot` win when the candidates are close, but keeps double jump available when it has a meaningfully better reachable contact. The penalty is not applied in urgent save mode, where earliest contact remains the priority. At zero boost, candidate scoring is unchanged.
+- GitHub commits:
+  - `1af5bf8`: reapply jump-shot contact orientation/directional flip and aerial far-side aim to the reverted routines.
+  - `d308b34`: prefer jump shot over double jump when boost is available in both shot finders.
+- Static fetch verification only. No Python compile, simulation, or in-game test has been performed. Pull the branch locally before testing.
+
+
+## Correction — aerial goal-side aim follows ball side (2026-11-17)
+
+- Corrected the normal Aerial side-bias direction: when the predicted ball is to the right of the opponent goal centre, aim toward the right side of the goal; when it is left, aim left.
+- The previous implementation incorrectly aimed across goal to the opposite/far side. The user wants the aerial to preserve the ball's lateral side because the aerial contact is accurate enough to target that side directly.
+- Balls within 180 units of the goal centre's lateral line still aim directly at goal centre. The existing capped in-post offset and aerial-only scope remain unchanged.
+- Commit: `fe5e80c`.
+- Static fetch verification only; no compile or in-game test has been performed.
+
+
+## Jump-shot directional dodge restored on current routine (2026-11-17)
+
+- The live Party Cannon-derived `jump_shot` remains the user's preferred/working jump-shot implementation. The change is deliberately limited to the final dodge input.
+- At the existing counter-3 contact window, the dodge direction is now calculated from the routine's planned outgoing `self.shot_vector`, transformed into car-local coordinates and flattened.
+- The local shot vector produces a forward dodge for a straight shot and a W+A / W+D diagonal dodge when the outgoing shot angle has a lateral component.
+- If the local shot direction is invalid or points too far backward (`x <= 0.05`), it safely falls back to a forward dodge instead of creating an unintended backflip.
+- The existing contact-distance check, front-of-target gate, side-mode exception, jump timing, quick-shot behavior, S-tilt/orientation, jump hold/release, counters, and recovery/abort paths are unchanged.
+- Commit: `b93e4ab`.
+- Static source verification only; no Python compile, simulation, or in-game test has been performed.
+
+
+
+## Jump-shot relative aim and hitbox geometry upgrade (2026-11-17)
+
+- Updated the live Party Cannon-derived `jump_shot` to reuse the existing Aerial post-hit shot-direction prediction. It now uses the predicted ball velocity at the selected intercept, relative goal aim point, Party Cannon's shot-power modifier, predicted outgoing ball velocity, and gravity-adjusted ball travel toward goal.
+- Jump-shot contact positioning now reuses Aerial's actual hitbox-centre target calculation, including the car hitbox length and any exposed local hitbox offset.
+- Preserved the jump shot's existing `agent.best_shot_value` approach standoff. If the actual hitbox standoff is shorter, the target is extended so the new geometry does not intentionally bring the car closer to the ball or reduce its existing approach/power distance.
+- Existing centre/left/right/high/low contact labels are retained and receive the same hitbox-centre correction. The side-shot lateral setup also retains its chosen side and lateral distance while applying the hitbox correction.
+- Existing `WallShot.adjust_jump`, wall gravity compensation, jump-time calculation, drive/boost management, jump hold/release, final dodge window, and recovery logic were left unchanged.
+- This is a shared-calculation port, not a line-for-line replacement of the jump-shot routine with Aerial. It changes the predicted outgoing direction and car-reference contact point; it does not add Aerial's continuous airborne boost controller to jump shots.
+- Commits:
+  - `0b6d000`: add predicted shot direction and hitbox-aware contact geometry.
+  - `aff3817`: make the ball-velocity fallback explicit.
+- Static fetch checks confirm the Aerial calculations are reused, the existing standoff is preserved, contact labels/side mode remain, and the jump/wall/dodge paths remain present. No Python compile, simulation, or in-game test has been performed.
+
+
+## Jump-shot shared Aerial calculation runtime fix (2026-11-17)
+
+- Local traceback showed that `jump_shot` called `Aerial._party_cannon_shot_direction` with the jump-shot instance as `self`, but the method called `self._party_cannon_shot_power_modifier`. The jump-shot instance does not define that method.
+- Fixed the shared calculation to call the modifier explicitly as `Aerial._party_cannon_shot_power_modifier(...)`. The modifier is static and does not depend on Aerial instance state, so this lets both Aerial and jump_shot use the same calculation safely.
+- No change to the formula, shot power, contact geometry, jump timing, or dodge logic.
+- Commit: `8a18604`.
+- Static source verification only; no Python compile or in-game test has been performed.
+
+
+## Party Cannon predictive recovery boost (2026-11-17)
+
+- Updated the existing `recovery` class rather than adding a separate routine. After a flip, the normal recovery now briefly uses Party Cannon's `AerialShot.Run` predictive correction pattern to rotate the nose toward the required surface-directed correction and boost when the correction is forward-aligned.
+- The recovery predicts the car's unboosted future position from current location, velocity and gravity, then computes the remaining offset to a fixed point 180 units toward the selected landing surface. It uses Party Cannon's required-acceleration calculation, forward projection, 0.4-radian boost alignment gate, boost-plus-air-throttle threshold, and air-throttle scaling.
+- This applies to floor, side-wall and back-wall recoveries. Ceiling recovery deliberately keeps the original orientation/throttle behaviour and does not use the new boost phase.
+- The predictive nose-aim phase is temporary: when the correction is completed, its one-second horizon expires, or the correction is no longer feasible, the routine returns to the existing landing-orientation controller. The existing `ball_recovery` target semantics and the recovery call sites are unchanged.
+- This is an adaptation of Party Cannon's predictive controller to Volt's recovery target, not a literal copy of the entire AerialShot action (which has a known ball contact target and intercept time).
+- Commits:
+  - `c39a815`: add predictive surface-directed recovery boost.
+  - `8ae5697`: keep the nose aimed at the correction target while the predictive phase is active, then return to landing alignment.
+- Static source verification only. No Python compile, simulation, or in-game test has been performed. Pull the branch locally before testing.
+
+
+
+## Untargeted fast-aerial touch preference (2026-11-17)
+
+- The shot finders now run a separate aerial-only reachability check using `virxrlcu.parse_slice_for_shot(False, False, False, True, ...)`. It is independent of the goal-targeted parser, so a reachable fast aerial is not discarded just because that contact cannot produce a direct shot on the goal target.
+- In `find_shot` and `find_any_shot`, a confirmed `shot_type == 3` candidate is accepted only when the parser explicitly reports `fast == True`. It is passed to the existing `Aerial` routine with `targets=None`, preserving the Aerial controller and its normal default goal-centre aim rather than inventing a separate touch controller.
+- These untargeted fast-aerial candidates receive a 0.45 score preference in normal attacking selection so they can beat a weaker ground/jump option. In urgent save mode, selection remains time-first and the fast aerial gets only a tiny tie preference.
+- `fast_intercept_finder` now searches for the earliest reachable fast aerial before its ordinary earliest-touch scan, not only during the kickoff contest window. The existing kickoff preference for a regular aerial remains as a fallback when no fast aerial is available.
+- All new candidates still pass through Volt's boost-budget reachability check in the normal shot finders. The fast-intercept finder retains its existing parser reachability behaviour. No new teammate-specific pass target was added: an untargeted Aerial uses the existing default goal-centre aim and can still create a useful pop/clear touch.
+- Commits:
+  - `5dfcf7e`: prioritize fast aerial touches in the fast-intercept finder.
+  - `ff70640`: add untargeted fast-aerial candidates to goal-directed shot selection.
+  - `010359d`: add the same candidate preference to general/untargeted shot selection.
+- Static fetch verification only. No Python compile, simulation, or in-game test has been performed. Pull the branch locally before testing.
+
+
+
+## Fast aerial boost, orientation, and contact prediction correction (2026-11-17)
+
+- Removed the previous `boost_commit` mode. It forced boost almost continuously (with only a brief release every 24 frames), overrode the normal orientation-aware boost controller, and simulated a boost trajectory using a fixed 0.10s pitch-back plus a guessed turn blend. Fast aerial selection no longer passes a continuous-boost flag.
+- Fast aerials still use the fast double-jump sequence: hold the first jump, release for three frames, then pulse the second jump. The jump sequence itself was preserved.
+- Aerial boost now follows Party Cannon's actual forward-projection rule: compute `offset = TargetLocation - predictedFinalPosition`; boost only when `offset.Dot(car.Forward) / timeRemaining` reaches the boost-plus-air-throttle threshold and the full 3D angle between the car's forward vector and the contact offset is below 0.4 radians. Throttle uses the same forward projection divided by air-throttle acceleration. There is no unconditional first-0.25-second boost override, so PD can rotate the nose before boost resumes.
+- Aerial orientation now follows Party Cannon's aim convention: aim the nose along the full 3D predicted contact offset; use world-up during the jump sequence, then use the direction from the car to the ball as the up reference after launch. Existing backboard underside and ceiling upside-down exceptions remain.
+- Corrected the hitbox local-right basis when translating hitbox offsets to world space: use `car.up.cross(car.forward)` for local +Y/right, not `car.forward.cross(car.up)` (which points left in the standard Rocket League car basis).
+- Apply `WallShot.adjust_aerial` before computing the final hitbox target, using the actual ball-radius plus half-hitbox-length approach distance. Previously the aerial wall adjustment was only applied inside the continuous-boost branch and used the jump-shot wall correction.
+- Fixed jump prediction persistence: continue including the first-jump hold acceleration after the jump input sequence ends, rather than reverting to a purely ballistic prediction as soon as `self.jumping` becomes false.
+- Fixed fast second-jump prediction timing: account for the three-frame release before the pulse, apply the second impulse at the frame the controller sends it, and do not add the impulse again once it has been requested/applied or the car packet reports `doublejumped`.
+- The conservative Party Cannon boost-budget estimate still guards ordinary aerials. A parser-confirmed fast aerial is allowed to proceed even if that later estimate is conservative; its actual boost remains governed by the forward-projection gate.
+- Source reference: Party Cannon/RedUtils `AerialShot.cs` computes the contact offset from its predicted final car position, aims at `car.Location + offset`, boosts only when forward projection and the 0.4-radian angle gate pass, and estimates required boost using turn-time, acceleration ratio, boost consumption, and max-speed checks.
+- Commits:
+  - `a916dab`: remove continuous boost simulation/override and use full 3D contact aim and boost gating.
+  - `29d914c`: remove continuous-boost arguments from shot selection.
+  - `203b21e`: preserve backboard/ceiling orientation exceptions with 3D contact tracking.
+  - `00d2195`: keep jump prediction active after takeoff and account for the second-jump release delay.
+  - `8a1a5e6`: prevent the predicted second-jump impulse from being added twice.
+  - `ff39a82`: include the second-jump request timestamp in the duplicate-impulse guard.
+- Static source verification only. No Python compile, simulation, or in-game test has been performed. Pull the branch locally before testing.
+
+- The neutral directional-input frame during the fast second-jump pulse also zeros steer, pitch, yaw and roll, but does not suppress boost: the Party Cannon forward-projection gate may still boost on that pulse if the car is aligned and forward acceleration is needed.
+- Follow-up commits:
+  - `ff39a82`: prevent duplicate second-jump impulse prediction.
+  - `68e4324`: allow aligned boost during the second-jump pulse and neutralize all directional controls.
+
+
+## Fast-aerial height and normal-aerial priority (2026-11-17)
+
+- Fast aerial candidates are eligible only when the predicted ball location at the candidate intercept is strictly above 350 units.
+- In both `find_shot` and `find_any_shot`, the aerial-only parser result is also allowed to supply a normal (non-fast) aerial touch. A fast aerial cannot replace a normal aerial already found for the same predicted slice.
+- In `fast_intercept_finder`, the scan checks the full requested window for both aerial types. If any reachable normal aerial is found, the earliest normal aerial is returned before considering a fast aerial. Only when no normal aerial is available does it return the earliest reachable fast aerial above 350 units.
+- The normal Aerial controller and its existing contact, orientation, boost, and jump logic are unchanged. This is selection-only.
+- Commits:
+  - `4a043e6`: initial height/normal-aerial gate in shot selection.
+  - `31868a5`: normal-aerial-first scan in fast_intercept_finder.
+  - `2e7394f`, `a15dbae`, `f0dfadb`: allow aerial-only normal candidates and ensure an existing normal aerial wins over fast aerial in both shot finders.
+- Static fetch verification only. No Python compile, simulation, or in-game test has been performed.
+
+- Follow-up: applied the same strict height gate to the kickoff and general fallback paths in `fast_intercept_finder`, so no later fallback can return a fast aerial for a ball at or below 350 units.
+- Follow-up commit: `73bcb1c`.
+
+
+## Fast-aerial live-height safety correction (2026-11-17)
+
+- The earlier 350-unit restriction checked only predicted ball height at the selected intercept. A ball currently near the floor could still qualify if a later prediction slice rose above 350.
+- Fast aerial eligibility now requires BOTH the current live ball centre and the predicted contact ball centre to be strictly above 350 units.
+- Applied this to the initial targeted parser result, aerial-only fallback in both `find_shot` and `find_any_shot`, and fast-aerial branches in `fast_intercept_finder` (prepass, kickoff and general fallback).
+- Added a final guard inside `Aerial.run` for direct callers or any future selection path that bypasses the finders. If either height is 350 or lower, it downgrades to the normal aerial sequence rather than using the fast double-jump sequence.
+- Normal aerial candidates remain eligible at any height when the parser reports them reachable. Normal aerial controller, boost, contact geometry and orientation are unchanged.
+- Static source verification only; no Python compile or in-game test has been performed.
+
+
+## 17. Revert jump-shot post-side aiming (2026-11-17)
+
+- Removed the special `jump_shot._goal_aim_for_ball` adjustment that moved side-directed shots to 180 units inside the corresponding post.
+- Jump shots now use the shared `_relative_goal_aim_point`, restoring the previous central goal target.
+- Aerial aiming remains centre-directed: `Aerial._party_cannon_shot_direction` obtains its target from `_relative_goal_aim_point`. No separate post-side adjustment is used by the Aerial routine.
+- The shared helper itself was not changed, so its existing vertical-height behaviour remains intact.
+- Static source verification only; no Python compile or in-game test has been run.
+
+
+## 19. Ground-shot dribbling control (2026-11-17)
+
+- The earlier simple push-dribble experiment described here was reverted before the current controller was added. Do not restore that version.
+
+
+## 20. Downward-only recovery boost and trajectory-aware ground dribble (2026-11-17)
+
+- Recovery now explicitly clears boost every frame. The optional boost phase is allowed only when `find_landing_plane` selects the floor (plane index 5); side-wall, back-wall, and ceiling recoveries never boost.
+- For a floor recovery, the nose is temporarily PD-aligned with world-down and boost is gated on strong downward nose alignment, remaining height, downward speed, and total speed. When the downward boost phase is unsafe or no longer useful, the original landing-orientation controller remains active. It never boosts toward a selected wall or ceiling.
+- Added a grounded rolling-ball carry controller inside `ground_shot`. It uses a short-horizon ball-prediction slice to estimate the ball's trajectory, aims the predicted ball path toward the existing goal target, and rebuilds the selected contact-label geometry at the predicted ball position.
+- The carry controller requires the car to be behind and facing the ball along the planned shot direction; otherwise the existing approach logic continues to reposition. It steers to the trajectory-aware contact approach point and retains the existing turn-aware flank approach.
+- It does not impose the previous 1050 uu/s cap: its speed target preserves the existing intercept speed requirement and adds a modest lead over the ball's projected forward speed, up to the normal maximum speed. Existing shot timing, jump/flip decision, and airborne paths remain in place.
+- Static source verification only. No Python compile, simulation, or in-game test has been performed.
+
+## 21. Floor-only downward recovery with wheels-down landing (2026-11-17)
+
+- The user reverted the previous recovery/dribble work; do not assume the old implementation is present. The current recovery edit is limited to the `recovery.run` controller.
+- When `boost_to_surface` is enabled and `find_landing_plane` selects the floor, the car points its nose straight down and boosts only when aligned, with adequate floor clearance, and below the speed limits.
+- Boost is cut before the final landing phase. At 260 units of estimated hitbox clearance, the normal recovery PD controller takes over with world-up as the car's up reference so it can rotate onto its wheels before floor contact.
+- Side walls, back walls, and ceiling never receive recovery boost. Other landing planes keep the original recovery orientation.
+- No compile, simulation, or in-game test has been run.
+
+
+## Fast-aerial second-jump release and prediction alignment (2026-11-18)
+
+- Fixed the fast Aerial second-jump controller so the first jump is explicitly released for three full controller frames before the one-frame neutral second-jump pulse. The previous release branch only advanced a counter and did not explicitly set `controller.jump = False`, allowing a stale held jump input to carry through.
+- Updated the predicted second-jump impulse timing to match the actual controller sequence. The remaining first-jump hold is quantized to the next 120 Hz controller tick, then three full release frames are included. Once the release phase has started, the remaining pulse delay is derived from the number of completed release frames.
+- The controller now stops the pending second-jump sequence if the car packet reports `doublejumped`, preventing a stale second pulse after another dodge has already consumed the jump.
+- The first-jump hold duration, jump impulse values, full 3D target tracking, Party Cannon boost gate, hitbox standoff, and normal-aerial path were not otherwise changed.
+- Commits:
+  - `207c7e6`: explicitly release the first jump and align the fast second-jump pulse with the controller counter.
+  - `2b00845`: quantize the remaining hold time to the 120 Hz controller tick in the predicted second-jump timing.
+- Static GitHub source verification only. No Python compile, simulation, or in-game test has been performed. Pull the branch locally before testing.
+
+
+
+## 17. Aerial movement-only reference port (2026-11-18)
+
+- The user's pasted Aerial is a reference ONLY for takeoff, jump timing, flight movement/orientation, and boost/throttle control.
+- Do NOT port its contact geometry into Volt. Preserve Volt Aerial's existing shot-vector calculation, predictive post-hit direction, WallShot.adjust_aerial correction, hitbox-aware target, ceiling offset, and side-wall target handling.
+- Do NOT change `tools for volt` contact selection or contact handoff. Preserve `select_ball_contact` and all existing `routine.contact_*` assignments exactly.
+- Aerial flight movement uses the reference direction rule: full 3D displacement before jumping and flattened displacement while jumping; orientation flattens local aim while jump is held, then uses landing-plane / backboard / shot-vector upside-down handling.
+- Aerial flight boost uses the reference forward-projection controller and `min_boost_time` pulse. Remove only the old Aerial boost-budget rejection from the flight controller; leave unrelated boost systems and side-wall driving alone.
+- Preserve the existing fast-aerial height gate (>350 for live and predicted ball) and normal-aerial preference.
+- First jump impulse prediction is guarded by a one-shot state flag; no contact geometry or tools logic is changed by this port.
+- This change requires in-game validation for takeoff speed, jump timing, aerial reach, boost alignment, and contact accuracy.
+
+
+## Fast-aerial held second jump and reduced air roll (2026-11-18)
+
+- Fast aerial now explicitly releases the first jump for one full controller frame, then holds the second jump for the same 0.2-second jump window rather than sending a one-frame second-jump pulse. This reduces the gap before the second impulse while still giving the game a clear released frame.
+- The second-jump impulse remains predicted from its actual request timestamp until the live car packet reports `doublejumped`, keeping the predicted contact position aligned during the held second jump.
+- Ordinary floor-launched aerials suppress PD-generated roll while the car is already substantially upright. Roll remains available when the car is significantly off-upright, when a side-wall launch requires it, or when the shot/backboard/landing-plane geometry explicitly requires an inverted orientation.
+- The existing Aerial shot-vector prediction, wall correction, hitbox-aware target, ceiling offset, and `tools for volt` contact selection/handoff are unchanged.
+- This is a static source edit only. No compile, simulation, or in-game test has been performed; validate fast-aerial timing and contact accuracy in-game.
+
+
+## Fast aerial pitchback, defensive clear, jump-shot air steering and wall-drive contest gate (2026-11-18)
+
+- Fast Aerial now uses a short, ETA-gated nose-up pitchback phase after takeoff when the predicted hitbox contact target is still substantially above the car. Its estimated upward boost acceleration is included in the predicted final position and velocity, and boost is held during that same predicted phase so the flight model and actual controller agree. The normal Aerial hitbox target, shot-vector prediction and wall correction remain the contact geometry source; no separate fast-aerial geometry was introduced.
+- Aerials with the ball within 2600 units of our own goal aim the hit away from our net using an outward clear direction rather than the ordinary opponent-goal shot direction.
+- Jump-shot airborne orientation now uses the same full 3D predicted contact offset and PD orientation convention as Aerial, including aerial yaw control for left/right (A/D) corrections. The previous flattened ball-centre-only aim and forced nose-up pitch override are removed from this phase. The selected hitbox/contact target and final directional dodge remain intact.
+- Wall-drive candidate selection now rejects any predicted ball slice with an opponent within 1000 horizontal units, preventing the wall approach from starting into a nearby contest. Rejection counts are included in its debug output.
+- Static GitHub source edits and re-fetch verification only; no Python compile, simulation, or in-game test has been performed. Pull the branch locally before testing.
+
+
+- Fast-aerial ETA prediction also now applies the first-jump impulse exactly once and keeps the requested second-jump impulse in the predicted trajectory until the live car packet confirms it. The pitchback phase is disabled for backboard, ceiling, and wall-landing orientation exceptions so its predicted boost direction cannot disagree with the required contact orientation.
+
+
+- Jump-shot prediction also applies its first-jump impulse once rather than relying on exact floating-point equality for `jump_elapsed == 0`, keeping its full 3D contact offset aligned with the actual jump.
+
+
+## Jump-shot power posture with goal-directed yaw (2026-11-18)
+
+- Restored the original jump-shot pitchback posture: when the ball is airborne and above the car, the car continues holding positive pitch (S/nose-up) during the jump window. The previous full-3D contact-orientation replacement is not used.
+- Changed only the orientation aim vector during that phase: yaw now tracks the planned outgoing shot vector toward the opponent's goal, rather than steering the nose directly at the instantaneous car-to-ball vector. The pitchback override remains active, so goal alignment does not cancel the power-shot setup.
+- Preserved the existing Party Cannon hitbox-aware approach target, selected contact-label refresh, centre-contact geometry when selected, and final directional dodge. No hitbox dimensions, standoff, contact label, jump timing, or dodge timing were changed.
+- Static source verification only. No compile, simulation, or in-game test has been performed. Pull the branch before testing.
+
+
+## Jump-shot subtle counter air roll (2026-11-18)
+
+- During the existing airborne-above-car pitchback phase only, add a small roll input (magnitude 0.15) opposite the live defaultPD yaw command. This pairs left yaw/A with right air roll/E, and right yaw/D with left air roll/Q.
+- The roll is zeroed when yaw correction is negligible, and the existing positive-pitch S override, goal-directed yaw, hitbox-aware contact target, contact refresh, and final dodge remain unchanged.
+- This is a subtle controller assist, not a full air-roll manoeuvre. Static source verification only; no compile, simulation, or in-game test has been performed.
+
+## 17. Aerial boost-estimate rejection must not end the shot (2026-11-18)
+
+- In the live Aerial.run, a rejected Party Cannon boost estimate (None) must not be treated as a completed shot or trigger ball_recovery().
+- Keep tracking the existing hitbox-aware contact target; the forward-projection boost controller independently decides whether boost is needed on each frame.
+- This specifically removes the early normal-aerial abort caused by the boost-estimate rejection. The existing intercept timeout and other genuine shot-exit conditions remain unchanged.
+- Static source verification only; no compile, simulation, or in-game test has been performed.
+
+
+## 13. Jump-shot counter air roll adjustment (2026-11-18)
+
+- During the existing airborne jump-shot tilt-back phase (`hold_s`), the counter air-roll input opposite the goal-directed yaw was increased slightly from 0.15 to 0.20.
+- Left yaw (A) continues to pair with right roll (E); right yaw (D) continues to pair with left roll (Q). Roll still follows the actual `defaultPD` yaw command and is zero when yaw correction is negligible.
+- This is a modest increase to the normalized roll controller input, not a direct 40–45 degree orientation target. The jump-shot shot-vector calculation, pitch-back, contact geometry, and dodge logic were left unchanged.
+- Not compiled or tested in-game; user must pull/copy the latest branch commit before testing.
+
+
+## Party Cannon fast-aerial second-jump hold correction (2026-11-18)
+
+- Matched the fast Aerial second-jump input sequence to Party Cannon's `AerialShot.Run`: after the initial 0.2-second first-jump hold, explicitly release jump for three controller frames, then hold jump for three controller frames.
+- The previous Volt sequence only asserted jump on one frame for the second jump and ended the sequence on the following frame. It now holds the second-jump input for all three frames and keeps directional controls neutral during those frames through the existing `self.dodging` handling.
+- The predicted second-jump impulse is timestamped on the first frame of the second-jump hold and remains in the predicted trajectory until `agent.me.doublejumped` confirms that the game registered it. Finishing the three-frame input sequence no longer marks the impulse as confirmed or removes it from prediction prematurely.
+- Preserved the first-jump duration, jump physics constants, fast-aerial height gate, pitchback, hitbox-aware target, shot direction, wall correction, orientation, and forward-projection boost controller. No tools/contact-selection logic was changed.
+- Commit: `8822342`.
+- Static GitHub source edit and re-fetch verification only. No Python compile, simulation, or in-game test has been performed. Pull the branch locally before testing.
+
+## 17. Ground carry / gradual trajectory steering (2026-11-19)
+
+- Added a separate `ground_carry` routine. It does not replace or rewrite `ground_shot`.
+- The carry is available in 1v1, 2v2, and 3v3 when the nearest living opponent's estimated ball ETA is at least 1.45 s and at least 0.85 s slower than Volt's ETA. In team modes it is restricted to the elected challenger.
+- It only starts for a grounded, low ball outside the dangerous own-half zone. It may replace an ordinary `ground_shot`, but does not interrupt aerials, jump/dodge routines, recoveries, or defensive routines.
+- The car approaches the ball from the rear/opposite side of the desired impulse. If the ball's projected goal-line crossing is to the right of the goal, the goalward direction adds a leftward component and the car approaches from the right-rear.
+- The controller blends a small amount of goalward direction into the ball's existing horizontal travel direction. The blend is smaller at higher ball speeds, with a capped approach speed and no boost, jump, or dodge. This is intended to make incremental trajectory changes while preserving momentum.
+- The carry hands back to normal shot selection when the predicted crossing is inside the central goal mouth, when an opponent recovers, if the ball becomes airborne / returns to the own half, or after a 5 s timeout.
+- Opponent ETA is the existing lightweight `_eta_to_ball` estimate, not a full opponent physics simulation. The carry's contact/ball impulse is not physically simulated; its thresholds and gentle-touch behaviour require in-game tuning.
+- No compile, simulation, or in-game test has been run for this implementation.
+
+
+## Conditional pure lateral jump-shot dodge (2026-11-19)
+
+- Added a trajectory-correction branch inside the existing `jump_shot` class. The normal jump-shot path remains the default; this is not a replacement for its existing forward/diagonal directional dodge or the separate `side_shot` subclass.
+- Activation is deliberately narrow: the predicted ball must be low (z <= 420), moving at least 500 uu/s, travelling generally toward the opponent goal, and projected to cross outside a 150-unit safety margin inside the goal posts. The incoming direction must also differ materially from the planned shot vector (dot < 0.9063, approximately more than 25 degrees). A stationary ball, a ball travelling away from goal, or a projected safe goal-mouth path retains the ordinary jump shot.
+- The projected crossing is calculated against the goal plane using the incoming ball velocity. The signed miss is measured on a lateral axis perpendicular to the goal direction; its sign determines whether the ball needs a leftward or rightward correction.
+- For the special setup, Volt's centre is placed on the opposite side of the desired impulse, using the existing longitudinal hitbox standoff and a lateral standoff based on ball radius plus 45% of the car hitbox width. The normal flank approach is bypassed only while this special geometry is active.
+- At the existing final dodge trigger, the controller uses pitch=0 and pure local left/right yaw input, with roll=0. The desired world-space correction is transformed into the car's local frame so the dodge direction is team/arena independent. The existing jump timing, pitchback/orientation phase, boost logic, contact aim, and ordinary dodge remain otherwise unchanged.
+- This uses a geometric contact heuristic, not a full Rocket League collision/impulse simulation. Actual side-hit impulse strength and the left/right control sign must be confirmed in-game; tune the lateral standoff only from observed contact outcomes. Static source edits and re-fetch verification only; no compile, simulation, or in-game test has been performed.
+
+
+## Revised side-flip shot setup (2026-11-19)
+
+- Reworked the previous goal-plane-miss-only lateral dodge. It now targets low, fast balls close to the opponent goal that are travelling laterally across the goalmouth.
+- The planned side-flip axis is derived from the ball's current travel direction. Volt's forward axis is aligned with that travel direction; the perpendicular side-dodge direction is selected by whichever side has a positive component toward the opponent goal.
+- Volt's setup target is now directly beside the ball, opposite the desired side-flip impulse, with the ball aligned beside the car's middle rather than behind its rear bumper. This specifically addresses the failure where the car followed behind the ball and produced a weak rear contact/backflip.
+- Once near the setup point, the controller aligns the car's forward axis with the ball's travel. The side dodge is not allowed to execute until the ball is beside the car, on the intended side, and the car is sufficiently aligned.
+- Added a small candidate-depth comparison. It estimates outgoing direction/speed for several lateral contact depths and trades stronger impulse against premature overlap. This is a heuristic, not a Rocket League collision solver; the selected depth and impulse constants need in-game validation.
+- The special path remains inside jump_shot; normal jump shots, ordinary directional dodges, and side_shot remain the fallback when the cross-goal setup is not selected.
+- Added [JUMP SIDE FLIP PLAN] and [JUMP SIDE FLIP EXECUTE] diagnostics for selected side, ball/cross-goal speed, estimated goalward contribution, chosen depth, setup point, and final local contact geometry.
+- Static source inspection and GitHub re-fetch only. No Python compile, RLBot simulation, or in-game test has been run. The user must pull/copy the latest branch before testing.
+
+
+## Goal-mouth miss side-flip selection (2026-11-19)
+
+- Replaced the previous cross-goal-speed activation gate. The side-flip planner now evaluates whether the ball's predicted natural path crosses outside (or dangerously close to) the opponent goal mouth, including balls travelling directly toward goal from a wide angle.
+- It projects the ball to the goal plane using its predicted velocity and compares the lateral crossing miss against the usable goal width (post-to-post width minus ball radius).
+- The candidate dodge axis is perpendicular to the ball's incoming direction and points toward the goal's lateral centre. Volt's setup point is on the opposite side of the ball, so a ball right of the goal should cause Volt to get to its right and side-flip left.
+- Candidate lateral contact depths are evaluated by their estimated effect on the projected goal-mouth crossing. The selected side setup point bypasses generic flank routing so that normal shot approach logic cannot overwrite it.
+- This is still a simplified trajectory/impulse estimate, not a collision-accurate physics solver. No Python compile or in-game test has been run.
+
+## Conditional perpendicular side flip in jump_shot (2026-11-19)
+
+- The user reverted the separate goal-mouth side-flip planner/class. Do not reintroduce a separate routine or planner for this behavior.
+- The conditional correction now lives directly in the existing `jump_shot.run` dodge decision. The established jump tilt-back, PD yaw alignment, A/D steering, and small counter-direction air roll remain unchanged.
+- At the normal dodge moment, the routine estimates the outgoing ball velocity for the existing forward dodge using the current car velocity plus the forward dodge impulse, blended with twice the predicted ball velocity (matching the 1:2 car/ball blend used by the existing Party Cannon shot prediction).
+- It projects that outgoing velocity to the opponent goal plane. If the front-dodge path is predicted to miss the safe post-to-post width, it tests both pure side-flip impulses along the axis perpendicular to the car's current forward axis.
+- A side flip is selected only if the car's horizontal forward axis is sufficiently aligned with the planned shot direction and one side candidate projects inside the safe goal mouth with a meaningful improvement over the forward dodge.
+- The selected side flip uses `pitch=0`, `yaw=+/-1`, and `roll=0`. Otherwise the existing forward/directional dodge is preserved exactly.
+- Diagnostics: `[JUMP SIDE FLIP CHECK]` reports the projected forward miss and best side candidate; `[JUMP SIDE FLIP]` confirms the pure side flip was selected.
+- This is an initial velocity-based approximation, not a Rocket League collision simulation. No compile or in-game test has been run. Validate whether the correct side is selected and whether the ball actually enters the goal; tune only from match observations.
+
+## Deeper side-flip contact geometry in jump_shot (2026-11-19)
+
+- User reported the previous conditional side flip still approached from behind the ball, often contacting the lower-left/right area instead of setting up with the ball adjacent to the car.
+- The behavior remains inside the existing `jump_shot` class. No separate class or routine was added.
+- Before the approach target is finalized, jump_shot now predicts the ordinary forward-dodge path using the planned shot-forward axis. If that path is near/outside the safe goal mouth and a perpendicular side-flip prediction brings it inside, it activates `side_flip_plan`.
+- For a planned side flip, the car's target is moved to the side of the ball opposite the intended lateral impulse, using ball radius plus half the car hitbox width as the lateral standoff. The car is also moved forward past the ball along the planned shot axis.
+- The longitudinal lead increases with the angle between the predicted natural outgoing trajectory and the desired shot direction. A large correction (approaching 90 degrees) moves the car further past the ball so the ball is beside the car rather than in front of its nose.
+- The generic `_shot_approach_target` flank adjustment is bypassed while this side-contact plan is active, so it cannot pull the car back behind the ball.
+- The dodge-time side-flip check now requires the early side-contact plan to be active. If the plan is not active, the original forward/directional dodge remains.
+- Diagnostics: `[JUMP SIDE CONTACT PLAN]` reports correction angle, front/side projected misses, lead distance and selected lateral direction.
+- This uses a velocity-based estimate, not a full Rocket League collision simulation. No compile or in-game test has been run; validate ball-adjacent positioning and whether the side flip contacts the intended side of the ball.
+
+- Follow-up stability fix: once the jump begins, the selected side-flip plan, lateral direction, and lead distance are no longer recalculated from changing airborne car velocity. The locked side-contact target is restored each frame after the normal hitbox contact target is rebuilt, so the car is not pulled back behind the ball mid-jump.
+
+
+## Conditional goal-mouth side flip in jump_shot (2026-11-19) — current implementation
+
+- Added the conditional side-flip planner directly inside the existing `jump_shot` class. No new routine, class, shot finder, or separate planner was introduced.
+- The normal jump-shot contact target and directional dodge remain the default. Before takeoff, the routine predicts the forward-dodge outgoing ball path using the existing predicted ball velocity, current car velocity, dodge impulse, and Party Cannon's 1:2 car/ball post-hit velocity blend.
+- A side flip is considered only when the ball is in the attacking half, there is enough setup time, the car is already sufficiently aligned with the planned shot direction, and the forward-dodge projection misses the safe post-to-post goal width.
+- Both perpendicular side impulses are projected to the goal plane. The side flip is selected only when one projects inside the safe goal mouth and improves the projected goal-line position by at least 100 units.
+- When selected, the approach target moves beside the ball by ball radius plus half the car hitbox width. This puts the ball beside the middle of the car rather than asking the front bumper to approach from behind a lower corner. The selected target and direction are locked once the jump begins.
+- At the final dodge only, the routine uses a lateral dodge (`pitch=0`, `yaw=+/-1`) if the ball is still beside the middle of the hitbox and the selected direction is still lateral in car-local coordinates. It does not assign roll, so the existing air-roll behavior is left alone. If the contact geometry is not present, it falls back to the existing directional dodge.
+- The existing airborne tilt-back/power posture, defaultPD A/D steering, and counter-direction air-roll block were left unchanged. The only A/D-related override is the yaw pulse required to execute the selected side flip at the final dodge frame; roll is not assigned by the side-flip branch.
+- Diagnostics: `[JUMP SIDE CONTACT PLAN]`, `[JUMP SIDE FLIP]`, and `[JUMP SIDE FLIP FALLBACK]`.
+- Static source verification only. No compile, simulation, or in-game test has been performed. The outgoing-ball estimate is a trajectory heuristic, not a full Rocket League collision simulation; validate setup alignment, ball-adjacent contact, and goal-mouth correction in-game.
+
+
+## Wall-drive physics rebuild (2026-11-19)
+
+- Tightened wall-drive candidate selection: the predicted ball must be within 115 units of the side-wall collision plane at the selected intercept slice. Merely approaching a wall from up to 1,800 units away no longer qualifies.
+- Reworked route ETA into separate ground approach, quarter-circle floor-to-wall transition, and wall-climb segments. ETA accounts for heading error, projected velocity, boost acceleration/consumption, throttle acceleration, speed cap, and a conservative arrival margin.
+- Reworked wall steering to use a gradually rotating surface-up reference through the curved transition instead of snapping directly from world-up to wall-normal. Wall travel distance is measured along the transition arc and wall tangent, not as a straight line through the arena.
+- Corrected the wall-drive debug path so controller mode and yaw error are assigned before being printed.
+- Improved wall attachment detection to recognize the curved transition earlier. The aerial handoff still waits for a more stable wall orientation (`abs(car.up.x) > 0.65`) to avoid launching during the transition.
+- If the car is airborne but no longer attached to the side wall for at least 0.10 seconds, the wall-drive routine exits and hands control to the existing recovery routine. Normal shot selection can then reassess after landing rather than steering toward a stale wall intercept.
+- This is a more realistic surface-aware approximation inspired by Party Cannon's Drive/Field approach, not a full collision/physics simulation or a literal C# port. It has not been compiled or tested in-game. Tune transition radius/timing only from actual match diagnostics.
+
+
+## Wall-drive target and climb correction (2026-11-19)
+
+- Relaxed the wall-drive ball-surface gate from 115 to 650 units. A predicted ball may still be approaching the side wall; the finder accepts it when the wall-normal velocity is not carrying it away from that wall.
+- Raised the live wall_approach gap limit to the same 650 units so the routine does not cancel a valid predicted intercept selected by the finder.
+- Changed the ground approach target from a same-height waypoint at the wall lip to the actual predicted wall-side car contact target. This gives the controller an elevated destination to drive toward instead of stopping at the bottom of the wall.
+- Once the car enters the curved wall transition, switch to surface PD using a continuously rotating up reference. The transition can be detected from the car up vector or from reaching the wall lip, so it does not depend on the old stricter attachment test becoming true first.
+- The target remains the predicted ball contact pose; this is still a simplified surface/ETA model and needs in-game validation. No compile or match test has been performed.
+
+
+## Wall-drive candidate coverage correction (2026-11-19)
+
+- The prior finder only considered side walls and required ball height >=190. This excluded the low opponent-back-wall play shown in testing (ball near y=4392, z around 120), so no wall-drive routine could be selected.
+- Candidate surfaces now include side walls and the opponent back wall; our own back wall remains excluded. Goal-mouth positions are excluded from the back-wall candidate.
+- Candidate wall gap expanded to 1800 units and the finder now requires ball velocity toward the selected wall when it is not already in contact. Low balls from ground level through 2200 are eligible.
+- For low balls under 500, route ETA aims for a controlled elevated run-up 420–720 units above the eventual contact height, then the routine switches down to the actual contact height during the final 0.55 seconds.
+- Wall attachment and surface steering now recognise the opponent back wall as well as side walls. Team-role challenger gating remains intact: a non-elected teammate still yields rather than double-challenging.
+- This remains a simplified arena-surface route model. No compile or in-game test has been performed.
+
+## Noob Black wall-shot port (2026-11-19)
+- Replaced the active wall-drive finder implementation in `tools for volt` with a Noob Black `shot_variables_wall`-style reachability scan.
+- The finder samples the ball prediction at 60 Hz, uses Noob Black's wall-specific jump-time equation, 120 Hz acceleration/travel profile, and the coordinate unfolding transforms for ground-to-wall, x-wall-to-y, y-wall-to-x, and car-on-wall distance.
+- Wall eligibility now follows Noob Black's two main cases: a stable ball close enough to the wall for a wall jump (jump time <=1.45s, vertical height 400-1900, wall-normal speed <150), or a low ball rolling toward the wall quickly (predicted low height <=129 and wall-normal speed >=720). Volt's prior policy still excludes the own back wall and goal mouth.
+- The active routine retains the `wall_approach` class name so existing team-role gates and stack handling remain intact. Its controller now uses the unfolded Noob Black wall geometry and hands off to Volt's existing `Aerial`, `jump_shot`, or `double_jump` controller based on the selected reachable mode.
+- Existing team challenger / cover-role gates were not changed. The former `find_wall_drive` entry point remains as a compatibility name for the agent selection path, but its candidate selection is now Noob Black wall-shot reachability.
+- Commits:
+  - tools finder: `cbd951fd94e66ca610fc48785a1bde35ae525545`
+  - routines controller: `399a88354e9fdfa7bd6dcfff4d13d3c756dd6df1`
+  - stable/rolling wall eligibility correction: `d0facd36fcaa1d3132eabcb74f58b545d547251c`
+  - aerial budget follows Noob's fall-state gate: `f3528a1eeb53f28265975d46304318c47e8f0b88`
+  - execution preserves stable-wall eligibility: `d15dcf51ac1f1ce84139e957fa8611ccf211090c`
+  - handoff requires matching wall side: `e5ff51dfc8f3c9f0f20d09b9fd8e36b9b656f569`
+- Not compiled or tested in a match. Re-fetch and syntax-check locally before running; this is a substantial port and the first console trace should verify `[NOOB WALL FIND]` and `[NOOB WALL SHOT]` logs.
+
+
+
+## Wall-launched jump shot (2026-11-20)
+- Added a dedicated `wall_jump_shot` routine. The Noob Black wall finder still performs its original 60 Hz prediction scan, wall jump-time calculation, 120 Hz travel-profile reachability and unfolded wall geometry.
+- When the finder selects the single-jump wall contact, it now labels the mode `wall_jump`. `wall_approach` continues driving the Noob Black route and hands off only after reaching the matching wall surface and the existing close-contact/time gate.
+- The new routine starts with a short jump from the wall, holds jump for 0.06 s, releases for at least three controller frames, aligns the nose with the goalward shot vector using world-up as its orientation reference, and then performs a directional dodge toward the predicted ball contact. The contact standoff is 134.85 units, matching the single-jump wall-shot geometry.
+- Double-jump and aerial selections still use their previous handoffs. The normal ground `jump_shot` routine is not modified.
+- Diagnostics: `[WALL JUMP SHOT] START`, periodic phase/aim output, `DODGE`, `DODGE COMPLETE`, and abort reason.
+- Commits:
+  - finder selects wall-jump mode for single-jump candidates: `72d1558e49980c8aa1e661ca92d735970e729d07`
+  - wall-jump routine and handoff: `06a7ad9d2b5c9603d6ca3cb12336ca3229f3176c`
+  - wall attachment and jump-hold timing correction: `365cea249ecb84ec548270716ad708775a1fad97`
+- Static source edit and GitHub re-fetch verification only. No Python compile, RLBot simulation, or in-game test has been performed. The wall jump/dodge timing, wall detach detection and directional impulse need match validation.
+
+- Follow-up: kept forward air throttle active during the wall-shot alignment phase; the controller still only boosts when the nose is aligned with the planned shot direction. Commit: `10bd463284aad08cd7b34ef52aba7be4010abebc`.
+
+
+## Wall jump-shot contact/reachability correction (2026-11-20)
+- Reworked `wall_jump_shot` to use Volt's existing `Aerial` calculations for the Party Cannon outgoing shot direction, `WallShot.adjust_aerial` wall-angle correction, and `_party_cannon_hitbox_target` contact centre. It no longer uses a flat goal vector plus a fixed 134.85-unit standoff.
+- The routine now predicts the car centre at the intercept using the same first-jump impulse, remaining jump-hold acceleration, gravity, and forward-projection boost calculation as `Aerial`. The final dodge uses Aerial's local hitbox-contact target and timing (`T <= 0.10`). Jump hold is shortened only when the finder hands off late, preserving the three-frame release before the dodge.
+- Updated Noob wall reachability to test the same Aerial hitbox-aware contact target (including Aerial's wall correction) while retaining Noob's 60 Hz ball scan, 120 Hz travel profile, jump-time equations, gravity compensation, and unfolded wall/floor transforms. The wall-jump approach uses the matching Aerial standoff.
+- Added an eligibility case for balls that have just detached from the wall and are moving outward, provided they remain within 1000 units of the wall, 250–1900 units high, and their outward wall-normal speed is between 150 and 1400 units/s. This is checked both by the finder and by the active wall approach so the candidate is not immediately discarded.
+- Normal `jump_shot`, double-jump and aerial handoffs are otherwise unchanged.
+- Commits: routines `d3bf37a8420e2e4890ab0c8ba529e9d38a7ff7f3`; tools `36325f8a4f48828ae38a3e37738de6ade8135082` (plus this follow-up eligibility/timing correction).
+- GitHub source re-fetch only. No Python compile, RLBot simulation, or in-game test has been performed.
+
+- Follow-up controller correction: the Aerial forward-projection boost rule now runs during the wall jump hold and release phases as well as alignment, and the jump-release phase starts at the shortened handoff-specific hold duration. Commit: routines `afb6c2b74f5f264b9042792bc5992b41fa7d116f`.
+
+## Two-mode Noob wall shot: attached-ball hit vs detached-ball wall-launch aerial (2026-11-20)
+- User identified the original Noob Black wall-shot baseline as the 5,722-line routines of volt file at parent commit 8a93d39bfba8ac640f7bc181267f4dfa44f5bf89, immediately before the first wall_jump_shot addition. Use this as the reference for preserving the original attached-ball path.
+- Removed the experimental wall_jump_shot routine and its handoff. Attached/rolling wall-ball candidates retain the original single / double / aerial mode selection; the single mode returns to the original jump_shot handoff. The Noob wall approach, 60 Hz ball scan, 120 Hz travel profile, wall jump-time equations, and unfolded floor/wall geometry remain in place.
+- The finder separates balls touching the wall (collision-radius gap <=15 units) from detached balls (gap >15 and <=1000 units, height 250–1900, wall-normal velocity -1400 to <150 units/s). Detached candidates are checked with Noob's double-jump wall reachability and selected as wall_launch_aerial when they are the earliest reachable contact.
+- For wall_launch_aerial, wall_approach drives to the matching wall as before, but hands off earlier (650-unit unfolded target distance, T<2.0) to Volt's existing Aerial routine. It does not issue its own premature jump. The Aerial instance is flagged wall_launch=True; its side-wall takeoff logic accepts the wider detached-ball envelope, climbs to the predicted ball lane/height, jumps off the wall when launch-ready, and then uses the existing Party Cannon shot-direction estimate, WallShot wall correction, hitbox-centre contact target, fast-aerial jump/release/double-jump sequence, forward-projection boost control and final dodge.
+- The ordinary attached-ball route does not use the new flag or modified Aerial takeoff envelope. If the ball is touching the wall, it stays on the original Noob wall-shot route.
+- Diagnostics: [NOOB WALL FIND] reachable mode=wall_launch_aerial, [NOOB WALL SHOT] Handoff mode=wall_launch_aerial, and existing [AERIAL SIDE WALL] climb/launch plus Aerial boost/contact diagnostics.
+- Commits:
+  - routines: afdd129ef7683f24004eacbce7282d3a6fc53213 (remove wall_jump_shot, add wall-launch Aerial handoff); 893df64ba9f96b271b1ff851b8d5829aa2b00b35 (match detached eligibility and permit late wall launch)
+  - tools: f201c8d6de63133481b750fa52199f9fa59d7532 (separate detached candidates); 8846cb4e7f6acd31ad9d70ee792126c79684d432 (include separated balls near the aerial apex)
+- Static GitHub edits and source re-fetch verification only. No Python compile, RLBot simulation, or in-game test has been performed.
+- Follow-up bounds: the detached launch-aerial candidate is currently limited to side walls (axis x), because Volt's existing Aerial wall-takeoff controller is a side-wall controller. The Noob finder still retains its original back-wall handling for attached-ball shots. Detached candidate reachability also requires Noob's double-jump wall time <=1.45 s, preserving the fast wall-shot timing envelope.
+- Follow-up tools commit: 3fb5ef336456ac6d3b8ed8f010c58a52ac5e07ee.
+## Velocity-aware top-corner contact for jump_shot (2026-11-20)
+- User reported that jump_shot's A/D yaw plus counter-air-roll (E/Q) can leave a centred hit unable to overcome the ball's existing lateral velocity, e.g. a ball moving toward the left side of the opponent goal. The desired correction is upper-right / upper-left hitbox-corner contact when lateral ball momentum opposes the intended shot.
+- Added a contact-side selection inside the existing jump_shot planning, after normal contact/wall/side setup. It projects predicted ball velocity onto the right axis of the intended shot direction. If lateral speed magnitude is >=180 uu/s, incoming leftward motion selects the top-right corner; incoming rightward motion selects the top-left corner. It shifts the car-centre approach target using the sphere-versus-hitbox-corner geometry, including lateral and upper offsets, rather than changing the planned shot direction.
+- This is disabled for explicit side_mode and wall_shot_active contacts. It does not alter jump timing, tilt-back, boost/power, defaultPD yaw, A/D steering, counter-air-roll, or dodge logic. Since contact planning stops refreshing after takeoff, the chosen corner is locked for the jump.
+- Diagnostic: [JUMP CORNER CONTACT] prints selected corner and predicted lateral ball speed.
+- Commit: routines of volt 3ca4645e69fe08f5abe241dc4b8c0ed84294af17. Static source edit and GitHub re-fetch only; not compiled or tested in game.
+
+## 16. Rust port foundation (2026-11-20)
+
+- A separate Rust port is maintained at https://github.com/SifuVolt/Volt on branch `main`. Keep this separate from the Python source and from the Grid bot.
+- The Rust project uses `rlbot = 0.7.1` and `glam = 0.34.3`; the working RLBot agent connection and controller output in `src/main.rs` must be preserved while porting.
+- The Rust math foundation now includes `src/math/vector.rs` and `src/math/matrix.rs`. The matrix uses the same forward/right/up basis and Euler-angle construction as VirxERLU's Python `Matrix3`.
+- The Rust port now has `src/state.rs` with packet-to-`CarState` and `BallState` wrappers. Car state mirrors the Python `car_object`: world position/velocity, orientation, local angular velocity, air/jump/dodge flags, flip-reset availability, boost, hitbox dimensions and offset. Ball state mirrors the Python `ball_object`.
+- The initial Rust agent tick now reads ball and car position through these wrappers, but intentionally retains the existing world-yaw steering calculation. Do not change driving behaviour as part of state-layer validation.
+- The GitHub changes have not been compiled or tested locally. The user must pull/sync the Rust repository and run `cargo fmt`, `cargo check`, `cargo test`, and `cargo build --release`; resolve compiler errors before extending the state layer.
+- Next step: validate packet field compatibility and the live bot connection, then extend the state abstraction with match/field/physics configuration as needed. Do not begin porting shot mechanics until state data is confirmed.
+
+
+## 17. Rust physics foundation (2026-11-20)
+
+- Added `src/physics/mod.rs` in the separate Rust repository and exposed it as `pub mod physics` from `src/main.rs`.
+- `PhysicsConfig::from_world_gravity` uses the live match gravity supplied by the caller and ports Volt's standard-mutator constants from the current Python `routines of volt`: max speed 2300, throttle acceleration 66 + 2/3, boost acceleration 991 + 2/3, boost consumption 33 + 1/3 per second, jump impulse 291 + 2/3, jump acceleration 1458 + 1/3, 0.2 s jump hold, 1/120 s timestep, and ball radius 91.25.
+- Added an explicit boost-strength multiplier constructor for the Python agent's supported multipliers (1.0, 1.5, 2.0, 5.0, 10.0). The current Rust agent does not yet read the mutator setting; callers must provide the multiplier when that integration is added.
+- Added a fixed-step ballistic jump predictor with first-jump hold acceleration and an optional timed second jump impulse. It deliberately does not yet model dodge impulses, air-control torque, boost thrust, collisions, or surface transitions.
+- Added unit tests for source constants, held-jump trajectory, second-jump timing, and zero-duration behavior.
+- The module is isolated from the current controller: no steering, throttle, boost, or live match behaviour was changed.
+- GitHub commits: physics module `12a7b01a9b79cb00bf3bb51c22123af15f8a72ac`; module exposure in `src/main.rs` follows.
+- These changes have not been compiled locally or tested in-game. After the local working tree is cleaned of rustfmt-only changes, pull and run `cargo fmt`, `cargo check`, and `cargo test`.
+
+## 18. Rust free-flight ball prediction (2026-11-20)
+
+- Added `src/prediction/mod.rs` to the separate Rust repository and exposed it as `pub mod prediction` in `src/main.rs`.
+- `BallTrajectory::free_flight` generates ball position/velocity samples from constant-acceleration ballistic equations using the shared `PhysicsConfig.gravity`; default intended sampling cadence is 60 Hz, matching RL ball-prediction slice cadence.
+- `BallTrajectory::at_time` interpolates between generated samples and rejects times outside the trajectory horizon.
+- This is explicitly only a collision-free free-flight segment. It does not fabricate floor/wall bounce restitution, goal-frame collisions, or field bounds. Those require a proper collision model or authoritative RLBot prediction data before use for actual shot decisions.
+- Added four unit tests for ballistic equations, endpoint inclusion, interpolation, and invalid sampling inputs.
+- GitHub commits: prediction module `edf75998ba60467b442784874ba0568090b5deff`; module exposure `3a4bc80c01815ba4b63d4c5eee8b5fb55563d030`.
+- Changes have not been compiled locally or tested in-game. User should pull and run `cargo fmt`, `cargo check`, and `cargo test`.
+
+
+## Rust free-flight test correction (2026-11-20)
+- User pulled the Rust free-flight prediction module and reported 13/14 tests passing. The remaining test had an incorrect expected value, not an implementation failure: for z=500, vertical velocity=200, gravity=-650 and t=1 s, the ballistic height is 500 + 200 - 325 = 375 (the test incorrectly expected 175).
+- Corrected the assertion in Rust `src/prediction/mod.rs` to expect 375. Commit: `fdb320f2c026bc764b2437cbec51282e6cab51d2`. GitHub re-fetch verified the changed assertion; user still needs to pull and run tests locally.
+- Continue treating this Python branch as the authoritative Volt behaviour/source reference. Before any Rust mechanics/planning port, inspect the corresponding Python routines/tools/utilities and preserve their actual equations, gates, and contact geometry. The current Rust free-flight trajectory is only a collision-free ballistic primitive, not a replacement for Volt's full ball prediction or Noob Black/Party Cannon intercept logic.
+
+
+## 19. Rust drive-physics primitives (2026-11-20)
+
+- Added isolated Rust module `src/physics/drive.rs`, exposed as `physics::drive`.
+- Ported the live Python `utils from util of volt` calculations for throttle acceleration, the five-band curvature table, turn radius, circle-based `is_inside_turn_radius`, cubic `steerPD`, and speed-capped `dodge_impulse`.
+- The throttle curve uses absolute local forward speed and preserves the Python breakpoints at 1400 and 1410 uu/s. Curvature preserves the Python half-open speed bands.
+- Rust returns an infinite turn radius when the curvature table has no positive value, avoiding Python's division-by-zero failure for out-of-table speeds. Normal Volt driving speeds remain inside the supported range.
+- `dodge_impulse` accepts the active max-speed limit as an argument; the impulse scaling retains the Python utility's standard 2300 uu/s reference.
+- Added six unit tests covering curve values/boundaries, curvature bands, turn radius, turn-circle geometry, PD clamping, and dodge speed cap.
+- These functions are not wired into the active RLBot controller. Existing steering/throttle behaviour remains unchanged pending local tests and a later faithful port of `defaultPD` / `defaultThrottle`.
+- Rust commits: drive module `eba8119b032aa5d8dd99e4f5966534e92ae90368`; module exposure `0ed6b8ac824f8f959f995e2eff58452df6d94f00`.
+- The module has been fetched back from GitHub for content verification, but has not yet been compiled or run locally. User must pull the Rust commits and run `cargo fmt`, `cargo check`, and `cargo test`.
+
+
+## 20. Rust defaultPD controller port (2026-11-20)
+
+- Added isolated Rust controller module `src/control/pd.rs`, exposed through `src/control/mod.rs` and registered as `mod control` in the Rust agent.
+- Ported the live Python `utils from util of volt` `defaultPD` equations: local-target pitch/yaw angles, roll-to-up angle, and the cubic PD outputs for steer, pitch, yaw and roll. Reuses the already-tested `physics::drive::steer_pd`.
+- Verified the VirxERLU `car_object.update` implementation: `angular_velocity` is already transformed into car-local coordinates. The Python defaultPD then localizes that value a second time for the steer damping term only, while pitch/yaw/roll use the stored local components directly. The Rust port preserves this unusual but source-exact distinction.
+- The function is pure: it returns target angles and controller values instead of mutating RLBot's controller. It is not wired into `main.rs`; the existing world-yaw steering and throttle remain unchanged.
+- Added three tests for target-angle calculation, upside-down roll reference, and axis control mapping.
+- Rust commits: `src/control/pd.rs` `0192b8e5ac2e1160959cd05bccce1d1bff86ad05`; `src/control/mod.rs` `b077abd3475d52366574c344b19431cc69953de4`; main module registration `db5606972e569091e5e95d0f815f06b4b3966d74`.
+- GitHub re-fetch verified all three files. These new changes have not yet been compiled locally; user should pull and run `cargo fmt`, `cargo check`, and `cargo test`. The earlier 20-test result predates this PD module; the expected count is now 23.
+
+
+## 21. Rust defaultThrottle controller port (2026-11-20)
+
+- Added isolated Rust module `src/control/throttle.rs`, exposed through `src/control/mod.rs`. This is a pure calculation module and is not connected to the live RLBot controller.
+- Ported the Python `defaultThrottle` ground logic: low-speed turn-radius handbrake check, angular-speed threshold, reverse target-angle adjustment, Party Cannon-style curvature-based target-speed cap, handbrake steering/950 uu/s reverse-turn cap, throttle acceleration curve, and the 360-step (3 seconds at 120 Hz) boostless distance simulation.
+- The input explicitly carries local forward speed, total car speed, local angular velocity, target angles/local target, current steer/yaw/handbrake values and active boost acceleration. The output uses optional controller fields so airborne calls and unchanged fields remain untouched, matching the Python routine's mutation behaviour.
+- The Python source reads target yaw unconditionally on ground even though its signature marks target_angles optional; Rust makes OrientationAngles required to avoid reproducing that runtime failure mode.
+- Added six unit tests for airborne no-op, throttle curve, curvature turn-speed limiting, boost necessity, yaw alignment gating, and reverse throttle.
+- This module does not update `main.rs`, does not read boost inventory, and does not alter active bot driving. It must be locally compiled/tested before any controller integration.
+- Rust commits: throttle module `1ea632c80041375dcf1ede891699f9fdde21e4f6`; module exposure `2c24e739a47521fc732ace2c9c896b9c2d84f501`; reverse-throttle test expectation correction `66e51e0ff324634be8633a23fb090f77a42ff2b6`.
+- GitHub source was fetched back for review. No local Cargo build, test, or in-game test has been run for this step.
+
+
+## 22. Rust defaultDrive composition (2026-11-20)
+
+- Added `src/control/drive.rs` and exposed it from `src/control/mod.rs`.
+- `default_drive(&CarState, DriveInput)` composes the existing isolated ports in Python order: `default_pd` first, then `default_throttle` with the PD angles, steer, and yaw.
+- Derives the source inputs from `CarState`: local forward speed, total velocity magnitude, local angular velocity, and airborne state. Boost acceleration and the existing handbrake state are explicit inputs.
+- Returns PD orientation controls plus optional throttle/handbrake/boost outputs. The throttle routine may override PD steer during handbraking, matching Python's controller mutation order.
+- Added three tests for PD-to-throttle composition, airborne preservation of PD controls, and local forward speed reporting.
+- Still isolated from `main.rs`; no live bot controller changes.
+- Rust commits: `src/control/drive.rs` `a2177fbb0c2e51d37d3a3e1358008ebc30e80313`; module exposure `763adb69ff03b3a1d8ec4fad563a88782f4f089e`.
+- Not compiled locally yet. Expected test count after pulling: 32.
+
+
+## 23. Rust Noob Black wall-drive reachability planner (2026-11-20)
+
+- Added a single complete Rust source file, `src/planning.rs`, and registered it with `pub mod planning;` in `src/main.rs`. This does not alter the active RLBot controller.
+- Ported the current `tools for volt` `find_wall_drive` scan as a pure planner returning `WallDrivePlan` rather than constructing the Python `wall_approach` routine. The result carries relative intercept time, the selected ball slice, contact mode (single jump, double jump, aerial), wall transform family and selected wall surface.
+- Preserved the source gates: airborne cars must already be attached to an eligible wall; own back-wall and low goal-mouth candidates are excluded; ball height is 0–2200; prediction scan stops beyond |y|=5250; stable-wall and rolling-up-wall eligibility thresholds are unchanged.
+- Preserved Noob Black's exact wall jump-time piecewise equations, including the low-height quadratic branch and separate double-jump formula; 120 Hz, 600-step boost-aware acceleration/travel profile; ground-to-wall, x-wall-to-y-wall, y-wall-to-x-wall and car-on-wall unfolding transforms; 60 Hz candidate iteration over every second 120 Hz prediction slice; jump gravity compensation; single/double contact standoffs; aerial reachability estimate and boost budget.
+- The 120 Hz input requirement is intentional: the Python finder scans candidate times at 60 Hz but indexes the underlying prediction with `i * 2`. Do not pass a 60 Hz trajectory directly or it will scan at half the intended time cadence.
+- The current Python `tools for volt` version was fetched directly and contains the attached/stable/rolling Noob wall finder with single/double/aerial mode selection. It does not contain the later `wall_launch_aerial` detached-ball experiment described in older notes; this Rust port intentionally matches the current checked-in tool source rather than reviving that older experiment.
+- The Python `wall_approach` execution class is not ported in this file. Rust returns a plan only; driving along the unfolded route, handoff to jump_shot/Aerial, role gates and active controller integration remain separate future work.
+- Added eight unit tests for own-wall/goal-mouth exclusion, side/opponent-back-wall acceptance, jump-time branches, unfolding transforms, boost-aware 120 Hz travel profile, a full reachable single-jump scan, and airborne wall-attachment gating.
+- Rust commits: initial planner `39cb9041960ee46c02bc89bddf5a6a10a276d95c`; scan edge-case corrections `0e18a1d8bbd2aa3c31f0fd3d8cdb7d1b6ce490fb`, `c3f67c23560989356c5dd373d520d39e20df2448`, `6d937901e1c202ddd7cad3cab68dab9c2df9d3ac`; module registration `c1b62636b18bbf57b275ba0214ffedc5c89f5db6`; prediction cadence documentation `1ff5bcc618b45b8c14254a3737224e3efee7fbf0`.
+- Static source review and GitHub re-fetch only. This file has not been compiled or run locally. Expected test count after pulling: 40 (32 previous + 8 new).
