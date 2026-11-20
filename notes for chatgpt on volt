@@ -738,3 +738,9 @@ This file is the project handoff and change checklist. Read it before every code
 - Added four unit tests for ballistic equations, endpoint inclusion, interpolation, and invalid sampling inputs.
 - GitHub commits: prediction module `edf75998ba60467b442784874ba0568090b5deff`; module exposure `3a4bc80c01815ba4b63d4c5eee8b5fb55563d030`.
 - Changes have not been compiled locally or tested in-game. User should pull and run `cargo fmt`, `cargo check`, and `cargo test`.
+
+
+## Rust free-flight test correction (2026-11-20)
+- User pulled the Rust free-flight prediction module and reported 13/14 tests passing. The remaining test had an incorrect expected value, not an implementation failure: for z=500, vertical velocity=200, gravity=-650 and t=1 s, the ballistic height is 500 + 200 - 325 = 375 (the test incorrectly expected 175).
+- Corrected the assertion in Rust `src/prediction/mod.rs` to expect 375. Commit: `fdb320f2c026bc764b2437cbec51282e6cab51d2`. GitHub re-fetch verified the changed assertion; user still needs to pull and run tests locally.
+- Continue treating this Python branch as the authoritative Volt behaviour/source reference. Before any Rust mechanics/planning port, inspect the corresponding Python routines/tools/utilities and preserve their actual equations, gates, and contact geometry. The current Rust free-flight trajectory is only a collision-free ballistic primitive, not a replacement for Volt's full ball prediction or Noob Black/Party Cannon intercept logic.
