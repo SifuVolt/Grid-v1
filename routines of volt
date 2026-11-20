@@ -4348,8 +4348,7 @@ class jump_shot:
                         + impact_up * float(getattr(local_offset, "z", 0.0))
                     )
 
-                # Positive lateral offset follows this routine's existing
-                # car_right axis convention.
+                # Lateral offsets use RLBot's local +Y (car-right) axis.
                 candidates = [
                     ("centre", 0.0, 0.0),
                     ("top_left", -half_width * 0.82, half_height * 0.82),
