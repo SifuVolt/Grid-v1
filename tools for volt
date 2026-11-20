@@ -427,7 +427,7 @@ def find_wall_drive(agent, cap_=5.0):
         detached_wall_ball = (
             15.0 < gap <= 1000.0
             and 250.0 <= ball_pos.z <= 1900.0
-            and -1400.0 <= wall_velocity < -30.0
+            and -1400.0 <= wall_velocity < 150.0
         )
         if detached_wall_ball:
             # Noob's wall jump-time and unfolded-surface travel model decide
