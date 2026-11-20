@@ -706,3 +706,13 @@ This file is the project handoff and change checklist. Read it before every code
 - This is disabled for explicit side_mode and wall_shot_active contacts. It does not alter jump timing, tilt-back, boost/power, defaultPD yaw, A/D steering, counter-air-roll, or dodge logic. Since contact planning stops refreshing after takeoff, the chosen corner is locked for the jump.
 - Diagnostic: [JUMP CORNER CONTACT] prints selected corner and predicted lateral ball speed.
 - Commit: routines of volt 3ca4645e69fe08f5abe241dc4b8c0ed84294af17. Static source edit and GitHub re-fetch only; not compiled or tested in game.
+
+## 16. Rust port foundation (2026-11-20)
+
+- A separate Rust port is maintained at https://github.com/SifuVolt/Volt on branch `main`. Keep this separate from the Python source and from the Grid bot.
+- The Rust project uses `rlbot = 0.7.1` and `glam = 0.34.3`; the working RLBot agent connection and controller output in `src/main.rs` must be preserved while porting.
+- The Rust math foundation now includes `src/math/vector.rs` and `src/math/matrix.rs`. The matrix uses the same forward/right/up basis and Euler-angle construction as VirxERLU's Python `Matrix3`.
+- The Rust port now has `src/state.rs` with packet-to-`CarState` and `BallState` wrappers. Car state mirrors the Python `car_object`: world position/velocity, orientation, local angular velocity, air/jump/dodge flags, flip-reset availability, boost, hitbox dimensions and offset. Ball state mirrors the Python `ball_object`.
+- The initial Rust agent tick now reads ball and car position through these wrappers, but intentionally retains the existing world-yaw steering calculation. Do not change driving behaviour as part of state-layer validation.
+- The GitHub changes have not been compiled or tested locally. The user must pull/sync the Rust repository and run `cargo fmt`, `cargo check`, `cargo test`, and `cargo build --release`; resolve compiler errors before extending the state layer.
+- Next step: validate packet field compatibility and the live bot connection, then extend the state abstraction with match/field/physics configuration as needed. Do not begin porting shot mechanics until state data is confirmed.
