@@ -757,3 +757,14 @@ This file is the project handoff and change checklist. Read it before every code
 - These functions are not wired into the active RLBot controller. Existing steering/throttle behaviour remains unchanged pending local tests and a later faithful port of `defaultPD` / `defaultThrottle`.
 - Rust commits: drive module `eba8119b032aa5d8dd99e4f5966534e92ae90368`; module exposure `0ed6b8ac824f8f959f995e2eff58452df6d94f00`.
 - The module has been fetched back from GitHub for content verification, but has not yet been compiled or run locally. User must pull the Rust commits and run `cargo fmt`, `cargo check`, and `cargo test`.
+
+
+## 20. Rust defaultPD controller port (2026-11-20)
+
+- Added isolated Rust controller module `src/control/pd.rs`, exposed through `src/control/mod.rs` and registered as `mod control` in the Rust agent.
+- Ported the live Python `utils from util of volt` `defaultPD` equations: local-target pitch/yaw angles, roll-to-up angle, and the cubic PD outputs for steer, pitch, yaw and roll. Reuses the already-tested `physics::drive::steer_pd`.
+- Verified the VirxERLU `car_object.update` implementation: `angular_velocity` is already transformed into car-local coordinates. The Python defaultPD then localizes that value a second time for the steer damping term only, while pitch/yaw/roll use the stored local components directly. The Rust port preserves this unusual but source-exact distinction.
+- The function is pure: it returns target angles and controller values instead of mutating RLBot's controller. It is not wired into `main.rs`; the existing world-yaw steering and throttle remain unchanged.
+- Added three tests for target-angle calculation, upside-down roll reference, and axis control mapping.
+- Rust commits: `src/control/pd.rs` `0192b8e5ac2e1160959cd05bccce1d1bff86ad05`; `src/control/mod.rs` `b077abd3475d52366574c344b19431cc69953de4`; main module registration `db5606972e569091e5e95d0f815f06b4b3966d74`.
+- GitHub re-fetch verified all three files. These new changes have not yet been compiled locally; user should pull and run `cargo fmt`, `cargo check`, and `cargo test`. The earlier 20-test result predates this PD module; the expected count is now 23.
