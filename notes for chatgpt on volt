@@ -716,3 +716,15 @@ This file is the project handoff and change checklist. Read it before every code
 - The initial Rust agent tick now reads ball and car position through these wrappers, but intentionally retains the existing world-yaw steering calculation. Do not change driving behaviour as part of state-layer validation.
 - The GitHub changes have not been compiled or tested locally. The user must pull/sync the Rust repository and run `cargo fmt`, `cargo check`, `cargo test`, and `cargo build --release`; resolve compiler errors before extending the state layer.
 - Next step: validate packet field compatibility and the live bot connection, then extend the state abstraction with match/field/physics configuration as needed. Do not begin porting shot mechanics until state data is confirmed.
+
+
+## 17. Rust physics foundation (2026-11-20)
+
+- Added `src/physics/mod.rs` in the separate Rust repository and exposed it as `pub mod physics` from `src/main.rs`.
+- `PhysicsConfig::from_world_gravity` uses the live match gravity supplied by the caller and ports Volt's standard-mutator constants from the current Python `routines of volt`: max speed 2300, throttle acceleration 66 + 2/3, boost acceleration 991 + 2/3, boost consumption 33 + 1/3 per second, jump impulse 291 + 2/3, jump acceleration 1458 + 1/3, 0.2 s jump hold, 1/120 s timestep, and ball radius 91.25.
+- Added an explicit boost-strength multiplier constructor for the Python agent's supported multipliers (1.0, 1.5, 2.0, 5.0, 10.0). The current Rust agent does not yet read the mutator setting; callers must provide the multiplier when that integration is added.
+- Added a fixed-step ballistic jump predictor with first-jump hold acceleration and an optional timed second jump impulse. It deliberately does not yet model dodge impulses, air-control torque, boost thrust, collisions, or surface transitions.
+- Added unit tests for source constants, held-jump trajectory, second-jump timing, and zero-duration behavior.
+- The module is isolated from the current controller: no steering, throttle, boost, or live match behaviour was changed.
+- GitHub commits: physics module `12a7b01a9b79cb00bf3bb51c22123af15f8a72ac`; module exposure in `src/main.rs` follows.
+- These changes have not been compiled locally or tested in-game. After the local working tree is cleaned of rustfmt-only changes, pull and run `cargo fmt`, `cargo check`, and `cargo test`.
