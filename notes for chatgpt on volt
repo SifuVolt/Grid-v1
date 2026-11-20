@@ -780,3 +780,15 @@ This file is the project handoff and change checklist. Read it before every code
 - This module does not update `main.rs`, does not read boost inventory, and does not alter active bot driving. It must be locally compiled/tested before any controller integration.
 - Rust commits: throttle module `1ea632c80041375dcf1ede891699f9fdde21e4f6`; module exposure `2c24e739a47521fc732ace2c9c896b9c2d84f501`; reverse-throttle test expectation correction `66e51e0ff324634be8633a23fb090f77a42ff2b6`.
 - GitHub source was fetched back for review. No local Cargo build, test, or in-game test has been run for this step.
+
+
+## 22. Rust defaultDrive composition (2026-11-20)
+
+- Added `src/control/drive.rs` and exposed it from `src/control/mod.rs`.
+- `default_drive(&CarState, DriveInput)` composes the existing isolated ports in Python order: `default_pd` first, then `default_throttle` with the PD angles, steer, and yaw.
+- Derives the source inputs from `CarState`: local forward speed, total velocity magnitude, local angular velocity, and airborne state. Boost acceleration and the existing handbrake state are explicit inputs.
+- Returns PD orientation controls plus optional throttle/handbrake/boost outputs. The throttle routine may override PD steer during handbraking, matching Python's controller mutation order.
+- Added three tests for PD-to-throttle composition, airborne preservation of PD controls, and local forward speed reporting.
+- Still isolated from `main.rs`; no live bot controller changes.
+- Rust commits: `src/control/drive.rs` `a2177fbb0c2e51d37d3a3e1358008ebc30e80313`; module exposure `763adb69ff03b3a1d8ec4fad563a88782f4f089e`.
+- Not compiled locally yet. Expected test count after pulling: 32.
