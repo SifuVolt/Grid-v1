@@ -806,3 +806,15 @@ This file is the project handoff and change checklist. Read it before every code
 - Added six unit tests for own-wall/goal-mouth exclusion, side/opponent-back-wall acceptance, jump-time branches, unfolding transforms, boost-aware 120 Hz travel profile, and airborne wall-attachment gating.
 - Rust commits: initial planner `39cb9041960ee46c02bc89bddf5a6a10a276d95c`; scan edge-case corrections `0e18a1d8bbd2aa3c31f0fd3d8cdb7d1b6ce490fb`, `c3f67c23560989356c5dd373d520d39e20df2448`, `6d937901e1c202ddd7cad3cab68dab9c2df9d3ac`; module registration `c1b62636b18bbf57b275ba0214ffedc5c89f5db6`; prediction cadence documentation `1ff5bcc618b45b8c14254a3737224e3efee7fbf0`.
 - Static source review and GitHub re-fetch only. This file has not been compiled or run locally. Expected test count after pulling: 38 (32 previous + 6 new).
+
+
+## 24. Rust authoritative ball-prediction ingestion (2026-11-20)
+
+- The RLBot Rust BotAgent interface supports a separate `on_ball_prediction` callback when `run_bot_agents` is called with ball-prediction delivery enabled. Volt's Rust runner already requested these updates but did not override the callback.
+- Added `AbsoluteBallSlice` and `BallTrajectory::from_absolute_slices` / `from_rlbot_prediction` in Rust `src/prediction/mod.rs`. Absolute RLBot game timestamps are converted to times relative to the current GamePacket clock; past samples are discarded and original prediction positions/velocities are preserved. This uses the authoritative collision-aware RLBot prediction rather than free-flight approximations.
+- Tightened `BallTrajectory::at_time` so queries before the first retained prediction sample return `None`.
+- Added two tests for timestamp conversion, past-sample filtering, invalid clocks and pre-first-sample queries. User had reported 39 passing tests before this addition; expected count is now 41, subject to local compilation.
+- Updated Rust `src/main.rs` to retain prediction samples in `VoltRustAgent::on_ball_prediction` and convert them to packet-relative time in `tick`. This intentionally does not change the existing active steering behaviour yet.
+- Rust commits: prediction conversion `bce3ac6895c1d068cc2e431312f8db7749e03f38`; agent callback integration `c9215eb9a30cf5ef024ecd4fd0da2ead910814dc`.
+- These commits have been statically re-fetched from GitHub but have not yet been compiled locally. User must pull and run `cargo fmt`, `cargo check`, and `cargo test` before proceeding.
+- Next porting dependency identified: the Python shot tools call `virxrlcu.parse_slice_for_shot` / `parse_slice_for_shot_with_target`. Their authoritative implementation is in `VirxEC/VirxERLU-CLib/virxrlcu.c` (shot parser and reachability functions, especially `generic_is_viable`, `can_reach_target`, jump-time and aerial validation). Port those equations to Rust before implementing the higher-level shot candidate scanner. Do not replace them with simple distance estimates.
