@@ -744,3 +744,16 @@ This file is the project handoff and change checklist. Read it before every code
 - User pulled the Rust free-flight prediction module and reported 13/14 tests passing. The remaining test had an incorrect expected value, not an implementation failure: for z=500, vertical velocity=200, gravity=-650 and t=1 s, the ballistic height is 500 + 200 - 325 = 375 (the test incorrectly expected 175).
 - Corrected the assertion in Rust `src/prediction/mod.rs` to expect 375. Commit: `fdb320f2c026bc764b2437cbec51282e6cab51d2`. GitHub re-fetch verified the changed assertion; user still needs to pull and run tests locally.
 - Continue treating this Python branch as the authoritative Volt behaviour/source reference. Before any Rust mechanics/planning port, inspect the corresponding Python routines/tools/utilities and preserve their actual equations, gates, and contact geometry. The current Rust free-flight trajectory is only a collision-free ballistic primitive, not a replacement for Volt's full ball prediction or Noob Black/Party Cannon intercept logic.
+
+
+## 19. Rust drive-physics primitives (2026-11-20)
+
+- Added isolated Rust module `src/physics/drive.rs`, exposed as `physics::drive`.
+- Ported the live Python `utils from util of volt` calculations for throttle acceleration, the five-band curvature table, turn radius, circle-based `is_inside_turn_radius`, cubic `steerPD`, and speed-capped `dodge_impulse`.
+- The throttle curve uses absolute local forward speed and preserves the Python breakpoints at 1400 and 1410 uu/s. Curvature preserves the Python half-open speed bands.
+- Rust returns an infinite turn radius when the curvature table has no positive value, avoiding Python's division-by-zero failure for out-of-table speeds. Normal Volt driving speeds remain inside the supported range.
+- `dodge_impulse` accepts the active max-speed limit as an argument; the impulse scaling retains the Python utility's standard 2300 uu/s reference.
+- Added six unit tests covering curve values/boundaries, curvature bands, turn radius, turn-circle geometry, PD clamping, and dodge speed cap.
+- These functions are not wired into the active RLBot controller. Existing steering/throttle behaviour remains unchanged pending local tests and a later faithful port of `defaultPD` / `defaultThrottle`.
+- Rust commits: drive module `eba8119b032aa5d8dd99e4f5966534e92ae90368`; module exposure `0ed6b8ac824f8f959f995e2eff58452df6d94f00`.
+- The module has been fetched back from GitHub for content verification, but has not yet been compiled or run locally. User must pull the Rust commits and run `cargo fmt`, `cargo check`, and `cargo test`.
