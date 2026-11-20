@@ -768,3 +768,15 @@ This file is the project handoff and change checklist. Read it before every code
 - Added three tests for target-angle calculation, upside-down roll reference, and axis control mapping.
 - Rust commits: `src/control/pd.rs` `0192b8e5ac2e1160959cd05bccce1d1bff86ad05`; `src/control/mod.rs` `b077abd3475d52366574c344b19431cc69953de4`; main module registration `db5606972e569091e5e95d0f815f06b4b3966d74`.
 - GitHub re-fetch verified all three files. These new changes have not yet been compiled locally; user should pull and run `cargo fmt`, `cargo check`, and `cargo test`. The earlier 20-test result predates this PD module; the expected count is now 23.
+
+
+## 21. Rust defaultThrottle controller port (2026-11-20)
+
+- Added isolated Rust module `src/control/throttle.rs`, exposed through `src/control/mod.rs`. This is a pure calculation module and is not connected to the live RLBot controller.
+- Ported the Python `defaultThrottle` ground logic: low-speed turn-radius handbrake check, angular-speed threshold, reverse target-angle adjustment, Party Cannon-style curvature-based target-speed cap, handbrake steering/950 uu/s reverse-turn cap, throttle acceleration curve, and the 360-step (3 seconds at 120 Hz) boostless distance simulation.
+- The input explicitly carries local forward speed, total car speed, local angular velocity, target angles/local target, current steer/yaw/handbrake values and active boost acceleration. The output uses optional controller fields so airborne calls and unchanged fields remain untouched, matching the Python routine's mutation behaviour.
+- The Python source reads target yaw unconditionally on ground even though its signature marks target_angles optional; Rust makes OrientationAngles required to avoid reproducing that runtime failure mode.
+- Added six unit tests for airborne no-op, throttle curve, curvature turn-speed limiting, boost necessity, yaw alignment gating, and reverse throttle.
+- This module does not update `main.rs`, does not read boost inventory, and does not alter active bot driving. It must be locally compiled/tested before any controller integration.
+- Rust commits: throttle module `1ea632c80041375dcf1ede891699f9fdde21e4f6`; module exposure `2c24e739a47521fc732ace2c9c896b9c2d84f501`; reverse-throttle test expectation correction `66e51e0ff324634be8633a23fb090f77a42ff2b6`.
+- GitHub source was fetched back for review. No local Cargo build, test, or in-game test has been run for this step.
