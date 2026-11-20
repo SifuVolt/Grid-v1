@@ -425,7 +425,8 @@ def find_wall_drive(agent, cap_=5.0):
             and wall_velocity >= 720.0
         )
         detached_wall_ball = (
-            15.0 < gap <= 1000.0
+            axis == "x"
+            and 15.0 < gap <= 1000.0
             and 250.0 <= ball_pos.z <= 1900.0
             and -1400.0 <= wall_velocity < 150.0
         )
@@ -434,10 +435,10 @@ def find_wall_drive(agent, cap_=5.0):
             # whether the car can reach the wall launch position. Volt's
             # Aerial controller then solves the boost flight and hitbox contact.
             if detached_target_f is None:
-                can_launch, _ = reachable_ground(
+                can_launch, launch_jump_time = reachable_ground(
                     ball_pos, ball_slice, time_value, 1
                 )
-                if can_launch:
+                if can_launch and launch_jump_time <= 1.45:
                     detached_target_t = time_value
                     detached_target_f = ball_slice
             air_t += (2 * i + 1) / 3600.0
