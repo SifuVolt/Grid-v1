@@ -350,22 +350,23 @@ class wall_approach:
         wall_jump_time, _ = self._jump_time_wall(
             min(4096.0 - abs(ball.x), 5120.0 - abs(ball.y)), 0
         )
+        touching_wall = wall_gap <= 15.0
         stable_wall_ball = (
-            wall_jump_time <= 1.45
+            touching_wall
+            and wall_jump_time <= 1.45
             and abs(wall_velocity) < 150.0
             and 400.0 <= ball.z <= 1900.0
         )
         rolling_up_wall_ball = (
-            ball.z + ball_velocity.z ** 2 / 1300.0 <= 129.0
+            touching_wall
+            and ball.z + ball_velocity.z ** 2 / 1300.0 <= 129.0
             and wall_velocity >= 720.0
         )
-        # Also accept a ball that has just left the wall. Noob's original
-        # stable/rolling filters reject this because its wall-normal velocity
-        # is outward, even though the same wall jump can still reach it.
+        # The finder and active approach use the same detached-ball envelope.
         detached_wall_ball = (
-            wall_gap <= 1000.0
+            15.0 < wall_gap <= 1000.0
             and 250.0 <= ball.z <= 1900.0
-            and -1400.0 <= wall_velocity < -150.0
+            and -1400.0 <= wall_velocity < 150.0
         )
         if not (
             stable_wall_ball or rolling_up_wall_ball or detached_wall_ball
@@ -1377,7 +1378,11 @@ class Aerial:
 
         # A late intercept is better handled by the normal aerial than by
         # trying to climb a wall that cannot be reached in time.
-        if time_remaining <= 0.35 and not self.jumping:
+        if (
+            time_remaining <= 0.35
+            and not self.jumping
+            and not self.wall_launch
+        ):
             return False
 
         goal_direction = (
