@@ -792,3 +792,17 @@ This file is the project handoff and change checklist. Read it before every code
 - Still isolated from `main.rs`; no live bot controller changes.
 - Rust commits: `src/control/drive.rs` `a2177fbb0c2e51d37d3a3e1358008ebc30e80313`; module exposure `763adb69ff03b3a1d8ec4fad563a88782f4f089e`.
 - Not compiled locally yet. Expected test count after pulling: 32.
+
+
+## 23. Rust Noob Black wall-drive reachability planner (2026-11-20)
+
+- Added a single complete Rust source file, `src/planning.rs`, and registered it with `pub mod planning;` in `src/main.rs`. This does not alter the active RLBot controller.
+- Ported the current `tools for volt` `find_wall_drive` scan as a pure planner returning `WallDrivePlan` rather than constructing the Python `wall_approach` routine. The result carries relative intercept time, the selected ball slice, contact mode (single jump, double jump, aerial), wall transform family and selected wall surface.
+- Preserved the source gates: airborne cars must already be attached to an eligible wall; own back-wall and low goal-mouth candidates are excluded; ball height is 0–2200; prediction scan stops beyond |y|=5250; stable-wall and rolling-up-wall eligibility thresholds are unchanged.
+- Preserved Noob Black's exact wall jump-time piecewise equations, including the low-height quadratic branch and separate double-jump formula; 120 Hz, 600-step boost-aware acceleration/travel profile; ground-to-wall, x-wall-to-y-wall, y-wall-to-x-wall and car-on-wall unfolding transforms; 60 Hz candidate iteration over every second 120 Hz prediction slice; jump gravity compensation; single/double contact standoffs; aerial reachability estimate and boost budget.
+- The 120 Hz input requirement is intentional: the Python finder scans candidate times at 60 Hz but indexes the underlying prediction with `i * 2`. Do not pass a 60 Hz trajectory directly or it will scan at half the intended time cadence.
+- The current Python `tools for volt` version was fetched directly and contains the attached/stable/rolling Noob wall finder with single/double/aerial mode selection. It does not contain the later `wall_launch_aerial` detached-ball experiment described in older notes; this Rust port intentionally matches the current checked-in tool source rather than reviving that older experiment.
+- The Python `wall_approach` execution class is not ported in this file. Rust returns a plan only; driving along the unfolded route, handoff to jump_shot/Aerial, role gates and active controller integration remain separate future work.
+- Added six unit tests for own-wall/goal-mouth exclusion, side/opponent-back-wall acceptance, jump-time branches, unfolding transforms, boost-aware 120 Hz travel profile, and airborne wall-attachment gating.
+- Rust commits: initial planner `39cb9041960ee46c02bc89bddf5a6a10a276d95c`; scan edge-case corrections `0e18a1d8bbd2aa3c31f0fd3d8cdb7d1b6ce490fb`, `c3f67c23560989356c5dd373d520d39e20df2448`, `6d937901e1c202ddd7cad3cab68dab9c2df9d3ac`; module registration `c1b62636b18bbf57b275ba0214ffedc5c89f5db6`; prediction cadence documentation `1ff5bcc618b45b8c14254a3737224e3efee7fbf0`.
+- Static source review and GitHub re-fetch only. This file has not been compiled or run locally. Expected test count after pulling: 38 (32 previous + 6 new).
