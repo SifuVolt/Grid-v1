@@ -4318,8 +4318,11 @@ class jump_shot:
                         + axis * (axis.dot(car_up) * (1 - cosine))
                     ).normalize()
 
-                impact_right = impact_forward.cross(impact_up).normalize()
-                impact_up = impact_right.cross(impact_forward).normalize()
+                # RLBot's local +Y axis is car-right (up cross forward).
+                # Keep candidate labels consistent with the hitbox's local
+                # coordinate convention.
+                impact_right = impact_up.cross(impact_forward).normalize()
+                impact_up = impact_forward.cross(impact_right).normalize()
 
                 hitbox = agent.me.hitbox
                 half_length = float(
@@ -4349,10 +4352,10 @@ class jump_shot:
                 # car_right axis convention.
                 candidates = [
                     ("centre", 0.0, 0.0),
-                    ("top_left", half_width * 0.82, half_height * 0.82),
-                    ("top_right", -half_width * 0.82, half_height * 0.82),
-                    ("left", half_width * 0.88, 0.0),
-                    ("right", -half_width * 0.88, 0.0),
+                    ("top_left", -half_width * 0.82, half_height * 0.82),
+                    ("top_right", half_width * 0.82, half_height * 0.82),
+                    ("left", -half_width * 0.88, 0.0),
+                    ("right", half_width * 0.88, 0.0),
                     ("top", 0.0, half_height * 0.88),
                     ("bottom", 0.0, -half_height * 0.70),
                 ]
