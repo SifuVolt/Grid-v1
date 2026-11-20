@@ -304,6 +304,8 @@ def find_wall_drive(agent, cap_=5.0):
     target_t = [max_t, max_t, max_t, max_t]
     target_f = [None, None, None, None]
     wait_for_fall = [-1.0, -1.0, -1.0, 0.0]
+    detached_target_t = max_t
+    detached_target_f = None
     air_t = 0.0
     up_direction = car.up
     jumped = bool(getattr(car, "jumped", False))
@@ -406,26 +408,42 @@ def find_wall_drive(agent, cap_=5.0):
         wall_jump_time, _ = _noob_wall_jump_time(
             min(4096.0 - abs(ball_pos.x), 5120.0 - abs(ball_pos.y)), 0
         )
+        # Treat a ball as attached only while its collision radius is within
+        # 15 units of the wall. A separated ball is evaluated as a wall-launch
+        # aerial instead of being fed into Noob's direct wall-shot path.
+        touching_wall = gap <= 15.0
         stable_wall_ball = (
-            wall_jump_time <= 1.45
+            touching_wall
+            and wall_jump_time <= 1.45
             and abs(wall_velocity) < 150.0
             and 400.0 <= ball_pos.z <= 1900.0
         )
         rolling_up_wall_ball = (
-            ball_pos.z + ball_slice.physics.velocity.z ** 2 / 1300.0
+            touching_wall
+            and ball_pos.z + ball_slice.physics.velocity.z ** 2 / 1300.0
             <= 129.0
             and wall_velocity >= 720.0
         )
-        # A ball moving away from the wall is still a valid wall-jump target
-        # while it remains inside the wall launch's reachable envelope.
         detached_wall_ball = (
-            gap <= 1000.0
+            15.0 < gap <= 1000.0
             and 250.0 <= ball_pos.z <= 1900.0
-            and -1400.0 <= wall_velocity < -150.0
+            and -1400.0 <= wall_velocity < -30.0
         )
-        if not (
-            stable_wall_ball or rolling_up_wall_ball or detached_wall_ball
-        ):
+        if detached_wall_ball:
+            # Noob's wall jump-time and unfolded-surface travel model decide
+            # whether the car can reach the wall launch position. Volt's
+            # Aerial controller then solves the boost flight and hitbox contact.
+            if detached_target_f is None:
+                can_launch, _ = reachable_ground(
+                    ball_pos, ball_slice, time_value, 1
+                )
+                if can_launch:
+                    detached_target_t = time_value
+                    detached_target_f = ball_slice
+            air_t += (2 * i + 1) / 3600.0
+            continue
+
+        if not (stable_wall_ball or rolling_up_wall_ball):
             air_t += (2 * i + 1) / 3600.0
             continue
 
@@ -464,34 +482,50 @@ def find_wall_drive(agent, cap_=5.0):
     # route sets this flag so its aerial option can be budgeted as well.
     wait_for_fall[0] = 1.0
     jump_index = 0 if target_t[0] < max_t else 1
-    if target_t[jump_index] >= max_t or target_f[jump_index] is None:
-        if debug_due:
-            print(
-                f"[NOOB WALL FIND] no reachable wall contact "
-                f"mode={transform_name} single={target_t[0]:.2f} "
-                f"double={target_t[1]:.2f} aerial={target_t[3]:.2f}",
-                flush=True
-            )
-        return None
-
-    aerial_available = (
-        target_f[3] is not None
-        and target_t[3] < max_t
-        and wait_for_fall[jump_index] >= 0
-        and car.boost / 100.0 * 3.0 >= (
-            target_t[3] + 0.1 * (not car.airborne)
-        )
+    normal_reachable = (
+        target_t[jump_index] < max_t and target_f[jump_index] is not None
     )
-    if aerial_available:
-        selected_index = 3
-        selected_time = target_t[3]
-        selected_ball = target_f[3]
-        selected_mode = "aerial"
+    if (
+        detached_target_f is not None
+        and (
+            not normal_reachable
+            or detached_target_t < target_t[jump_index]
+        )
+    ):
+        selected_time = detached_target_t
+        selected_ball = detached_target_f
+        selected_mode = "wall_launch_aerial"
     else:
-        selected_index = jump_index
-        selected_time = target_t[selected_index]
-        selected_ball = target_f[selected_index]
-        selected_mode = "double" if selected_index == 1 else "wall_jump"
+        if not normal_reachable:
+            if debug_due:
+                print(
+                    f"[NOOB WALL FIND] no reachable wall contact "
+                    f"mode={transform_name} single={target_t[0]:.2f} "
+                    f"double={target_t[1]:.2f} aerial={target_t[3]:.2f} "
+                    f"detached={detached_target_t:.2f}",
+                    flush=True
+                )
+            return None
+
+        aerial_available = (
+            target_f[3] is not None
+            and target_t[3] < max_t
+            and wait_for_fall[jump_index] >= 0
+            and car.boost / 100.0 * 3.0 >= (
+                target_t[3] + 0.1 * (not car.airborne)
+            )
+        )
+        if aerial_available:
+            selected_index = 3
+            selected_time = target_t[3]
+            selected_ball = target_f[3]
+            selected_mode = "aerial"
+        else:
+            selected_index = jump_index
+            selected_time = target_t[selected_index]
+            selected_ball = target_f[selected_index]
+            # Preserve the original Noob wall-shot handoff for attached balls.
+            selected_mode = "double" if selected_index == 1 else "single"
 
     raw = selected_ball.physics.location
     selected_pos = Vector(raw.x, raw.y, raw.z)
