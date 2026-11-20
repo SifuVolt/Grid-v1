@@ -4062,6 +4062,8 @@ class jump_shot:
         self.patience = shot_patience()
         self.wall_shot_active = False
         self.wall_shot_normal = None
+        self.contact_corner_side = 0
+        self.contact_lateral_speed = 0.0
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -4302,6 +4304,56 @@ class jump_shot:
                     0.5 * self.needed_jump_time ** 2
                 )
             self.contact_approach_target = self.offset_target.copy()
+
+        # If the ball is carrying lateral momentum against the intended shot,
+        # move the planned collision from the centre of the front face to the
+        # upper corner that produces an opposing lateral contact normal.
+        # The ball is positioned against the actual hitbox corner, using the
+        # sphere/corner geometry rather than an arbitrary lateral target shift.
+        self.contact_corner_side = 0
+        self.contact_lateral_speed = 0.0
+        if not self.side_mode and not self.wall_shot_active:
+            shot_forward = self.shot_vector.flatten().normalize()
+            shot_right = shot_forward.cross(Vector(z=1)).normalize()
+            if shot_forward.magnitude() > 0.001 and shot_right.magnitude() > 0.001:
+                lateral_speed = self.ball_velocity.dot(shot_right)
+                self.contact_lateral_speed = lateral_speed
+                lateral_threshold = 180.0
+                if abs(lateral_speed) >= lateral_threshold:
+                    # Incoming leftward velocity needs a right-corner hit;
+                    # incoming rightward velocity needs a left-corner hit.
+                    corner_side = 1 if lateral_speed < 0 else -1
+                    hitbox = agent.me.hitbox
+                    half_width = float(getattr(hitbox, "width", 84.2)) * 0.5
+                    half_height = float(getattr(hitbox, "height", 36.16)) * 0.5
+                    ball_radius = 92.75
+                    corner_lateral = min(half_width * 0.65, ball_radius * 0.35)
+                    corner_vertical = min(half_height * 0.70, ball_radius * 0.18)
+                    corner_forward = math.sqrt(max(
+                        1.0,
+                        ball_radius * ball_radius
+                        - corner_lateral * corner_lateral
+                        - corner_vertical * corner_vertical
+                    ))
+                    # _party_cannon_hitbox_target already accounts for the
+                    # hitbox's longitudinal offset. Shift from centre-face
+                    # contact to the selected top corner on the ball surface.
+                    self.offset_target += (
+                        shot_forward * (ball_radius - corner_forward)
+                        - shot_right * (corner_side * corner_lateral)
+                        - Vector(z=corner_vertical)
+                    )
+                    self.contact_approach_target = self.offset_target.copy()
+                    self.contact_corner_side = corner_side
+                    corner_name = "top-right" if corner_side > 0 else "top-left"
+                    print(
+                        f"[JUMP CORNER CONTACT] corner={corner_name} "
+                        f"ball_lateral_speed={lateral_speed:.0f} "
+                        f"side_offset={corner_lateral:.1f} "
+                        f"top_offset={corner_vertical:.1f} "
+                        f"T={T:.3f}",
+                        flush=True
+                    )
 
         print(
             f"[JUMP SHOT AIM FIX] "
