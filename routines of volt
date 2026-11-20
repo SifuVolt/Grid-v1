@@ -4445,8 +4445,9 @@ class jump_shot:
             f"ball=({self.ball_location.x:.0f},{self.ball_location.y:.0f}) "
             f"target=({target_center.x:.0f},{target_center.y:.0f}) "
             f"shot_dir=({self.shot_vector.x:.2f},{self.shot_vector.y:.2f}) "
-            f"face_align={contact_forward_alignment:.2f} "
-            f"face_offset=({contact_face_side:.1f},{contact_face_height:.1f}) "
+            f"face={contact_face_label} "
+            f"face_score={contact_face_score:.3f} "
+            f"face_align={contact_face_alignment:.3f} "
             f"offset=({self.offset_target.x:.0f},{self.offset_target.y:.0f})",
             flush=True
         )
