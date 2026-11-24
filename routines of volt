@@ -4143,13 +4143,6 @@ class jump_shot:
         self.wall_shot_normal = None
         self.contact_face_label = None
         self.approach = DubinsShotApproach()
-        # Learn the car's actual local air-control response from consecutive
-        # packets, so predicted contact orientation includes the yaw/roll
-        # commands this routine is applying instead of assuming zero torque.
-        self._last_air_control_time = -1.0
-        self._last_air_omega = None
-        self._last_air_control = (0.0, 0.0, 0.0)  # roll, pitch, yaw
-        self._air_control_accel = [0.0, 0.0, 0.0]
         self._last_air_prediction_debug = -1.0
 
     def _predict_air_orientation(self, agent, horizon, controls):
@@ -4504,7 +4497,7 @@ class jump_shot:
             shot_forward = self.shot_vector.flatten().normalize()
             car_forward = agent.me.forward.normalize()
             car_up = agent.me.up.normalize()
-            car_right = car_forward.cross(car_up).normalize()
+            car_right = car_up.cross(car_forward).normalize()
 
             if (
                 shot_forward.magnitude() > 0.001
