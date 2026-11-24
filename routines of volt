@@ -1258,38 +1258,29 @@ class Aerial:
             - world_offset
         )
 
-    def _underside_contact_geometry(self, agent, ball, shot_direction):
+    def _underside_redirect_geometry(self, agent, ball, shot_direction):
         """
-        Aim the front underside at the ball using the Octane hitbox.
+        Position the front underside across the ball's lower surface.
 
-        The contact point is placed near the front axle, rather than at the
-        nose tip. Wheels are not separate RL collision shapes, so this uses
-        the front-lower region of the oriented hitbox.
+        The car is kept flat (roof up, underside down), with its forward axis
+        aligned toward the opponent goal. The front-axle area represents the
+        two-front-wheel contact bar; the actual collision remains the Octane
+        hitbox, not separate wheel colliders.
         """
-        horizontal = shot_direction.flatten().normalize()
-        if horizontal.magnitude() < 0.001:
-            horizontal = Vector(0, -side(agent.team), 0)
+        desired_forward = shot_direction.flatten().normalize()
+        if desired_forward.magnitude() < 0.001:
+            desired_forward = Vector(0, -side(agent.team), 0)
 
-        # A modest nose-up attitude exposes the front underside without
-        # turning the car vertical or fully upside down.
-        pitch_back = math.radians(22)
-        desired_forward = (
-            horizontal * math.cos(pitch_back)
-            + Vector(z=1) * math.sin(pitch_back)
-        ).normalize()
-        desired_up = (
-            Vector(z=1) * math.cos(pitch_back)
-            - horizontal * math.sin(pitch_back)
-        ).normalize()
+        desired_up = Vector(z=1)
         desired_right = desired_up.cross(desired_forward).normalize()
 
         hitbox = agent.me.hitbox
         half_length = float(getattr(hitbox, "length", 118.01)) * 0.5
         half_height = float(getattr(hitbox, "height", 36.16)) * 0.5
 
-        # Front-axle region: inside the front edge, where the front wheels
-        # sit visually. The collision itself remains hitbox-based.
-        front_contact_x = min(half_length * 0.58, half_length - 8.0)
+        # The front axle sits behind the very front tip. Aim with the broad
+        # underside strip across both front-wheel positions, not the nose.
+        front_axle_x = min(half_length * 0.70, half_length - 8.0)
 
         local_offset = getattr(agent.me, "hitbox_offset", None)
         if local_offset is None:
@@ -1303,12 +1294,12 @@ class Aerial:
             + desired_up * offset_z
         )
 
-        # Put the underside/front-axle contact region one ball radius below
-        # the ball centre at the predicted intercept.
+        # Match the car's lower face to the ball's bottom tangent:
+        # car centre = ball centre + up * (half_height - ball_radius).
         target = (
             ball
-            - desired_forward * front_contact_x
-            + desired_up * (half_height + 92.75)
+            - desired_forward * front_axle_x
+            + desired_up * (half_height - 92.75)
             - world_offset
         )
         return target, desired_forward, desired_up
@@ -1658,25 +1649,30 @@ class Aerial:
         self.wall_shot_active = wall_normal is not None
         self.wall_shot_normal = wall_normal
 
-        # Special attacking contact: when the ball is already travelling
-        # towards the opponent's goal, use the front-underside region rather
-        # than the conventional nose-first hitbox standoff. Keep this mode
-        # out of defensive clears, ceiling contacts and wall-corrected shots.
+        # Situational underside redirect: use this when Volt is airborne
+        # and its current nose is facing away from the opponent's goal. This
+        # is intentionally independent of the ball's current velocity: a
+        # ball coming back toward us can still be redirected goalward.
         goal_direction_flat = (goal_center - self.ball).flatten().normalize()
-        ball_velocity_toward_goal = (
-            aerial_ball_velocity.flatten().dot(goal_direction_flat)
-            if goal_direction_flat.magnitude() > 0.001 else 0.0
+        car_forward_flat = agent.me.forward.flatten().normalize()
+        facing_goal_dot = (
+            car_forward_flat.dot(goal_direction_flat)
+            if goal_direction_flat.magnitude() > 0.001
+            and car_forward_flat.magnitude() > 0.001
+            else 1.0
         )
-        underside_speed_gate = 75 if self.underside_mode else 150
+
         self.underside_mode = (
             not defensive_clear
             and not backboard_mode
             and not self.ceiling
             and not self.wall_shot_active
-            and self.ball.z > 350
+            and self.ball.z > 250
             and 0.15 < T < 1.8
             and agent.me.airborne
-            and ball_velocity_toward_goal > underside_speed_gate
+            # Negative means facing away from goal; allow near-sideways
+            # approaches too, not only a perfectly backwards car.
+            and facing_goal_dot < 0.15
         )
 
         if self.underside_mode:
@@ -1684,7 +1680,7 @@ class Aerial:
                 self.target,
                 self.underside_forward,
                 self.underside_up
-            ) = self._underside_contact_geometry(
+            ) = self._underside_redirect_geometry(
                 agent, self.ball, self.shot_vector
             )
             if (
@@ -1693,16 +1689,15 @@ class Aerial:
             ):
                 self.last_underside_debug = agent.time
                 print(
-                    f"[AERIAL UNDERSIDE] active "
-                    f"goalward_speed={ball_velocity_toward_goal:.0f} "
+                    f"[AERIAL UNDERSIDE REDIRECT] active "
+                    f"facing_goal_dot={facing_goal_dot:.2f} "
                     f"T={T:.2f} ball_z={self.ball.z:.0f} "
-                    f"pitch_back=22deg",
+                    f"front_axle_contact=flat",
                     flush=True
                 )
         else:
             self.underside_forward = None
             self.underside_up = None
-            # Conventional Party Cannon nose-first hitbox target.
             self.target = self._party_cannon_hitbox_target(
                 agent, self.ball, self.shot_vector
             )
@@ -1868,9 +1863,8 @@ class Aerial:
             local_aim = agent.me.local(aim_vector)
 
             if self.underside_mode:
-                # Aim the car's forward axis along the shot while holding a
-                # controlled 22-degree nose-up attitude. The target position
-                # above was calculated from this same desired orientation.
+                # Keep the car flat with its underside facing the ball and
+                # its front axle aligned along the outgoing goal direction.
                 local_forward = agent.me.local(self.underside_forward)
                 local_up = agent.me.local(self.underside_up)
                 defaultPD(agent, local_forward, up=local_up)
