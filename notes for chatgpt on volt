@@ -818,3 +818,15 @@ This file is the project handoff and change checklist. Read it before every code
 - Rust commits: prediction conversion `bce3ac6895c1d068cc2e431312f8db7749e03f38`; agent callback integration `c9215eb9a30cf5ef024ecd4fd0da2ead910814dc`.
 - These commits have been statically re-fetched from GitHub but have not yet been compiled locally. User must pull and run `cargo fmt`, `cargo check`, and `cargo test` before proceeding.
 - Next porting dependency identified: the Python shot tools call `virxrlcu.parse_slice_for_shot` / `parse_slice_for_shot_with_target`. Their authoritative implementation is in `VirxEC/VirxERLU-CLib/virxrlcu.c` (shot parser and reachability functions, especially `generic_is_viable`, `can_reach_target`, jump-time and aerial validation). Port those equations to Rust before implementing the higher-level shot candidate scanner. Do not replace them with simple distance estimates.
+
+
+
+## 22. Dubins ground approach for jump shots (2026-11-24)
+
+- Added `util/dubins.py`, a small Python port of the six standard Dubins path families from VirxEC/dubins_paths (MIT; upstream copyright notice retained). The upstream crate is Rust-only; VirxERLU-RLib's Python extension consumes the older RLBot GameTickPacket interface, while this Volt agent uses RLBot v5 GamePacket, so the Rust extension is not a drop-in dependency.
+- Added a stateful `DubinsShotApproach` component in `routines of volt`. It plans from the car's current 2D pose (position and forward heading) to the existing hitbox-aware jump-shot standoff, with the final heading aligned to the outgoing shot vector.
+- The planner evaluates all six Dubins path families, samples them, and rejects candidates that leave the playable field. It follows a speed-scaled lookahead waypoint and replans on a 0.20-second cadence or when the target, heading, turn radius, or path deviation changes.
+- Jump-shot contact position, jump timing, final dodge, side-shot path, and airborne phase remain separate. Only the grounded normal jump-shot steering target follows the Dubins path; path length is used for the approach speed request. If no field-safe path is available, the previous flank-target approach remains the fallback.
+- Added `[DUBINS APPROACH]` diagnostics and a debug polyline of the planned route.
+- GitHub commits: `9212289` (new planner), `e87b841` (MIT attribution), `6f2b521` (jump-shot integration), `b7bbfe3` (debug renderer compatibility).
+- Static GitHub fetch verification only. No local Python compile, simulation, or in-game test has been run. The separate requested jump-shot impact-orientation prediction still needs to account for planned A/D yaw and Q/E counter-roll using a validated air-control model; do not claim that this has been changed by the Dubins approach commits.
