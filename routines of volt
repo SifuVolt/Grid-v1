@@ -1971,7 +1971,9 @@ class Aerial:
                 party_cannon_forward_need
                 >= (agent.boost_accel + throttle_accel)
                 * max(dt, 13.0 / 120.0)
-                and party_cannon_forward_angle < 0.4
+                and party_cannon_forward_angle < (
+                    0.65 if self.underside_mode else 0.4
+                )
                 and agent.me.boost > 0
             )
             agent.controller.throttle = cap(
