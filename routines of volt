@@ -4625,7 +4625,6 @@ class jump_shot:
         if approach_samples:
             agent.polyline(
                 [Vector(point[0], point[1], 25) for point in approach_samples],
-                agent.renderer.cyan
             )
 
         vf = agent.me.velocity + agent.gravity * T
