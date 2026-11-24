@@ -369,24 +369,32 @@ class VirxERLU(Bot):
                     else self.stack[0].__class__.__name__
                 )
 
+                # Once jump_shot has actually begun its jump, commit to it.
+                # The strategy may otherwise replace the active routine when
+                # an opponent becomes closer on a later packet.
+                committed_jump_shot = any(
+                    routine.__class__.__name__ == "jump_shot"
+                    and getattr(routine, "jumping", False)
+                    for routine in self.stack
+                )
+
                 if stack_routine_name in {
                     "Aerial",
                     "jump_shot",
                     "double_jump",
                     "ground_shot",
                     "short_shot"
-                }:
+                } or committed_jump_shot:
                     self.shooting = True
                 else:
                     self.shooting = False
 
                 try:
-                    # This is the actual ABot strategy.
-                    #
-                    # IMPORTANT:
-                    # Bot.run() belongs to RLBot v5.
-                    # Therefore the strategy is run_logic(), not run().
-                    self.run_logic()
+                    # Do not run challenger/strategy selection while a jump
+                    # shot is committed. The active stack routine (including
+                    # any nested dodge or recovery) still runs below.
+                    if not committed_jump_shot:
+                        self.run_logic()
 
                 except Exception:
                     t_file = os.path.join(
