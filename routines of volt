@@ -1160,9 +1160,6 @@ class Aerial:
         self.side_wall_launched = False
         self.wall_shot_active = False
         self.wall_shot_normal = None
-        self.underside_mode = False
-        self.underside_forward = None
-        self.underside_up = None
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -1257,60 +1254,6 @@ class Aerial:
             - shot_direction * (ball_radius + half_length)
             - world_offset
         )
-
-    def _underside_redirect_geometry(self, agent, ball, shot_direction):
-        """
-        Position the inverted front underside across the ball's lower surface.
-
-        The front-axle area represents the two-front-wheel contact bar; the
-        actual collision remains the Octane hitbox, not separate wheel
-        colliders.
-        """
-        desired_forward = shot_direction.flatten().normalize()
-        if desired_forward.magnitude() < 0.001:
-            desired_forward = Vector(0, -side(agent.team), 0)
-
-        # The wheels are on the car's underside, so invert the chassis.
-        # A small 12-degree nose-down angle gives the underside contact
-        # normal both upward and goalward components.
-        strike_angle = math.radians(12)
-        desired_up = (
-            Vector(z=-math.cos(strike_angle))
-            - desired_forward * math.sin(strike_angle)
-        ).normalize()
-        desired_right = desired_up.cross(desired_forward).normalize()
-
-        hitbox = agent.me.hitbox
-        half_length = float(getattr(hitbox, "length", 118.01)) * 0.5
-        half_height = float(getattr(hitbox, "height", 36.16)) * 0.5
-
-        # The front axle sits behind the very front tip. Aim with the broad
-        # underside strip across both front-wheel positions, not the nose.
-        front_axle_x = min(half_length * 0.70, half_length - 8.0)
-
-        local_offset = getattr(agent.me, "hitbox_offset", None)
-        if local_offset is None:
-            local_offset = getattr(hitbox, "offset", None)
-        offset_x = float(getattr(local_offset, "x", 0.0)) if local_offset is not None else 0.0
-        offset_y = float(getattr(local_offset, "y", 0.0)) if local_offset is not None else 0.0
-        offset_z = float(getattr(local_offset, "z", 0.0)) if local_offset is not None else 0.0
-        world_offset = (
-            desired_forward * offset_x
-            + desired_right * offset_y
-            + desired_up * offset_z
-        )
-
-        # Put the inverted car's underside/front-wheel strip against the
-        # ball's bottom tangent. For an inverted car, its underside is
-        # -desired_up, so the contact strip is above the car's centre.
-        target = (
-            ball
-            - Vector(z=92.75)
-            - desired_forward * front_axle_x
-            + desired_up * half_height
-            - world_offset
-        )
-        return target, desired_forward, desired_up
 
     def _party_cannon_boost_estimate(
         self, agent, target, time_remaining, final_position, final_velocity
@@ -1657,90 +1600,11 @@ class Aerial:
         self.wall_shot_active = wall_normal is not None
         self.wall_shot_normal = wall_normal
 
-        # Situational underside redirect: use this when Volt is airborne
-        # and its current nose is facing away from the opponent's goal. This
-        # is intentionally independent of the ball's current velocity: a
-        # ball coming back toward us can still be redirected goalward.
-        goal_direction_flat = (goal_center - self.ball).flatten().normalize()
-        car_forward_flat = agent.me.forward.flatten().normalize()
-        facing_goal_dot = (
-            car_forward_flat.dot(goal_direction_flat)
-            if goal_direction_flat.magnitude() > 0.001
-            and car_forward_flat.magnitude() > 0.001
-            else 1.0
+        # Place the car reference point so the front of its hitbox reaches
+        # the corrected contact point at the predicted intercept.
+        self.target = self._party_cannon_hitbox_target(
+            agent, self.ball, self.shot_vector
         )
-
-        # This redirect must approach from BELOW the ball. If the car's
-        # centre is already above the ball's centre, the front underside
-        # cannot make the intended lower-surface contact.
-        car_below_ball = agent.me.location.z < self.ball.z
-
-        underside_redirect_eligible = (
-            car_below_ball
-            and not defensive_clear
-            and not backboard_mode
-            and not self.ceiling
-            and not self.wall_shot_active
-            and self.ball.z > 250
-            and 0.15 < T < 1.8
-            and agent.me.airborne
-            # Negative means facing away from goal; allow near-sideways
-            # approaches too, not only a perfectly backwards car.
-            and facing_goal_dot < 0.25
-        )
-        # Keep the selected mode only while the car remains below the ball.
-        # Turning toward goal is part of the maneuver, but climbing above the
-        # ball invalidates this particular contact geometry.
-        self.underside_mode = (
-            car_below_ball
-            and (self.underside_mode or underside_redirect_eligible)
-        )
-
-        if self.underside_mode:
-            (
-                self.target,
-                self.underside_forward,
-                self.underside_up
-            ) = self._underside_redirect_geometry(
-                agent, self.ball, self.shot_vector
-            )
-            if (
-                not hasattr(self, "last_underside_debug")
-                or agent.time - self.last_underside_debug >= 0.4
-            ):
-                self.last_underside_debug = agent.time
-                print(
-                    f"[AERIAL UNDERSIDE REDIRECT] active "
-                    f"facing_goal_dot={facing_goal_dot:.2f} "
-                    f"T={T:.2f} ball_z={self.ball.z:.0f} "
-                    f"front_axle_contact=flat",
-                    flush=True
-                )
-        else:
-            self.underside_forward = None
-            self.underside_up = None
-            self.target = self._party_cannon_hitbox_target(
-                agent, self.ball, self.shot_vector
-            )
-
-        if (
-            not self.underside_mode
-            and (
-                not hasattr(self, "last_underside_check_debug")
-                or agent.time - self.last_underside_check_debug >= 0.6
-            )
-        ):
-            self.last_underside_check_debug = agent.time
-            print(
-                f"[AERIAL UNDERSIDE CHECK] facing_goal_dot={facing_goal_dot:.2f} "
-                f"airborne={agent.me.airborne} T={T:.2f} "
-                f"car_z={agent.me.location.z:.0f} "
-                f"ball_z={self.ball.z:.0f} below_ball={car_below_ball} "
-                f"defensive={defensive_clear} "
-                f"backboard={backboard_mode} wall={self.wall_shot_active} "
-                f"ceiling={self.ceiling}",
-                flush=True
-            )
 
 
         agent.sphere(self.ball, 92.75)
@@ -1844,7 +1708,6 @@ class Aerial:
             and T > 0.30
             and self.target.z - xf.z > 80
             and agent.me.boost > 0
-            and not self.underside_mode
             and not backboard_mode
             and not self.ceiling
             and virxrlcu.find_landing_plane(
@@ -1902,13 +1765,7 @@ class Aerial:
             )
             local_aim = agent.me.local(aim_vector)
 
-            if self.underside_mode:
-                # Invert the car so the front-wheel underside faces the ball,
-                # with the front axle aligned along the outgoing goal direction.
-                local_forward = agent.me.local(self.underside_forward)
-                local_up = agent.me.local(self.underside_up)
-                defaultPD(agent, local_forward, up=local_up)
-            elif backboard_mode:
+            if backboard_mode:
                 ball_below_car = (
                     self.ball.z < agent.me.location.z - 80
                 )
@@ -2005,9 +1862,7 @@ class Aerial:
                 party_cannon_forward_need
                 >= (agent.boost_accel + throttle_accel)
                 * max(dt, 13.0 / 120.0)
-                and party_cannon_forward_angle < (
-                    0.65 if self.underside_mode else 0.4
-                )
+                and party_cannon_forward_angle < 0.4
                 and agent.me.boost > 0
             )
             agent.controller.throttle = cap(
