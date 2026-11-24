@@ -830,3 +830,15 @@ This file is the project handoff and change checklist. Read it before every code
 - Added `[DUBINS APPROACH]` diagnostics and a debug polyline of the planned route.
 - GitHub commits: `9212289` (new planner), `e87b841` (MIT attribution), `6f2b521` (jump-shot integration), `b7bbfe3` (debug renderer compatibility).
 - Static GitHub fetch verification only. No local Python compile, simulation, or in-game test has been run. The separate requested jump-shot impact-orientation prediction still needs to account for planned A/D yaw and Q/E counter-roll using a validated air-control model; do not claim that this has been changed by the Dubins approach commits.
+
+
+
+## 23. Jump-shot predicted orientation includes yaw and air roll (2026-11-24)
+
+- The jump-shot front-face prediction previously attempted `agent.me.get_raw(agent).physics`, but this Volt `get_raw` returns a tuple, not a physics object. That exception silently made the angular-velocity prediction fall back to zero.
+- Replaced that invalid accessor with the actual `car_object.angular_velocity`, which is stored in car-local coordinates, and transformed it into world space using the car's forward/right/up basis.
+- Centralized the existing jump-shot PD orientation command in `_set_jump_shot_orientation`, so both execution and prediction use the same goal-directed A/D yaw, S pitch override, and Q/E counter-roll (opposite the yaw command).
+- Added a per-shot online estimate of roll/pitch/yaw angular acceleration from consecutive live packets and the previous controller input. The short-horizon predicted contact orientation now integrates current angular velocity plus the estimated acceleration from the planned controller inputs. This avoids hardcoding unverified air-control torque constants.
+- Added `[JUMP SHOT PREDICT]` diagnostics for planned yaw/roll, learned yaw/roll acceleration, and prediction horizon.
+- Commit: `1cd6cd4`.
+- This is a short-horizon online estimate, not a full Rocket League angular dynamics simulator. It needs in-game validation, especially during the first airborne frame before the acceleration estimate has learned the car's response. No compile, simulation, or in-game test has been performed.
