@@ -1260,18 +1260,24 @@ class Aerial:
 
     def _underside_redirect_geometry(self, agent, ball, shot_direction):
         """
-        Position the front underside across the ball's lower surface.
+        Position the inverted front underside across the ball's lower surface.
 
-        The car is kept flat (roof up, underside down), with its forward axis
-        aligned toward the opponent goal. The front-axle area represents the
-        two-front-wheel contact bar; the actual collision remains the Octane
-        hitbox, not separate wheel colliders.
+        The front-axle area represents the two-front-wheel contact bar; the
+        actual collision remains the Octane hitbox, not separate wheel
+        colliders.
         """
         desired_forward = shot_direction.flatten().normalize()
         if desired_forward.magnitude() < 0.001:
             desired_forward = Vector(0, -side(agent.team), 0)
 
-        desired_up = Vector(z=1)
+        # The wheels are on the car's underside, so invert the chassis.
+        # A small 12-degree nose-down angle gives the underside contact
+        # normal both upward and goalward components.
+        strike_angle = math.radians(12)
+        desired_up = (
+            Vector(z=-math.cos(strike_angle))
+            - desired_forward * math.sin(strike_angle)
+        ).normalize()
         desired_right = desired_up.cross(desired_forward).normalize()
 
         hitbox = agent.me.hitbox
@@ -1294,12 +1300,14 @@ class Aerial:
             + desired_up * offset_z
         )
 
-        # Match the car's lower face to the ball's bottom tangent:
-        # car centre = ball centre + up * (half_height - ball_radius).
+        # Put the inverted car's underside/front-wheel strip against the
+        # ball's bottom tangent. For an inverted car, its underside is
+        # -desired_up, so the contact strip is above the car's centre.
         target = (
             ball
+            - Vector(z=92.75)
             - desired_forward * front_axle_x
-            + desired_up * (half_height - 92.75)
+            + desired_up * half_height
             - world_offset
         )
         return target, desired_forward, desired_up
@@ -1662,7 +1670,7 @@ class Aerial:
             else 1.0
         )
 
-        self.underside_mode = (
+        underside_redirect_eligible = (
             not defensive_clear
             and not backboard_mode
             and not self.ceiling
@@ -1672,7 +1680,13 @@ class Aerial:
             and agent.me.airborne
             # Negative means facing away from goal; allow near-sideways
             # approaches too, not only a perfectly backwards car.
-            and facing_goal_dot < 0.15
+            and facing_goal_dot < 0.25
+        )
+        # Lock the redirect once selected. Turning toward goal is part of the
+        # maneuver, so re-testing the original facing direction every frame
+        # would otherwise cancel it halfway through the aerial.
+        self.underside_mode = (
+            self.underside_mode or underside_redirect_eligible
         )
 
         if self.underside_mode:
@@ -1700,6 +1714,23 @@ class Aerial:
             self.underside_up = None
             self.target = self._party_cannon_hitbox_target(
                 agent, self.ball, self.shot_vector
+            )
+
+        if (
+            not self.underside_mode
+            and (
+                not hasattr(self, "last_underside_check_debug")
+                or agent.time - self.last_underside_check_debug >= 0.6
+            )
+        ):
+            self.last_underside_check_debug = agent.time
+            print(
+                f"[AERIAL UNDERSIDE CHECK] facing_goal_dot={facing_goal_dot:.2f} "
+                f"airborne={agent.me.airborne} T={T:.2f} "
+                f"ball_z={self.ball.z:.0f} defensive={defensive_clear} "
+                f"backboard={backboard_mode} wall={self.wall_shot_active} "
+                f"ceiling={self.ceiling}",
+                flush=True
             )
 
 
@@ -1863,8 +1894,8 @@ class Aerial:
             local_aim = agent.me.local(aim_vector)
 
             if self.underside_mode:
-                # Keep the car flat with its underside facing the ball and
-                # its front axle aligned along the outgoing goal direction.
+                # Invert the car so the front-wheel underside faces the ball,
+                # with the front axle aligned along the outgoing goal direction.
                 local_forward = agent.me.local(self.underside_forward)
                 local_up = agent.me.local(self.underside_up)
                 defaultPD(agent, local_forward, up=local_up)
