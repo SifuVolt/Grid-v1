@@ -4143,6 +4143,48 @@ class jump_shot:
         self.wall_shot_normal = None
         self.contact_face_label = None
         self.approach = DubinsShotApproach()
+        # Learn the car's actual local air-control response from consecutive
+        # packets, so predicted contact orientation includes the yaw/roll
+        # commands this routine is applying instead of assuming zero torque.
+        self._last_air_control_time = -1.0
+        self._last_air_omega = None
+        self._last_air_control = (0.0, 0.0, 0.0)  # roll, pitch, yaw
+        self._air_control_accel = [0.0, 0.0, 0.0]
+        self._last_air_prediction_debug = -1.0
+
+    def _set_jump_shot_orientation(self, agent):
+        local_shot_direction = agent.me.local(
+            self.shot_vector.flatten().normalize()
+        )
+        if local_shot_direction.flatten().magnitude() < 0.001:
+            local_shot_direction = agent.me.local(
+                self.ball_location - agent.me.location
+            ).flatten()
+
+        defaultPD(agent, local_shot_direction.flatten())
+
+        ball_is_airborne = self.ball_location.z > 130
+        ball_is_above_car = self.ball_location.z > agent.me.location.z + 65
+        hold_s = (
+            ball_is_airborne
+            and ball_is_above_car
+            and not self.quick_shot
+        )
+
+        if hold_s:
+            agent.controller.pitch = 1
+            yaw_command = agent.controller.yaw
+            if abs(yaw_command) > 0.08:
+                agent.controller.roll = -0.20 * sign(yaw_command)
+            else:
+                agent.controller.roll = 0
+
+        controls = (
+            agent.controller.roll,
+            agent.controller.pitch,
+            agent.controller.yaw
+        )
+        return local_shot_direction, hold_s, controls
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -4416,20 +4458,97 @@ class jump_shot:
                     max(T, 0.0) if self.jumping else 0.0,
                     0.18
                 )
-                try:
-                    raw_physics = agent.me.get_raw(agent).physics
-                    angular = raw_physics.angular_velocity
-                    omega = Vector(angular.x, angular.y, angular.z)
-                    angular_speed = omega.magnitude()
-                except (AttributeError, TypeError):
-                    omega = Vector()
-                    angular_speed = 0.0
+
+                # Predict the same A/D yaw and Q/E counter-roll commands
+                # that the jump controller will apply later in this tick.
+                # The per-axis angular acceleration is learned from the
+                # car's measured response over previous packets.
+                planned_controls = (0.0, 0.0, 0.0)
+                local_omega = agent.me.angular_velocity
+                omega_values = (
+                    local_omega.x, local_omega.y, local_omega.z
+                )
+                if self.jumping and agent.me.airborne and self.counter < 3:
+                    _, _, planned_controls = (
+                        self._set_jump_shot_orientation(agent)
+                    )
+
+                    if (
+                        self._last_air_omega is not None
+                        and self._last_air_control_time >= 0
+                    ):
+                        observed_dt = (
+                            agent.time - self._last_air_control_time
+                        )
+                        if 0.0001 < observed_dt <= 0.08:
+                            for axis_index in range(3):
+                                previous_input = self._last_air_control[
+                                    axis_index
+                                ]
+                                if abs(previous_input) <= 0.20:
+                                    continue
+                                observed_accel = (
+                                    omega_values[axis_index]
+                                    - self._last_air_omega[axis_index]
+                                ) / (observed_dt * previous_input)
+                                if 0.25 <= observed_accel <= 30.0:
+                                    previous_estimate = (
+                                        self._air_control_accel[axis_index]
+                                    )
+                                    self._air_control_accel[axis_index] = (
+                                        observed_accel
+                                        if previous_estimate <= 0
+                                        else previous_estimate * 0.75
+                                        + observed_accel * 0.25
+                                    )
+
+                    self._last_air_omega = tuple(omega_values)
+                    self._last_air_control = planned_controls
+                    self._last_air_control_time = agent.time
+
+                    if (
+                        self._last_air_prediction_debug < 0
+                        or agent.time - self._last_air_prediction_debug >= 0.30
+                    ):
+                        self._last_air_prediction_debug = agent.time
+                        print(
+                            f"[JUMP SHOT PREDICT] yaw={planned_controls[2]:.2f} "
+                            f"roll={planned_controls[0]:.2f} "
+                            f"alpha_yaw={self._air_control_accel[2]:.1f} "
+                            f"alpha_roll={self._air_control_accel[0]:.1f} "
+                            f"horizon={orientation_horizon:.3f}",
+                            flush=True
+                        )
+
+                # car_object.angular_velocity is car-local. Convert it to
+                # world space, then add the learned control acceleration
+                # projected along the current local roll/pitch/yaw axes.
+                omega = (
+                    agent.me.forward * local_omega.x
+                    + agent.me.right * local_omega.y
+                    + agent.me.up * local_omega.z
+                )
+                roll_accel, pitch_accel, yaw_accel = (
+                    self._air_control_accel
+                )
+                roll_input, pitch_input, yaw_input = planned_controls
+                control_acceleration = (
+                    agent.me.forward * (roll_accel * roll_input)
+                    + agent.me.right * (pitch_accel * pitch_input)
+                    + agent.me.up * (yaw_accel * yaw_input)
+                )
+                rotation_vector = (
+                    omega * orientation_horizon
+                    + control_acceleration
+                    * (0.5 * orientation_horizon ** 2)
+                )
+                angle = rotation_vector.magnitude()
 
                 impact_forward = car_forward
                 impact_up = car_up
-                if angular_speed > 0.05 and orientation_horizon > 0:
-                    axis = omega / angular_speed
-                    angle = min(angular_speed * orientation_horizon, 0.65)
+                if angle > 0.001 and orientation_horizon > 0:
+                    angle = min(angle, 0.65)
+                    axis = rotation_vector.normalize()
                     cosine = math.cos(angle)
                     sine = math.sin(angle)
                     impact_forward = (
@@ -4808,39 +4927,9 @@ class jump_shot:
                 # already built from the hitbox-aware centre contact, so this
                 # keeps the car behind that contact line without flattening
                 # the nose-up pitch that creates the power shot.
-                local_shot_direction = agent.me.local(
-                    self.shot_vector.flatten().normalize()
+                local_shot_direction, hold_s, _ = (
+                    self._set_jump_shot_orientation(agent)
                 )
-                if local_shot_direction.flatten().magnitude() < 0.001:
-                    local_shot_direction = agent.me.local(
-                        self.ball_location - agent.me.location
-                    ).flatten()
-
-                defaultPD(agent, local_shot_direction.flatten())
-
-                ball_is_airborne = self.ball_location.z > 130
-                ball_is_above_car = self.ball_location.z > agent.me.location.z + 65
-                hold_s = (
-                    ball_is_airborne
-                    and ball_is_above_car
-                    and not self.quick_shot
-                )
-
-                if hold_s:
-                    # Override pitch to preserve the power-shot nose-up
-                    # posture, while keeping defaultPD's goal-directed yaw.
-                    agent.controller.pitch = 1
-
-                    # Add a very small counter-direction air roll during
-                    # lateral steering: left yaw (A) gets right roll (E),
-                    # right yaw (D) gets left roll (Q). Read the actual PD
-                    # yaw command so the pairing follows the controller's
-                    # real correction direction, not a guessed world axis.
-                    yaw_command = agent.controller.yaw
-                    if abs(yaw_command) > 0.08:
-                        agent.controller.roll = -0.20 * sign(yaw_command)
-                    else:
-                        agent.controller.roll = 0
 
                 if not self._orientation_logged:
                     print(
