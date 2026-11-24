@@ -5088,6 +5088,7 @@ class ground_shot:
         self.contact_approach_target = None
         self.contact_normal = None
         self.contact_label = None
+        self.approach = DubinsShotApproach()
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -5182,25 +5183,52 @@ class ground_shot:
 
         l_ball = agent.me.local(agent.ball.location)
         car_to_ball = agent.ball.location - agent.me.location
+        drive_target = self.offset_target.copy().flatten()
+        drive_distance_remaining = drive_target.flat_dist(agent.me.location)
+        approach_samples = ()
+
         if abs(l_ball.y) < 92.75 + agent.me.hitbox.width / 2 and abs(l_ball.z) < 92.75 + agent.me.hitbox.height / 2:
-            final_target = agent.ball.location - (self.shot_vector * agent.best_shot_value)
-            distance_remaining = final_target.flat_dist(agent.me.location) - agent.me.hitbox.length / 3
+            drive_target = (
+                agent.ball.location
+                - (self.shot_vector * agent.best_shot_value)
+            )
+            distance_remaining = (
+                drive_target.flat_dist(agent.me.location)
+                - agent.me.hitbox.length / 3
+            )
+            drive_distance_remaining = distance_remaining
             speed_required = 2300
             agent.dbg_2d(f"Max speed")
         else:
-            # Some adjustment to the final target to ensure it's inside the field and we don't try to drive through any goalposts or walls to reach it
-            final_target = self.offset_target.copy().flatten()
-
+            # The Dubins route ends at the existing hitbox-aware standoff,
+            # with the car's nose aligned to the planned shot direction.
             if self.targets is not None:
-                # whether we are to the left or right of the shot vector
-                # Choose a flank route only when our current approach is poorly
-                # aligned. This offset fades away before the jump/contact.
-                final_target = _shot_approach_target(
-                    agent, self.ball_location, final_target, self.shot_vector, T
+                route = self.approach.update(
+                    agent, drive_target, self.shot_vector, T
                 )
+                if route is not None:
+                    (
+                        drive_target,
+                        drive_distance_remaining,
+                        approach_samples
+                    ) = route
+                else:
+                    drive_target = _shot_approach_target(
+                        agent, self.ball_location, drive_target,
+                        self.shot_vector, T
+                    )
+                    drive_distance_remaining = drive_target.flat_dist(
+                        agent.me.location
+                    )
 
-            distance_remaining = final_target.flat_dist(agent.me.location) - agent.me.hitbox.length / 3
-            speed_required = distance_remaining / time_remaining
+            distance_remaining = (
+                self.offset_target.flat_dist(agent.me.location)
+                - agent.me.hitbox.length / 3
+            )
+            speed_required = (
+                max(distance_remaining, drive_distance_remaining)
+                / time_remaining
+            )
             agent.dbg_2d(f"Speed required: {speed_required}")
 
             ball_speed_toward_shot = agent.ball.velocity.dot(self.shot_vector)
@@ -5210,15 +5238,16 @@ class ground_shot:
                 and agent.me.boost > 50
                 and T > 2
                 and distance_remaining > 2560
-                and ball_speed_toward_shot > 1000    
+                and ball_speed_toward_shot > 1000
             ):
                 agent.dbg_2d(
                     f"Building speed | Ball speed toward shot: {round(ball_speed_toward_shot)}"
                 )
                 speed_required *= 0.75
 
-        # Some adjustment to the final target to ensure it's inside the field and we don't try to drive through any goalposts or walls to reach it (again)
-        final_target = cap_in_field(agent, final_target)
+        # Keep steering on the next sampled path point, not the final contact
+        # target. Contact, viability and dodge checks continue using standoff.
+        final_target = cap_in_field(agent, drive_target)
         local_final_target = agent.me.local_location(final_target)
 
         # the angle to the final target, in radians
@@ -5231,12 +5260,16 @@ class ground_shot:
         agent.line(agent.me.location, self.offset_target, agent.renderer.white)
         agent.line(self.offset_target-Vector(z=100), self.offset_target+Vector(z=100), agent.renderer.green)
         agent.line(final_target-Vector(z=100), final_target+Vector(z=100), agent.renderer.purple)
+        if approach_samples:
+            agent.polyline(
+                [Vector(point[0], point[1], 25) for point in approach_samples]
+            )
 
         velocity = defaultDrive(agent, speed_required * direction, local_final_target)[1]
         if velocity == 0: velocity = 1
 
         local_offset_target = agent.me.local_location(self.offset_target.flatten())
-        time = distance_remaining / (velocity + dodge_impulse(agent))
+        time = drive_distance_remaining / (velocity + dodge_impulse(agent))
 
         vf = agent.me.velocity + agent.gravity * T
         local_vf = agent.me.local(vf.flatten())
@@ -5245,7 +5278,7 @@ class ground_shot:
             agent.push(flip(agent.me.local_location(self.offset_target), cancel=angle_to_target > 2))
         elif agent.me.airborne:
             agent.push(recovery(final_target if T > 0.5 else None))
-        elif T <= 0 or (T > 0.35 and distance_remaining > 50 and not virxrlcu.ground_shot_is_viable(T, agent.boost_accel, agent.me.get_raw(agent), self.offset_target.z, tuple((final_target - agent.me.location).normalize()), distance_remaining)):
+        elif T <= 0 or (T > 0.35 and distance_remaining > 50 and not virxrlcu.ground_shot_is_viable(T, agent.boost_accel, agent.me.get_raw(agent), self.offset_target.z, tuple((self.offset_target - agent.me.location).normalize()), distance_remaining)):
             # If we're out of time or not fast enough, we pop
             agent.pop()
             agent.shooting = False
