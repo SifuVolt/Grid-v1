@@ -1,4 +1,6 @@
 """
+Copyright (c) 2023 Eric Veilleux. MIT licensed.
+
 Dubins path planner adapted from VirxEC/dubins_paths (Rust).
 
 The planner connects a car's current 2D position/heading to a target
