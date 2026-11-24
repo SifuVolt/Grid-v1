@@ -1670,8 +1670,14 @@ class Aerial:
             else 1.0
         )
 
+        # This redirect must approach from BELOW the ball. If the car's
+        # centre is already above the ball's centre, the front underside
+        # cannot make the intended lower-surface contact.
+        car_below_ball = agent.me.location.z < self.ball.z
+
         underside_redirect_eligible = (
-            not defensive_clear
+            car_below_ball
+            and not defensive_clear
             and not backboard_mode
             and not self.ceiling
             and not self.wall_shot_active
@@ -1682,11 +1688,12 @@ class Aerial:
             # approaches too, not only a perfectly backwards car.
             and facing_goal_dot < 0.25
         )
-        # Lock the redirect once selected. Turning toward goal is part of the
-        # maneuver, so re-testing the original facing direction every frame
-        # would otherwise cancel it halfway through the aerial.
+        # Keep the selected mode only while the car remains below the ball.
+        # Turning toward goal is part of the maneuver, but climbing above the
+        # ball invalidates this particular contact geometry.
         self.underside_mode = (
-            self.underside_mode or underside_redirect_eligible
+            car_below_ball
+            and (self.underside_mode or underside_redirect_eligible)
         )
 
         if self.underside_mode:
@@ -1727,7 +1734,9 @@ class Aerial:
             print(
                 f"[AERIAL UNDERSIDE CHECK] facing_goal_dot={facing_goal_dot:.2f} "
                 f"airborne={agent.me.airborne} T={T:.2f} "
-                f"ball_z={self.ball.z:.0f} defensive={defensive_clear} "
+                f"car_z={agent.me.location.z:.0f} "
+                f"ball_z={self.ball.z:.0f} below_ball={car_below_ball} "
+                f"defensive={defensive_clear} "
                 f"backboard={backboard_mode} wall={self.wall_shot_active} "
                 f"ceiling={self.ceiling}",
                 flush=True
