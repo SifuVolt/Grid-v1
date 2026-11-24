@@ -4152,6 +4152,69 @@ class jump_shot:
         self._air_control_accel = [0.0, 0.0, 0.0]
         self._last_air_prediction_debug = -1.0
 
+    def _predict_air_orientation(self, agent, horizon, controls):
+        """Integrate Rocket League's measured aerial-control model at 120 Hz."""
+        forward = agent.me.forward.normalize()
+        up = agent.me.up.normalize()
+        right = up.cross(forward).normalize()
+        up = forward.cross(right).normalize()
+
+        local_omega = agent.me.angular_velocity
+        omega = (
+            forward * local_omega.x
+            + right * local_omega.y
+            + up * local_omega.z
+        )
+        roll, pitch, yaw = controls
+        torque = (-36.07956616966136, -12.14599781908070, 8.91962804287785)
+        damping = (-4.47166302201591, -2.798194258050845, -1.886491900437232)
+        steps = max(0, int(math.ceil(max(0.0, horizon) / dt)))
+        step_dt = max(0.0, horizon) / steps if steps else 0.0
+
+        for _ in range(steps):
+            local = Vector(
+                omega.dot(forward),
+                omega.dot(right),
+                omega.dot(up)
+            )
+            local_acceleration = Vector(
+                torque[0] * roll + damping[0] * local.x,
+                torque[1] * pitch + damping[1] * (1 - abs(pitch)) * local.y,
+                torque[2] * yaw + damping[2] * (1 - abs(yaw)) * local.z
+            )
+            world_acceleration = (
+                forward * local_acceleration.x
+                + right * local_acceleration.y
+                + up * local_acceleration.z
+            )
+            next_omega = omega + world_acceleration * step_dt
+            next_speed = next_omega.magnitude()
+            if next_speed > 5.5:
+                next_omega *= 5.5 / next_speed
+
+            average_omega = (omega + next_omega) * 0.5
+            angle = average_omega.magnitude() * step_dt
+            if angle > 0.000001:
+                axis = average_omega.normalize()
+                cosine = math.cos(angle)
+                sine = math.sin(angle)
+                one_minus_cosine = 1 - cosine
+                forward = (
+                    forward * cosine
+                    + axis.cross(forward) * sine
+                    + axis * (axis.dot(forward) * one_minus_cosine)
+                ).normalize()
+                up = (
+                    up * cosine
+                    + axis.cross(up) * sine
+                    + axis * (axis.dot(up) * one_minus_cosine)
+                ).normalize()
+                right = up.cross(forward).normalize()
+                up = forward.cross(right).normalize()
+            omega = next_omega
+
+        return forward, right, up
+
     def _set_jump_shot_orientation(self, agent):
         local_shot_direction = agent.me.local(
             self.shot_vector.flatten().normalize()
@@ -4451,117 +4514,31 @@ class jump_shot:
             ):
                 car_up = car_right.cross(car_forward).normalize()
 
-                # Extrapolate only a short impact window. Long angular
-                # predictions become unreliable because jump-shot PD is
-                # actively changing yaw and pitch.
-                orientation_horizon = min(
-                    max(T, 0.0) if self.jumping else 0.0,
-                    0.18
-                )
-
-                # Predict the same A/D yaw and Q/E counter-roll commands
-                # that the jump controller will apply later in this tick.
-                # The per-axis angular acceleration is learned from the
-                # car's measured response over previous packets.
+                # Predict the controller's actual jump-shot rotation with
+                # Rocket League's torque/damping model, not a constant-alpha
+                # approximation. The model is stepped at the game's 120 Hz.
+                orientation_horizon = min(max(T, 0.0), 0.30) if self.jumping else 0.0
                 planned_controls = (0.0, 0.0, 0.0)
-                local_omega = agent.me.angular_velocity
-                omega_values = (
-                    local_omega.x, local_omega.y, local_omega.z
-                )
                 if self.jumping and agent.me.airborne and self.counter < 3:
-                    _, _, planned_controls = (
-                        self._set_jump_shot_orientation(agent)
+                    _, _, planned_controls = self._set_jump_shot_orientation(agent)
+                impact_forward, impact_right, impact_up = (
+                    self._predict_air_orientation(
+                        agent, orientation_horizon, planned_controls
                     )
-
-                    if (
-                        self._last_air_omega is not None
-                        and self._last_air_control_time >= 0
-                    ):
-                        observed_dt = (
-                            agent.time - self._last_air_control_time
-                        )
-                        if 0.0001 < observed_dt <= 0.08:
-                            for axis_index in range(3):
-                                previous_input = self._last_air_control[
-                                    axis_index
-                                ]
-                                if abs(previous_input) <= 0.20:
-                                    continue
-                                observed_accel = (
-                                    omega_values[axis_index]
-                                    - self._last_air_omega[axis_index]
-                                ) / (observed_dt * previous_input)
-                                if 0.25 <= observed_accel <= 30.0:
-                                    previous_estimate = (
-                                        self._air_control_accel[axis_index]
-                                    )
-                                    self._air_control_accel[axis_index] = (
-                                        observed_accel
-                                        if previous_estimate <= 0
-                                        else previous_estimate * 0.75
-                                        + observed_accel * 0.25
-                                    )
-
-                    self._last_air_omega = tuple(omega_values)
-                    self._last_air_control = planned_controls
-                    self._last_air_control_time = agent.time
-
-                    if (
-                        self._last_air_prediction_debug < 0
-                        or agent.time - self._last_air_prediction_debug >= 0.30
-                    ):
-                        self._last_air_prediction_debug = agent.time
-                        print(
-                            f"[JUMP SHOT PREDICT] yaw={planned_controls[2]:.2f} "
-                            f"roll={planned_controls[0]:.2f} "
-                            f"alpha_yaw={self._air_control_accel[2]:.1f} "
-                            f"alpha_roll={self._air_control_accel[0]:.1f} "
-                            f"horizon={orientation_horizon:.3f}",
-                            flush=True
-                        )
-
-                # car_object.angular_velocity is car-local. Convert it to
-                # world space, then add the learned control acceleration
-                # projected along the current local roll/pitch/yaw axes.
-                omega = (
-                    agent.me.forward * local_omega.x
-                    + agent.me.right * local_omega.y
-                    + agent.me.up * local_omega.z
                 )
-                roll_accel, pitch_accel, yaw_accel = (
-                    self._air_control_accel
-                )
-                roll_input, pitch_input, yaw_input = planned_controls
-                control_acceleration = (
-                    agent.me.forward * (roll_accel * roll_input)
-                    + agent.me.right * (pitch_accel * pitch_input)
-                    + agent.me.up * (yaw_accel * yaw_input)
-                )
-                rotation_vector = (
-                    omega * orientation_horizon
-                    + control_acceleration
-                    * (0.5 * orientation_horizon ** 2)
-                )
-                angle = rotation_vector.magnitude()
 
-                impact_forward = car_forward
-                impact_up = car_up
-                if angle > 0.001 and orientation_horizon > 0:
-                    angle = min(angle, 0.65)
-                    axis = rotation_vector.normalize()
-                    cosine = math.cos(angle)
-                    sine = math.sin(angle)
-                    impact_forward = (
-                        car_forward * cosine
-                        + axis.cross(car_forward) * sine
-                        + axis * (axis.dot(car_forward) * (1 - cosine))
-                    ).normalize()
-                    impact_up = (
-                        car_up * cosine
-                        + axis.cross(car_up) * sine
-                        + axis * (axis.dot(car_up) * (1 - cosine))
-                    ).normalize()
-
+                if (
+                    self._last_air_prediction_debug < 0
+                    or agent.time - self._last_air_prediction_debug >= 0.30
+                ):
+                    self._last_air_prediction_debug = agent.time
+                    print(
+                        f"[JUMP SHOT PHYSICS] yaw={planned_controls[2]:.2f} "
+                        f"roll={planned_controls[0]:.2f} "
+                        f"pitch={planned_controls[1]:.2f} "
+                        f"horizon={orientation_horizon:.3f}",
+                        flush=True
+                    )
                 # RLBot's local +Y axis is car-right (up cross forward).
                 # Keep candidate labels consistent with the hitbox's local
                 # coordinate convention.
