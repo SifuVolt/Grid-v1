@@ -4357,16 +4357,12 @@ class jump_shot:
                 )
             self.contact_approach_target = self.offset_target.copy()
 
-        # Choose an actual point on the front hitbox instead of always
-        # aiming the centre of the nose at the ball.
-        #
-        # Predict a short-horizon impact frame from the car's current angular
-        # velocity, then score several front-face candidates against the
-        # intended outgoing ball direction. The selected point is converted
-        # back into a car-centre target, so the approach and jump still use
-        # the existing controller and timing.
-        contact_face_label = "centre"
-        contact_face_score = -1.0
+        # Keep the original Party Cannon front-of-hitbox contact geometry.
+        # A/D yaw and Q/E air-roll can rotate that front point during the
+        # jump, so predict the short-horizon orientation and compensate the
+        # car-centre target. Do not select alternate points on the front face.
+        contact_face_label = "front_midpoint"
+        contact_face_score = 0.0
         contact_face_alignment = 0.0
         if not self.side_mode and not self.wall_shot_active:
             shot_forward = self.shot_vector.flatten().normalize()
@@ -4380,36 +4376,25 @@ class jump_shot:
                 and car_up.magnitude() > 0.001
                 and car_right.magnitude() > 0.001
             ):
-                car_up = car_right.cross(car_forward).normalize()
-
-                # Predict the controller's actual jump-shot rotation with
-                # Rocket League's torque/damping model, not a constant-alpha
-                # approximation. The model is stepped at the game's 120 Hz.
-                orientation_horizon = min(max(T, 0.0), 0.30) if self.jumping else 0.0
+                # _set_jump_shot_orientation supplies the same S-tilt,
+                # A/D yaw and Q/E roll commands used by the live controller.
+                # This prediction is refreshed every packet, so changes in
+                # the live A/D and air-roll commands feed back into the
+                # contact correction instead of being permanently selected.
+                orientation_horizon = (
+                    min(max(T, 0.0), 0.30) if self.jumping else 0.0
+                )
                 planned_controls = (0.0, 0.0, 0.0)
                 if self.jumping and agent.me.airborne and self.counter < 3:
-                    _, _, planned_controls = self._set_jump_shot_orientation(agent)
+                    _, _, planned_controls = (
+                        self._set_jump_shot_orientation(agent)
+                    )
+
                 impact_forward, impact_right, impact_up = (
                     self._predict_air_orientation(
                         agent, orientation_horizon, planned_controls
                     )
                 )
-
-                if (
-                    self._last_air_prediction_debug < 0
-                    or agent.time - self._last_air_prediction_debug >= 0.30
-                ):
-                    self._last_air_prediction_debug = agent.time
-                    print(
-                        f"[JUMP SHOT PHYSICS] yaw={planned_controls[2]:.2f} "
-                        f"roll={planned_controls[0]:.2f} "
-                        f"pitch={planned_controls[1]:.2f} "
-                        f"horizon={orientation_horizon:.3f}",
-                        flush=True
-                    )
-                # RLBot's local +Y axis is car-right (up cross forward).
-                # Keep candidate labels consistent with the hitbox's local
-                # coordinate convention.
                 impact_right = impact_up.cross(impact_forward).normalize()
                 impact_up = impact_forward.cross(impact_right).normalize()
 
@@ -4420,12 +4405,7 @@ class jump_shot:
                 half_width = float(
                     getattr(hitbox, "width", 84.2)
                 ) * 0.5
-                half_height = float(
-                    getattr(hitbox, "height", 36.16)
-                ) * 0.5
 
-                # Preserve the hitbox-centre offset used by the existing
-                # Party Cannon hitbox target calculation.
                 local_offset = getattr(agent.me, "hitbox_offset", None)
                 if local_offset is None:
                     local_offset = getattr(hitbox, "offset", None)
@@ -4437,98 +4417,56 @@ class jump_shot:
                         + impact_up * float(getattr(local_offset, "z", 0.0))
                     )
 
-                # Lateral offsets use RLBot's local +Y (car-right) axis.
-                candidates = [
-                    ("centre", 0.0, 0.0),
-                    ("top_left", -half_width * 0.82, half_height * 0.82),
-                    ("top_right", half_width * 0.82, half_height * 0.82),
-                    ("left", -half_width * 0.88, 0.0),
-                    ("right", half_width * 0.88, 0.0),
-                    ("top", 0.0, half_height * 0.88),
-                    ("bottom", 0.0, -half_height * 0.70),
-                ]
+                # The midpoint of the two front corners is the original
+                # front-nose contact point: their +/- width offsets cancel.
+                front_left = (
+                    impact_forward * half_length
+                    - impact_right * half_width
+                    + world_hitbox_offset
+                )
+                front_right = (
+                    impact_forward * half_length
+                    + impact_right * half_width
+                    + world_hitbox_offset
+                )
+                front_midpoint_offset = (front_left + front_right) * 0.5
 
-                impact_horizon = min(max(T, 0.0), 0.30)
-                predicted_car = (
-                    agent.me.location
-                    + agent.me.velocity * impact_horizon
-                    + agent.gravity * (0.5 * impact_horizon * impact_horizon)
+                # Grounded-ball shots retain the centre-line surface contact.
+                # For an airborne ball, use a point slightly below centre on
+                # the lower-middle surface, while keeping the same nose point.
+                if self.ball_location.z > 130:
+                    surface_normal = (
+                        -shot_forward + Vector(z=-0.35)
+                    ).normalize()
+                else:
+                    surface_normal = -shot_forward
+                desired_ball_contact = (
+                    self.ball_location + surface_normal * 92.75
                 )
 
-                scored_candidates = []
-                for label, lateral_offset, vertical_offset in candidates:
-                    front_point_offset = (
-                        impact_forward * half_length
-                        + impact_right * lateral_offset
-                        + impact_up * vertical_offset
-                        + world_hitbox_offset
-                    )
-                    predicted_contact_point = (
-                        predicted_car + front_point_offset
-                    )
-                    incoming_normal = (
-                        self.ball_location - predicted_contact_point
-                    ).normalize()
+                # Required car origin = desired ball surface point minus
+                # the predicted front-nose midpoint in world coordinates.
+                self.offset_target = (
+                    desired_ball_contact - front_midpoint_offset
+                )
+                self.contact_approach_target = self.offset_target.copy()
+                self.contact_point = desired_ball_contact.copy()
+                self.contact_face_label = contact_face_label
+                contact_face_score = surface_normal.dot(-shot_forward)
+                contact_face_alignment = impact_forward.dot(shot_forward)
 
-                    if incoming_normal.magnitude() < 0.001:
-                        continue
-
-                    shot_alignment = incoming_normal.dot(shot_forward)
-                    front_alignment = incoming_normal.dot(impact_forward)
-                    required_car_centre = (
-                        self.ball_location
-                        - shot_forward * 92.75
-                        - front_point_offset
-                    )
-                    reach_cost = required_car_centre.dist(predicted_car)
-                    score = (
-                        shot_alignment
-                        + max(-1.0, min(1.0, front_alignment)) * 0.12
-                        - reach_cost * 0.00020
-                    )
-                    scored_candidates.append((
-                        score, label, required_car_centre, shot_alignment
-                    ))
-
-                if scored_candidates:
-                    scored_candidates.sort(
-                        key=lambda candidate: candidate[0],
-                        reverse=True
-                    )
-                    selected = scored_candidates[0]
-
-                    # Keep the previous face choice when it remains close
-                    # to the best candidate, preventing frame-to-frame
-                    # switching between neighbouring front-face points.
-                    previous_label = getattr(
-                        self, "contact_face_label", None
-                    )
-                    if previous_label is not None:
-                        previous = next(
-                            (
-                                candidate for candidate in scored_candidates
-                                if candidate[1] == previous_label
-                            ),
-                            None
-                        )
-                        if (
-                            previous is not None
-                            and previous[0] >= selected[0] - 0.06
-                        ):
-                            selected = previous
-
-                    (
-                        contact_face_score,
-                        contact_face_label,
-                        selected_target,
-                        contact_face_alignment
-                    ) = selected
-
-                    self.contact_face_label = contact_face_label
-                    self.offset_target = selected_target
-                    self.contact_approach_target = selected_target.copy()
-                    self.contact_point = (
-                        self.ball_location - shot_forward * 92.75
+                if (
+                    self._last_air_prediction_debug < 0
+                    or agent.time - self._last_air_prediction_debug >= 0.30
+                ):
+                    self._last_air_prediction_debug = agent.time
+                    print(
+                        f"[JUMP SHOT PHYSICS] yaw={planned_controls[2]:.2f} "
+                        f"roll={planned_controls[0]:.2f} "
+                        f"pitch={planned_controls[1]:.2f} "
+                        f"horizon={orientation_horizon:.3f} "
+                        f"nose_delta={front_midpoint_offset}",
+                        flush=True
                     )
 
         print(
