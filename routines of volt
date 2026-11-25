@@ -1,9 +1,8 @@
 import virxrlcu
 from util.agent import VirxERLU
 from util.utils import (Vector, almost_equals, cap, cap_in_field, defaultDrive,
-                        defaultPD, defaultThrottle, in_field, lerp, math,
-                        peek_generator, side, sign, dodge_impulse, turn_radius)
-from util.dubins import DubinsPath
+                        defaultPD, defaultThrottle, lerp, math,
+                        peek_generator, side, sign, dodge_impulse)
 import random
 from util.grid_double_jump import new_jump_time, new_max_jump_height
 
@@ -137,129 +136,6 @@ def _shot_approach_target(agent, ball_location, offset_target, shot_vector, time
         return final_target
 
     return final_target + lateral * (car_side * radius)
-
-
-class DubinsShotApproach:
-    """
-    Stateful ground-shot path follower.
-
-    The route connects the car's current position/heading to the hitbox-aware
-    contact standoff, ending with the car pointed along the outgoing shot.
-    Candidate paths are sampled and rejected if they leave the playable field.
-    """
-
-    def __init__(self):
-        self.path = None
-        self.samples = ()
-        self.last_plan_time = -1.0
-        self.last_target = None
-        self.last_heading = None
-        self.last_radius = 0.0
-        self.last_debug_time = -1.0
-
-    @staticmethod
-    def _angle_difference(a, b):
-        return (a - b + math.pi) % (2 * math.pi) - math.pi
-
-    def update(self, agent, target, shot_vector, time_left):
-        car = agent.me
-        if car.airborne or time_left <= 0.30:
-            return None
-
-        shot_direction = shot_vector.copy().flatten().normalize()
-        forward = car.forward.copy().flatten().normalize()
-        if shot_direction.magnitude() < 0.001 or forward.magnitude() < 0.001:
-            return None
-
-        start_heading = math.atan2(forward.y, forward.x)
-        end_heading = math.atan2(shot_direction.y, shot_direction.x)
-        local_speed = abs(car.local_velocity().x)
-
-        try:
-            radius = turn_radius(local_speed)
-        except ZeroDivisionError:
-            radius = 0.0
-        if not math.isfinite(radius) or radius <= 0.0:
-            radius = 145.0
-        radius = cap(radius, 145.0, 700.0)
-
-        target_changed = (
-            self.last_target is None
-            or self.last_target.flat_dist(target) > 100.0
-        )
-        heading_changed = (
-            self.last_heading is None
-            or abs(self._angle_difference(end_heading, self.last_heading)) > 0.12
-        )
-        radius_changed = abs(radius - self.last_radius) > max(
-            35.0, self.last_radius * 0.15
-        )
-        off_path = False
-        if self.path is not None and self.samples:
-            nearest = min(
-                math.hypot(point[0] - car.location.x,
-                           point[1] - car.location.y)
-                for point in self.samples
-            )
-            off_path = nearest > 420.0
-
-        replan = (
-            self.path is None
-            or target_changed
-            or heading_changed
-            or radius_changed
-            or off_path
-            or agent.time - self.last_plan_time >= 0.20
-        )
-
-        if replan:
-            start = (car.location.x, car.location.y, start_heading)
-            end = (target.x, target.y, end_heading)
-
-            def stays_in_field(x, y):
-                return in_field(Vector(x, y, 0), 145.0)
-
-            self.path = DubinsPath.shortest_valid(
-                start, end, radius,
-                validator=stays_in_field,
-                sample_step=160.0
-            )
-            self.last_plan_time = agent.time
-            self.last_target = target.copy()
-            self.last_heading = end_heading
-            self.last_radius = radius
-
-            if self.path is None:
-                self.samples = ()
-                print(
-                    f"[DUBINS APPROACH] no field-safe path "
-                    f"start=({car.location.x:.0f},{car.location.y:.0f}) "
-                    f"target=({target.x:.0f},{target.y:.0f})",
-                    flush=True
-                )
-                return None
-
-            self.samples = tuple(self.path.sample_many(160.0))
-
-        speed = car.velocity.flatten().magnitude()
-        lookahead = cap(240.0 + speed * 0.16, 240.0, 520.0)
-        waypoint = self.path.sample(min(lookahead, self.path.length))
-        drive_target = Vector(waypoint[0], waypoint[1], target.z)
-
-        if (
-            self.last_debug_time < 0
-            or agent.time - self.last_debug_time >= 0.35
-        ):
-            self.last_debug_time = agent.time
-            print(
-                f"[DUBINS APPROACH] type={self.path.path_type} "
-                f"path={self.path.length:.0f} radius={radius:.0f} "
-                f"lookahead={lookahead:.0f} "
-                f"waypoint=({drive_target.x:.0f},{drive_target.y:.0f})",
-                flush=True
-            )
-
-        return drive_target, self.path.length, self.samples
 
 
 class wave_dash:
@@ -4142,7 +4018,6 @@ class jump_shot:
         self.wall_shot_active = False
         self.wall_shot_normal = None
         self.contact_face_label = None
-        self.approach = DubinsShotApproach()
         self._last_air_prediction_debug = -1.0
 
     def _predict_air_orientation(self, agent, horizon, controls):
@@ -4673,33 +4548,19 @@ class jump_shot:
         final_target = self.offset_target.copy().flatten()
         drive_target = final_target.copy()
         drive_distance_remaining = drive_target.flat_dist(agent.me.location)
-        approach_samples = ()
         Tj = T - self.needed_jump_time * 1.15
         agent.dbg_2d(f"Needed jump time: {round(self.needed_jump_time, 2)}")
 
         if Tj > 0 and self.targets is not None and not self.side_mode:
-            # Plan a curved route from the car's current pose to the
-            # hitbox-aware standoff, arriving pointed along the shot vector.
-            # If every Dubins candidate leaves the field, retain the existing
-            # flank-target fallback instead of steering through a wall.
-            route = self.approach.update(
-                agent, final_target, self.shot_vector, Tj
+            drive_target = _shot_approach_target(
+                agent, self.ball_location, final_target,
+                self.shot_vector, Tj
             )
-            if route is not None:
-                drive_target, drive_distance_remaining, approach_samples = route
-            else:
-                drive_target = _shot_approach_target(
-                    agent, self.ball_location, final_target,
-                    self.shot_vector, Tj
-                )
-                drive_distance_remaining = drive_target.flat_dist(
-                    agent.me.location
-                )
+            drive_distance_remaining = drive_target.flat_dist(
+                agent.me.location
+            )
 
         distance_remaining = final_target.flat_dist(agent.me.location)
-
-        # Keep the actual contact standoff for jump timing; only the steering
-        # target follows the Dubins route's current lookahead waypoint.
         drive_target = cap_in_field(agent, drive_target)
         local_final_target = agent.me.local_location(drive_target)
 
@@ -4711,11 +4572,6 @@ class jump_shot:
         agent.line(agent.me.location, self.offset_target, agent.renderer.white)
         agent.line(self.offset_target-Vector(z=100), self.offset_target+Vector(z=100), agent.renderer.green)
         agent.line(drive_target-Vector(z=100), drive_target+Vector(z=100), agent.renderer.purple)
-        if approach_samples:
-            agent.polyline(
-                [Vector(point[0], point[1], 25) for point in approach_samples],
-            )
-
         vf = agent.me.velocity + agent.gravity * T
 
         distance_remaining = agent.me.local_location(self.offset_target).x if agent.me.airborne else distance_remaining
@@ -5058,7 +4914,6 @@ class ground_shot:
         self.contact_approach_target = None
         self.contact_normal = None
         self.contact_label = None
-        self.approach = DubinsShotApproach()
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -5155,8 +5010,6 @@ class ground_shot:
         car_to_ball = agent.ball.location - agent.me.location
         drive_target = self.offset_target.copy().flatten()
         drive_distance_remaining = drive_target.flat_dist(agent.me.location)
-        approach_samples = ()
-
         if abs(l_ball.y) < 92.75 + agent.me.hitbox.width / 2 and abs(l_ball.z) < 92.75 + agent.me.hitbox.height / 2:
             drive_target = (
                 agent.ball.location
@@ -5170,26 +5023,14 @@ class ground_shot:
             speed_required = 2300
             agent.dbg_2d(f"Max speed")
         else:
-            # The Dubins route ends at the existing hitbox-aware standoff,
-            # with the car's nose aligned to the planned shot direction.
             if self.targets is not None:
-                route = self.approach.update(
-                    agent, drive_target, self.shot_vector, T
+                drive_target = _shot_approach_target(
+                    agent, self.ball_location, drive_target,
+                    self.shot_vector, T
                 )
-                if route is not None:
-                    (
-                        drive_target,
-                        drive_distance_remaining,
-                        approach_samples
-                    ) = route
-                else:
-                    drive_target = _shot_approach_target(
-                        agent, self.ball_location, drive_target,
-                        self.shot_vector, T
-                    )
-                    drive_distance_remaining = drive_target.flat_dist(
-                        agent.me.location
-                    )
+                drive_distance_remaining = drive_target.flat_dist(
+                    agent.me.location
+                )
 
             distance_remaining = (
                 self.offset_target.flat_dist(agent.me.location)
@@ -5215,8 +5056,8 @@ class ground_shot:
                 )
                 speed_required *= 0.75
 
-        # Keep steering on the next sampled path point, not the final contact
-        # target. Contact, viability and dodge checks continue using standoff.
+        # Keep contact, viability and dodge checks tied to the original
+        # hitbox-aware standoff while steering toward the adjusted approach target.
         final_target = cap_in_field(agent, drive_target)
         local_final_target = agent.me.local_location(final_target)
 
@@ -5230,17 +5071,6 @@ class ground_shot:
         agent.line(agent.me.location, self.offset_target, agent.renderer.white)
         agent.line(self.offset_target-Vector(z=100), self.offset_target+Vector(z=100), agent.renderer.green)
         agent.line(final_target-Vector(z=100), final_target+Vector(z=100), agent.renderer.purple)
-        if approach_samples:
-            agent.polyline(
-                [Vector(point[0], point[1], 25) for point in approach_samples]
-            )
-
-        velocity = defaultDrive(agent, speed_required * direction, local_final_target)[1]
-        if velocity == 0: velocity = 1
-
-        local_offset_target = agent.me.local_location(self.offset_target.flatten())
-        time = drive_distance_remaining / (velocity + dodge_impulse(agent))
-
         vf = agent.me.velocity + agent.gravity * T
         local_vf = agent.me.local(vf.flatten())
 
