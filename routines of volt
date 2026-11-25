@@ -1301,6 +1301,57 @@ class Aerial:
 
         return boost_estimate
 
+    def _select_wall_aerial_jump(self, agent, time_remaining):
+        """
+        Compare single- and double-jump wall launches against the same
+        predicted hitbox contact target. Prefer the single jump unless the
+        second impulse meaningfully improves the predicted contact.
+        """
+        T = max(0.0, float(time_remaining))
+        if not self.fast_aerial or T <= 0:
+            return False, 0.0, 0.0
+
+        car = agent.me
+        base_position = (
+            car.location
+            + car.velocity * T
+            + agent.gravity * (0.5 * T * T)
+        )
+
+        # The first wall jump launches along the car's current up axis.
+        # Model the held first-jump acceleration exactly as Aerial.run does.
+        launch_up = car.up.normalize()
+        hold_time = min(T, jump_max_duration)
+        first_jump_displacement = (
+            launch_up * (
+                jump_speed * T
+                + jump_acc * hold_time
+                * (T - 0.5 * hold_time)
+            )
+        )
+        single_position = base_position + first_jump_displacement
+
+        # Fast aerials release jump for three frames before the second
+        # impulse. If contact arrives before that pulse, it cannot help.
+        second_jump_delay = jump_max_duration + 3 * dt
+        second_jump_time = max(0.0, T - second_jump_delay)
+        double_position = (
+            single_position
+            + launch_up * jump_speed * second_jump_time
+        )
+
+        single_error = single_position.dist(self.target)
+        double_error = double_position.dist(self.target)
+
+        # Avoid spending the second jump for a negligible prediction gain.
+        # A 100-unit margin prevents packet-level prediction noise from
+        # repeatedly switching the decision around the threshold.
+        use_double = (
+            second_jump_time > 0
+            and double_error + 100.0 < single_error
+        )
+        return use_double, single_error, double_error
+
     def _run_side_wall_takeoff(self, agent, time_remaining):
         """
         Internally route an aerial up a side wall before launching.
@@ -1430,15 +1481,24 @@ class Aerial:
 
         self.side_wall_route = False
         self.side_wall_launched = True
-        self.jump_type_fast = self.fast_aerial
+        (
+            self.jump_type_fast,
+            single_error,
+            double_error
+        ) = self._select_wall_aerial_jump(agent, time_remaining)
         self.jumping = True
         self.jump_time = agent.time
         self.double_jump_time = None
         self.counter = 0
         self.double_jump_complete = False
+        self.first_jump_impulse_applied = False
+        self.fast_pitchback_logged = False
         agent.controller.jump = True
         print(
             f"[AERIAL SIDE WALL] LAUNCH side={wall_side:+d} "
+            f"jump={'DOUBLE' if self.jump_type_fast else 'SINGLE'} "
+            f"single_error={single_error:.0f} "
+            f"double_error={double_error:.0f} "
             f"height_error={height_error:.0f} lane_error={lane_error:.0f} "
             f"T={time_remaining:.2f}",
             flush=True
