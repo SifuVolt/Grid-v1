@@ -1179,10 +1179,14 @@ class Aerial:
 
     def _party_cannon_shot_direction(
         self, agent, ball, ball_velocity, time_remaining,
-        car_final_velocity=None
+        car_final_velocity=None, shot_target_override=None
     ):
         # Port of Party Cannon's SetTargetLocation shot prediction.
-        shot_target = _relative_goal_aim_point(agent, self.targets)
+        shot_target = (
+            shot_target_override
+            if shot_target_override is not None
+            else _relative_goal_aim_point(agent, self.targets)
+        )
         safe_time = max(time_remaining, dt)
         if car_final_velocity is None:
             car_final_velocity = (
@@ -1224,6 +1228,73 @@ class Aerial:
         if shot_direction.magnitude() < 0.001:
             return direction_to_score
         return shot_direction
+
+    def _backboard_safe_goal_target(self, agent, ball):
+        """
+        Choose a post-safe target for a side-backboard rebound.
+
+        The target stays inside the real goal-mouth width after reserving
+        room for the ball radius and an additional collision margin. When
+        the ball is off-centre, bias the target across the goal, away from
+        the nearer post, rather than aiming directly through that post lane.
+        """
+        if self.targets is not None and len(self.targets) >= 2:
+            post_a = (
+                self.targets[0]
+                if isinstance(self.targets[0], Vector)
+                else Vector(*self.targets[0])
+            )
+            post_b = (
+                self.targets[1]
+                if isinstance(self.targets[1], Vector)
+                else Vector(*self.targets[1])
+            )
+        else:
+            post_a, post_b = agent.foe_goal_shot
+            post_a = (
+                post_a if isinstance(post_a, Vector) else Vector(*post_a)
+            )
+            post_b = (
+                post_b if isinstance(post_b, Vector) else Vector(*post_b)
+            )
+
+        centre = (post_a + post_b) * 0.5
+        centre.z = 300.0
+
+        left_x = min(post_a.x, post_b.x)
+        right_x = max(post_a.x, post_b.x)
+        half_width = (right_x - left_x) * 0.5
+
+        # Reserve the ball radius plus room for post collision and prediction
+        # error. The target itself must remain inside this safe corridor.
+        post_clearance = 92.75 + 85.0
+        safe_half_width = max(0.0, half_width - post_clearance)
+        if safe_half_width <= 1.0:
+            return centre
+
+        lateral_from_centre = ball.x - centre.x
+        side_fraction = cap(
+            abs(lateral_from_centre) / max(half_width, 1.0),
+            0.0,
+            1.0
+        )
+
+        # Cross-goal bias increases smoothly with how far the rebound is
+        # toward a side. It is capped so the target never approaches the
+        # opposite post's reserved clearance zone.
+        maximum_bias = min(220.0, safe_half_width * 0.30)
+        bias = maximum_bias * side_fraction
+        if lateral_from_centre > 0:
+            centre.x -= bias
+        elif lateral_from_centre < 0:
+            centre.x += bias
+
+        centre.x = cap(
+            centre.x,
+            (left_x + post_clearance),
+            (right_x - post_clearance)
+        )
+        return centre
 
     def _party_cannon_hitbox_target(self, agent, ball, shot_direction):
         # Party Cannon's 155-unit standoff is approximately ball radius +
@@ -1630,6 +1701,32 @@ class Aerial:
                 and towards_goal < -150
                 and 0.15 < T < 2.0
             )
+
+        if backboard_mode:
+            safe_goal_target = self._backboard_safe_goal_target(
+                agent, self.ball
+            )
+            self.shot_vector = self._party_cannon_shot_direction(
+                agent,
+                self.ball,
+                aerial_ball_velocity,
+                T,
+                shot_target_override=safe_goal_target
+            )
+            if (
+                not hasattr(self, "last_backboard_aim_debug")
+                or agent.time - self.last_backboard_aim_debug >= 0.5
+            ):
+                self.last_backboard_aim_debug = agent.time
+                print(
+                    f"[AERIAL BACKBOARD AIM] ball_x={self.ball.x:.0f} "
+                    f"safe_goal_x={safe_goal_target.x:.0f} "
+                    f"goal_y={safe_goal_target.y:.0f} "
+                    f"shot=({self.shot_vector.x:.3f},"
+                    f"{self.shot_vector.y:.3f},"
+                    f"{self.shot_vector.z:.3f})",
+                    flush=True
+                )
 
         if backboard_mode and (
             not hasattr(self, "last_backboard_debug")
