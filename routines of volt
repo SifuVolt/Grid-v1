@@ -4740,6 +4740,743 @@ class side_shot(jump_shot):
         self.approach_side = approach_side
 
 
+    def run(self, agent: VirxERLU):
+        print(
+            f"[JUMP SHOT RUN] id={id(self)} "
+            f"T={self.intercept_time - agent.time:.3f} "
+            f"jumping={self.jumping} counter={self.counter} "
+            f"boost={agent.me.boost:.0f}",
+            flush=True
+        )
+        if not agent.shooting:
+            agent.shooting = True
+
+        self.intercept_time = self.patience.adjust(
+            agent, self.intercept_time, self.targets
+        )
+        T = self.intercept_time - agent.time
+        # Capping T above 0 to prevent division problems
+        time_remaining = cap(T, 0.000001, 6)
+
+        if not self.jumping or self.ball_location is None:
+            prediction = getattr(agent, "ball_prediction_struct", None)
+            slices = getattr(prediction, "slices", None) if prediction is not None else None
+
+            if not slices:
+                agent.pop()
+                agent.shooting = False
+                agent.shot_weight = -1
+                agent.shot_time = -1
+                if agent.me.airborne:
+                    agent.push(recovery())
+                return
+
+            slice_n = round(T * 120) - 1
+            slice_n = max(0, min(slice_n, len(slices) - 1))
+
+            agent.dbg_2d(f"Shot slice #: {slice_n}")
+
+            ball = slices[slice_n].physics.location
+            self.ball_location = Vector(ball.x, ball.y, ball.z)
+            ball_physics = slices[slice_n].physics
+            predicted_ball_velocity = Vector(
+                ball_physics.velocity.x,
+                ball_physics.velocity.y,
+                ball_physics.velocity.z
+            )
+            self.ball_velocity = predicted_ball_velocity
+
+            self.needed_jump_time = virxrlcu.get_jump_time(
+                ball.z - agent.me.location.z,
+                agent.me.velocity.z,
+                agent.gravity.z
+            )
+
+        # Always aim the contact toward the opponent's goal.
+        # Never use car-to-ball direction as the shot direction:
+        # that can put the approach point on the wrong side of the ball.
+        if self.goal_aim_point is None:
+            self.goal_aim_point = _relative_goal_aim_point(agent, self.targets)
+        target_center = self.goal_aim_point
+
+        goal_shot_vector = (
+            target_center - self.ball_location
+        ).flatten().normalize()
+
+        # Predict the outgoing ball path using Aerial's relative goal aim
+        # point and contact-power model. Blend it conservatively with the
+        # existing goal-centre direction so the established ground-shot
+        # contact choice stays stable.
+        if self.ball_location is not None:
+            predicted_shot_vector = (
+                self._contact_aim._party_cannon_shot_direction(
+                    agent,
+                    self.ball_location,
+                    self.ball_velocity,
+                    T
+                )
+            ).flatten().normalize()
+        else:
+            predicted_shot_vector = Vector()
+
+        if (
+            predicted_shot_vector.magnitude() > 0.001
+            and goal_shot_vector.magnitude() > 0.001
+        ):
+            self.shot_vector = (
+                goal_shot_vector * 0.65
+                + predicted_shot_vector * 0.35
+            ).normalize()
+        else:
+            self.shot_vector = goal_shot_vector
+
+        # Apply Party Cannon's wall-shot contact-angle correction before
+        # building the approach target, so all existing contact choices use
+        # the corrected shot direction.
+        self.wall_shot_active = False
+        self.wall_shot_normal = None
+        self.shot_vector, wall_normal, wall_clearance = WallShot.adjust_jump(
+            self.ball_location, self.shot_vector
+        )
+        if wall_normal is not None:
+            self.wall_shot_active = True
+            self.wall_shot_normal = wall_normal
+            print(
+                f"[WALL JUMP SHOT] clearance={wall_clearance:.1f} "
+                f"normal=({wall_normal.x:.0f},{wall_normal.y:.0f},"
+                f"{wall_normal.z:.0f})",
+                flush=True
+            )
+
+        # Aim the car reference point so the front of its actual hitbox,
+        # rather than its origin, reaches the chosen ball contact surface.
+        hitbox_target = self._contact_aim._party_cannon_hitbox_target(
+            agent, self.ball_location, self.shot_vector
+        )
+        self.offset_target = hitbox_target.copy()
+        contact_label = getattr(self, "contact_label", None)
+        hitbox = agent.me.hitbox
+        contact_standoff = (
+            92.75
+            + float(getattr(hitbox, "length", 118.01)) * 0.5
+        )
+        refreshed_contact = _contact_approach_from_label(
+            self.ball_location,
+            self.shot_vector,
+            contact_label,
+            contact_standoff
+        )
+        if refreshed_contact is not None:
+            nominal_hitbox_target = (
+                self.ball_location
+                - self.shot_vector * contact_standoff
+            )
+            refreshed_contact += hitbox_target - nominal_hitbox_target
+            self.offset_target = refreshed_contact
+            self.contact_point = (
+                self.ball_location
+                + (refreshed_contact - self.ball_location).normalize() * 92.75
+            )
+            self.contact_approach_target = refreshed_contact.copy()
+            print(
+                f"[JUMP CONTACT REFRESH] {contact_label} "
+                f"point={self.contact_point} approach={self.offset_target}",
+                flush=True
+            )
+
+        if self.side_mode:
+            # Rebuild the lateral setup from the latest predicted intercept
+            # every frame. The car approaches from the side opposite the goal.
+            left_of_shot = Vector(
+                -self.shot_vector.y,
+                self.shot_vector.x,
+                0
+            ).normalize()
+            intercept_length = agent.me.location.flat_dist(
+                self.ball_location
+            )
+            if self.side_lateral_distance is None:
+                self.side_lateral_distance = intercept_length * 0.5
+            lateral_distance = self.side_lateral_distance
+            side_sign = 1 if self.approach_side == "right" else -1
+            self.offset_target = (
+                self.ball_location
+                - left_of_shot * lateral_distance * side_sign
+            )
+            self.contact_point = (
+                self.ball_location
+                - left_of_shot * 92.75 * side_sign
+            )
+            self.contact_approach_target = self.offset_target.copy()
+            if (
+                self.last_side_debug_time < 0
+                or agent.time - self.last_side_debug_time >= 0.35
+            ):
+                self.last_side_debug_time = agent.time
+                print(
+                    f"[SIDE SHOT SETUP] intercept_distance={intercept_length:.0f} "
+                    f"lateral_distance={lateral_distance:.0f} "
+                    f"ball=({self.ball_location.x:.0f},{self.ball_location.y:.0f}) "
+                    f"setup=({self.offset_target.x:.0f},{self.offset_target.y:.0f})",
+                    flush=True
+                )
+
+        if self.wall_shot_active and not self.side_mode:
+            # Party Cannon adds a small tangential offset and compensates
+            # the wall target for gravity during the required jump time.
+            normal = self.wall_shot_normal
+            tangent = self.shot_vector - normal * self.shot_vector.dot(normal)
+            if tangent.magnitude() > 0.001:
+                self.offset_target -= tangent.normalize() * 25
+
+            if abs(normal.z) < 0.95:
+                self.offset_target = Vector(
+                    self.offset_target.x,
+                    self.offset_target.y,
+                    self.ball_location.z + cap(
+                        self.offset_target.z - self.ball_location.z,
+                        -120,
+                        120
+                    )
+                )
+                self.offset_target -= agent.gravity * (
+                    0.5 * self.needed_jump_time ** 2
+                )
+            self.contact_approach_target = self.offset_target.copy()
+
+        # Choose an actual point on the front hitbox instead of always
+        # aiming the centre of the nose at the ball.
+        #
+        # Predict a short-horizon impact frame from the car's current angular
+        # velocity, then score several front-face candidates against the
+        # intended outgoing ball direction. The selected point is converted
+        # back into a car-centre target, so the approach and jump still use
+        # the existing controller and timing.
+        contact_face_label = "centre"
+        contact_face_score = -1.0
+        contact_face_alignment = 0.0
+        if not self.side_mode and not self.wall_shot_active:
+            shot_forward = self.shot_vector.flatten().normalize()
+            car_forward = agent.me.forward.normalize()
+            car_up = agent.me.up.normalize()
+            car_right = car_up.cross(car_forward).normalize()
+
+            if (
+                shot_forward.magnitude() > 0.001
+                and car_forward.magnitude() > 0.001
+                and car_up.magnitude() > 0.001
+                and car_right.magnitude() > 0.001
+            ):
+                car_up = car_right.cross(car_forward).normalize()
+
+                # Predict the controller's actual jump-shot rotation with
+                # Rocket League's torque/damping model, not a constant-alpha
+                # approximation. The model is stepped at the game's 120 Hz.
+                orientation_horizon = min(max(T, 0.0), 0.30) if self.jumping else 0.0
+                planned_controls = (0.0, 0.0, 0.0)
+                if self.jumping and agent.me.airborne and self.counter < 3:
+                    _, _, planned_controls = self._set_jump_shot_orientation(agent)
+                impact_forward, impact_right, impact_up = (
+                    self._predict_air_orientation(
+                        agent, orientation_horizon, planned_controls
+                    )
+                )
+
+                if (
+                    self._last_air_prediction_debug < 0
+                    or agent.time - self._last_air_prediction_debug >= 0.30
+                ):
+                    self._last_air_prediction_debug = agent.time
+                    print(
+                        f"[JUMP SHOT PHYSICS] yaw={planned_controls[2]:.2f} "
+                        f"roll={planned_controls[0]:.2f} "
+                        f"pitch={planned_controls[1]:.2f} "
+                        f"horizon={orientation_horizon:.3f}",
+                        flush=True
+                    )
+                # RLBot's local +Y axis is car-right (up cross forward).
+                # Keep candidate labels consistent with the hitbox's local
+                # coordinate convention.
+                impact_right = impact_up.cross(impact_forward).normalize()
+                impact_up = impact_forward.cross(impact_right).normalize()
+
+                hitbox = agent.me.hitbox
+                half_length = float(
+                    getattr(hitbox, "length", 118.01)
+                ) * 0.5
+                half_width = float(
+                    getattr(hitbox, "width", 84.2)
+                ) * 0.5
+                half_height = float(
+                    getattr(hitbox, "height", 36.16)
+                ) * 0.5
+
+                # Preserve the hitbox-centre offset used by the existing
+                # Party Cannon hitbox target calculation.
+                local_offset = getattr(agent.me, "hitbox_offset", None)
+                if local_offset is None:
+                    local_offset = getattr(hitbox, "offset", None)
+                world_hitbox_offset = Vector()
+                if local_offset is not None:
+                    world_hitbox_offset = (
+                        impact_forward * float(getattr(local_offset, "x", 0.0))
+                        + impact_right * float(getattr(local_offset, "y", 0.0))
+                        + impact_up * float(getattr(local_offset, "z", 0.0))
+                    )
+
+                # Lateral offsets use RLBot's local +Y (car-right) axis.
+                candidates = [
+                    ("centre", 0.0, 0.0),
+                    ("top_left", -half_width * 0.82, half_height * 0.82),
+                    ("top_right", half_width * 0.82, half_height * 0.82),
+                    ("left", -half_width * 0.88, 0.0),
+                    ("right", half_width * 0.88, 0.0),
+                    ("top", 0.0, half_height * 0.88),
+                    ("bottom", 0.0, -half_height * 0.70),
+                ]
+
+                impact_horizon = min(max(T, 0.0), 0.30)
+                predicted_car = (
+                    agent.me.location
+                    + agent.me.velocity * impact_horizon
+                    + agent.gravity * (0.5 * impact_horizon * impact_horizon)
+                )
+
+                scored_candidates = []
+                for label, lateral_offset, vertical_offset in candidates:
+                    front_point_offset = (
+                        impact_forward * half_length
+                        + impact_right * lateral_offset
+                        + impact_up * vertical_offset
+                        + world_hitbox_offset
+                    )
+                    predicted_contact_point = (
+                        predicted_car + front_point_offset
+                    )
+                    incoming_normal = (
+                        self.ball_location - predicted_contact_point
+                    ).normalize()
+
+                    if incoming_normal.magnitude() < 0.001:
+                        continue
+
+                    shot_alignment = incoming_normal.dot(shot_forward)
+                    front_alignment = incoming_normal.dot(impact_forward)
+                    required_car_centre = (
+                        self.ball_location
+                        - shot_forward * 92.75
+                        - front_point_offset
+                    )
+                    reach_cost = required_car_centre.dist(predicted_car)
+                    score = (
+                        shot_alignment
+                        + max(-1.0, min(1.0, front_alignment)) * 0.12
+                        - reach_cost * 0.00020
+                    )
+                    scored_candidates.append((
+                        score, label, required_car_centre, shot_alignment
+                    ))
+
+                if scored_candidates:
+                    scored_candidates.sort(
+                        key=lambda candidate: candidate[0],
+                        reverse=True
+                    )
+                    selected = scored_candidates[0]
+
+                    # Keep the previous face choice when it remains close
+                    # to the best candidate, preventing frame-to-frame
+                    # switching between neighbouring front-face points.
+                    previous_label = getattr(
+                        self, "contact_face_label", None
+                    )
+                    if previous_label is not None:
+                        previous = next(
+                            (
+                                candidate for candidate in scored_candidates
+                                if candidate[1] == previous_label
+                            ),
+                            None
+                        )
+                        if (
+                            previous is not None
+                            and previous[0] >= selected[0] - 0.06
+                        ):
+                            selected = previous
+
+                    (
+                        contact_face_score,
+                        contact_face_label,
+                        selected_target,
+                        contact_face_alignment
+                    ) = selected
+
+                    self.contact_face_label = contact_face_label
+                    self.offset_target = selected_target
+                    self.contact_approach_target = selected_target.copy()
+                    self.contact_point = (
+                        self.ball_location - shot_forward * 92.75
+                    )
+
+        print(
+            f"[JUMP SHOT AIM FIX] "
+            f"ball=({self.ball_location.x:.0f},{self.ball_location.y:.0f}) "
+            f"target=({target_center.x:.0f},{target_center.y:.0f}) "
+            f"shot_dir=({self.shot_vector.x:.2f},{self.shot_vector.y:.2f}) "
+            f"face={contact_face_label} "
+            f"face_score={contact_face_score:.3f} "
+            f"face_align={contact_face_alignment:.3f} "
+            f"offset=({self.offset_target.x:.0f},{self.offset_target.y:.0f})",
+            flush=True
+        )
+        agent.sphere(self.ball_location, 92.75)
+
+        car_to_ball = self.ball_location - agent.me.location
+        final_target = self.offset_target.copy().flatten()
+        drive_target = final_target.copy()
+        drive_distance_remaining = drive_target.flat_dist(agent.me.location)
+        Tj = T - self.needed_jump_time * 1.15
+        agent.dbg_2d(f"Needed jump time: {round(self.needed_jump_time, 2)}")
+
+        if Tj > 0 and self.targets is not None and not self.side_mode:
+            drive_target = _shot_approach_target(
+                agent, self.ball_location, final_target,
+                self.shot_vector, Tj
+            )
+            drive_distance_remaining = drive_target.flat_dist(
+                agent.me.location
+            )
+
+        distance_remaining = final_target.flat_dist(agent.me.location)
+        drive_target = cap_in_field(agent, drive_target)
+        local_final_target = agent.me.local_location(drive_target)
+
+        # whether we should go forwards or backwards
+        angle_to_target = abs(Vector(x=1).angle2D(local_final_target))
+        direction = 1
+
+        # drawing debug lines to show the dodge point and final target (which differs due to the adjustment)
+        agent.line(agent.me.location, self.offset_target, agent.renderer.white)
+        agent.line(self.offset_target-Vector(z=100), self.offset_target+Vector(z=100), agent.renderer.green)
+        agent.line(drive_target-Vector(z=100), drive_target+Vector(z=100), agent.renderer.purple)
+        vf = agent.me.velocity + agent.gravity * T
+
+        distance_remaining = agent.me.local_location(self.offset_target).x if agent.me.airborne else distance_remaining
+        distance_remaining -= agent.me.hitbox.length / 3
+        speed_distance_remaining = (
+            distance_remaining if agent.me.airborne
+            else max(distance_remaining, drive_distance_remaining)
+        )
+        speed_required = speed_distance_remaining / time_remaining
+        agent.dbg_2d(f"Speed required: {round(speed_required, 2)}")
+
+        ball_speed_toward_shot = agent.ball.velocity.dot(self.shot_vector)
+
+        if (
+            speed_required < 1900
+            and agent.me.boost > 50
+            and T > 2
+            and distance_remaining > 2560
+            and ball_speed_toward_shot > 1000    
+        ):
+            agent.dbg_2d(
+                f"Building speed | Ball speed toward shot: {round(ball_speed_toward_shot)}"
+            )
+            speed_required *= 0.75
+
+        if not self.jumping:
+            agent.dbg_2d(f"jump time: {self.needed_jump_time}")
+            print(
+                f"[SHOT APPROACH] "
+                f"boost={agent.me.boost:.0f} "
+                f"T={T:.2f} "
+                f"ball_speed={agent.ball.velocity.flatten().magnitude():.0f} "
+                f"ball_x={agent.me.local_location(agent.ball.location).x:.0f} "
+                f"jumping={self.jumping} "
+                f"counter={self.counter} "
+                f"jump_time={self.needed_jump_time:.2f}",
+                flush=True
+            )
+
+            # Normal driving still uses the predicted ball timing so we don't arrive
+            # too early. However, once we're committed to a forward power dodge,
+            # don't aggressively brake in the final few frames before the dodge.
+            #
+            # The goal is to arrive at the ball at the correct time, while preserving
+            # enough forward momentum for the dodge to actually go through the ball.
+
+            current_forward_speed = agent.me.local_velocity().x
+
+            power_dodge_window = (
+                T < 0.35
+                and T > 0.1
+                and agent.me.local_location(agent.ball.location).x > 0
+                and current_forward_speed > 700
+            )
+
+            drive_speed = speed_required * direction
+
+            if power_dodge_window and direction == 1:
+                # Still slow down if we're substantially too fast, but don't allow
+                # defaultDrive to turn the final approach into a hard brake.
+                minimum_final_speed = min(current_forward_speed, 1200)
+                drive_speed = max(drive_speed, minimum_final_speed)
+
+            velocity = defaultDrive(agent, drive_speed, local_final_target)[1]
+
+            if velocity == 0:
+                velocity = 1
+
+            local_offset_target = agent.me.local_location(self.offset_target.flatten())
+            local_vf = agent.me.local(vf.flatten())
+            time = speed_distance_remaining / (velocity + dodge_impulse(agent))
+
+
+            if (
+                (
+                    self.side_mode
+                    and distance_remaining < 180
+                    and T <= self.needed_jump_time * 1.08
+                )
+                or (
+                    (
+                        abs(velocity) < 100
+                        and distance_remaining < agent.me.hitbox.length / 2
+                    )
+                    or (
+                        abs(local_offset_target.y) < 92
+                        and direction * local_vf.x >= direction * (
+                            local_offset_target.x - agent.me.hitbox.length / 3
+                        )
+                        and direction * local_offset_target.x > 0
+                    )
+                ) and T <= self.needed_jump_time * 1.08
+            ):
+                self.quick_shot = T <= 0.45
+                self.jumping = True
+                print(
+                    f"[JUMP SHOT TYPE] quick={self.quick_shot} T={T:.3f}",
+                    flush=True
+                )
+            elif T <= self.needed_jump_time or (
+                Tj > 0
+                and distance_remaining > 50
+                and not virxrlcu.jump_shot_is_viable(
+                    T,
+                    agent.boost_accel,
+                    tuple(agent.gravity),
+                    agent.me.get_raw(agent),
+                    self.offset_target.z,
+                    tuple((final_target - agent.me.location).normalize()),
+                    distance_remaining
+                )
+            ):
+                time_expired = T <= self.needed_jump_time
+
+                print(
+                    f"[JUMP SHOT ABORT] phase=approach "
+                    f"reason={'time_expired' if time_expired else 'not_viable'} "
+                    f"id={id(self)} "
+                    f"T={T:.3f} Tj={Tj:.3f} "
+                    f"distance={distance_remaining:.1f} "
+                    f"needed_jump={self.needed_jump_time:.3f} "
+                    f"boost={agent.me.boost:.0f}",
+                    flush=True
+                )
+
+                agent.pop()
+                agent.shooting = False
+                agent.shot_weight = -1
+                agent.shot_time = -1
+
+                if agent.me.airborne:
+                    agent.push(recovery())
+            elif agent.boost_amount != 'unlimited' and agent.me.boost < 48 and angle_to_target < 0.03 and velocity > 600 and time >= self.needed_jump_time * 1.15 + 1.5:
+                if agent.gravity.z < -450 and time < 5:
+                    agent.push(wave_dash(agent.me.local_location(self.offset_target)))
+                else:
+                    agent.push(flip(agent.me.local_location(self.offset_target)))
+            elif (
+                agent.boost_amount != 'unlimited'
+                and direction == -1
+                and distance_remaining > 2560
+                and velocity < 200
+                and time >= self.needed_jump_time * 1.15 + 2
+                and agent.me.local_location(agent.ball.location).x < -250
+            ):
+                agent.push(flip(agent.me.local_location(self.offset_target), True))
+        else:
+            if self.jump_time == -1:
+                self.jump_time = agent.time
+
+            jump_elapsed = agent.time - self.jump_time
+            tau = max(0.0, jump_max_duration - jump_elapsed)
+
+            xf = agent.me.location + agent.me.velocity * T + 0.5 * agent.gravity * T * T
+
+            if jump_elapsed == 0:
+                vf += agent.me.up * jump_speed
+                xf += agent.me.up * jump_speed * T
+
+            hf = vf.z
+            vf += agent.me.up * jump_acc * tau
+            xf += agent.me.up * jump_acc * tau * (T - 0.5 * tau)
+
+            delta_x = self.offset_target - xf
+            d_direction = delta_x.normalize()
+
+            # ORIENT THE NOSE DURING THE EXISTING JUMP WINDOW.
+            # First steer toward the ball's horizontal position, then use S
+            # (positive pitch) to raise the nose when the ball is airborne
+            # and above the car. This adds no waiting phase and leaves the
+            # existing counter-3 dodge trigger intact.
+            if self.counter < 3 and not self.dodging:
+                # Keep the original jump-shot power posture: pitch back (S)
+                # while the car rises, then let the existing forward/directional
+                # dodge drive the hitbox through the ball.
+                #
+                # Yaw toward the planned outgoing shot direction, not the
+                # instantaneous car-to-ball vector. The approach target was
+                # already built from the hitbox-aware centre contact, so this
+                # keeps the car behind that contact line without flattening
+                # the nose-up pitch that creates the power shot.
+                local_shot_direction, hold_s, _ = (
+                    self._set_jump_shot_orientation(agent)
+                )
+
+                if not self._orientation_logged:
+                    print(
+                        f"[JUMP SHOT ORIENT] T={T:.3f} "
+                        f"ball_z={self.ball_location.z:.0f} "
+                        f"car_z={agent.me.location.z:.0f} "
+                        f"shot_yaw=({local_shot_direction.x:.2f},"
+                        f"{local_shot_direction.y:.2f}) "
+                        f"hold_S={hold_s} counter={self.counter}",
+                        flush=True
+                    )
+                    self._orientation_logged = True
+
+            if direction == 1 and abs(agent.me.forward.dot(d_direction)) > 0.5 and self.counter < 3:
+                delta_v = delta_x.dot(agent.me.forward) / T
+                if agent.me.boost > 0 and delta_v >= agent.boost_accel * min_boost_time:
+                    agent.controller.boost = True
+                    delta_v -= agent.boost_accel * min_boost_time
+
+                if abs(delta_v) > throttle_accel * min_boost_time:
+                    agent.controller.throttle = cap(delta_v / (throttle_accel * min_boost_time), -1, 1)
+
+            
+            # Advance through the jump sequence without getting stuck
+            # indefinitely at counter == 3.
+
+            if T <= -0.8 or (not agent.me.airborne and self.counter >= 3):
+                print(
+                    f"[JUMP SHOT ABORT] phase=jump "
+                    f"reason={'intercept_expired' if T <= -0.8 else 'landed_before_dodge'} "
+                    f"id={id(self)} "
+                    f"T={T:.3f} airborne={agent.me.airborne} "
+                    f"counter={self.counter} "
+                    f"jump_elapsed={jump_elapsed:.3f} "
+                    f"boost={agent.me.boost:.0f}",
+                    flush=True
+                )
+
+                agent.pop()
+                agent.shooting = False
+                agent.shot_weight = -1
+                agent.shot_time = -1
+                agent.push(recovery())
+                return
+
+            if self.counter == 3:
+                local_target = agent.me.local_location(
+                    self.offset_target
+                ).flatten()
+
+                # Only dodge if the target is still in front and close enough
+                # for the dodge to have a realistic chance of making contact.
+                close_enough = (
+                    agent.me.location.dist(self.offset_target)
+                    < (92.75 + agent.me.hitbox.length) * 1.02
+                )
+
+                if close_enough and (local_target.x > 0 or self.side_mode):
+                    # Aim the dodge at the predicted ball contact itself,
+                    # not at the approach point behind the ball. The selected
+                    # centre/left/right contact has already shaped that approach.
+                    # This also gives quick shots a directional flip without
+                    # adding the S-tilt they do not have time to perform.
+                    local_ball_for_dodge = agent.me.local_location(
+                        self.ball_location
+                    ).flatten()
+
+                    if local_ball_for_dodge.magnitude() > 1:
+                        dodge_direction = local_ball_for_dodge.normalize()
+                    else:
+                        dodge_direction = Vector(x=1)
+
+                    agent.controller.pitch = -dodge_direction.x
+                    agent.controller.yaw = dodge_direction.y
+                    agent.controller.jump = True
+
+                    agent.last_flip_time = agent.time
+                    self.dodging = True
+                    self.counter = 4
+
+                elif local_target.x <= 0 or (
+                    agent.me.location.dist(self.offset_target)
+                    > (92.75 + agent.me.hitbox.length) * 1.02 + 150
+                    and T < 0.12
+                ):
+                    print(
+                        f"[JUMP SHOT NO DODGE] id={id(self)} "
+                        f"local_target_x={local_target.x:.1f} "
+                        f"distance={agent.me.location.dist(self.offset_target):.1f} "
+                        f"T={T:.3f} counter={self.counter}",
+                        flush=True
+                    )
+                    # Do not keep waiting for a dodge opportunity that has passed.
+                    self.counter = 5
+
+            elif self.counter == 4:
+                # The dodge has started. Let the existing recovery/timeout
+                # logic take over instead of repeatedly initiating a new dodge.
+                self.dodging = True
+
+            elif self.counter == 5:
+                print(
+                    f"[JUMP SHOT ABORT] phase=jump "
+                    f"reason=no_dodge_window id={id(self)} "
+                    f"T={T:.3f} counter={self.counter}",
+                    flush=True
+                )
+                # No useful dodge opportunity remained.
+                agent.pop()
+                agent.shooting = False
+                agent.shot_weight = -1
+                agent.shot_time = -1
+                agent.push(ball_recovery())
+                return
+
+            # Hold jump long enough to reliably leave the ground.
+            # The old hf <= offset_target.z check compared vertical
+            # velocity against world height and could release jump too early.
+            minimum_jump_hold = 0.06
+
+            if (
+                jump_elapsed <= jump_max_duration
+                and (
+                    jump_elapsed <= minimum_jump_hold
+                    or hf <= self.offset_target.z
+                )
+            ):
+                agent.controller.jump = True
+            elif self.counter < 3:
+                self.counter += 1
+
+        l_vf = vf + agent.me.location
+        agent.line(l_vf-Vector(z=100), l_vf+Vector(z=100), agent.renderer.red)
+
 class ground_shot:
     # Hits a target point at a target time towards a target direction
     def __init__(self, intercept_time, targets=None):
