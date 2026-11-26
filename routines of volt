@@ -68,26 +68,6 @@ def _relative_goal_aim_point(agent, targets=None):
 
     return goal_center
 
-def _jump_shot_goal_aim_point(agent, targets=None, ball_location=None):
-    """Choose the goal height from the predicted intercept ball position."""
-    goal_center = _relative_goal_aim_point(agent, targets)
-
-    # side(team) makes our own half negative for either team. The halfway
-    # point of our own half is 2560 units from midfield toward our goal.
-    reference_ball = (
-        agent.ball.location if ball_location is None else ball_location
-    )
-    own_half_depth = reference_ball.y * side(agent.team)
-    if own_half_depth < -2560:
-        goal_center.z = 470
-    elif not agent.me.airborne:
-        goal_center.z = 310
-    else:
-        goal_center.z = 210
-
-    return goal_center
-
-
 def _contact_approach_from_label(ball_location, shot_vector, label, distance):
     """Rebuild a selected contact approach around the latest ball prediction."""
     shot_direction = shot_vector.copy().flatten().normalize()
@@ -1209,34 +1189,9 @@ class Aerial:
         )
         safe_time = max(time_remaining, dt)
         if car_final_velocity is None:
-            # Predict impact velocity from the car's actual motion and the
-            # acceleration it can produce before contact. Displacement / time
-            # is average velocity, not the car's velocity at impact, and can
-            # badly overstate or understate the power of a distant shot.
-            travel = ball - agent.me.location
-            travel_direction = travel.normalize()
-            if travel_direction.magnitude() < 0.001:
-                travel_direction = agent.me.forward.normalize()
-
-            forward_alignment = cap(
-                agent.me.forward.dot(travel_direction), 0, 1
-            )
-            available_boost = max(0.0, float(agent.me.boost))
-            boost_time = min(
-                safe_time, available_boost / boost_per_second
-            )
-            effective_boost_time = (
-                boost_time * forward_alignment * forward_alignment
-            )
-            predicted_velocity = (
-                agent.me.velocity
-                + agent.gravity * safe_time
-                + agent.me.forward * (
-                    throttle_accel * safe_time
-                    + max(0.0, agent.boost_accel) * effective_boost_time
-                )
-            )
-            car_final_velocity = predicted_velocity.cap(0, max_speed)
+            car_final_velocity = (
+                (ball - agent.me.location) / safe_time
+            ).cap(0, max_speed)
 
         velocity_for_power = (
             car_final_velocity * 6 + ball_velocity
@@ -1341,9 +1296,7 @@ class Aerial:
         )
         return centre
 
-    def _party_cannon_hitbox_target(
-        self, agent, ball, shot_direction, orientation=None
-    ):
+    def _party_cannon_hitbox_target(self, agent, ball, shot_direction):
         # Party Cannon's 155-unit standoff is approximately ball radius +
         # half the Octane hitbox length. Use Volt's actual hitbox dimensions.
         hitbox = agent.me.hitbox
@@ -1361,14 +1314,10 @@ class Aerial:
             offset_x = float(getattr(local_offset, "x", 0.0))
             offset_y = float(getattr(local_offset, "y", 0.0))
             offset_z = float(getattr(local_offset, "z", 0.0))
-            if orientation is None:
-                forward, up = agent.me.forward, agent.me.up
-            else:
-                forward, up = orientation
             world_offset = (
-                forward * offset_x
-                + up.cross(forward) * offset_y
-                + up * offset_z
+                agent.me.forward * offset_x
+                + agent.me.up.cross(agent.me.forward) * offset_y
+                + agent.me.up * offset_z
             )
 
         return (
@@ -4223,7 +4172,6 @@ class jump_shot:
         self.side_mode = False
         self.last_side_debug_time = -1
         self.patience = shot_patience()
-        self.patience_applied = False
         self.wall_shot_active = False
         self.wall_shot_normal = None
         self.contact_face_label = None
@@ -4331,7 +4279,6 @@ class jump_shot:
         self.targets = shot.targets
         self._contact_aim.intercept_time = shot.intercept_time
         self._contact_aim.targets = shot.targets
-        self.patience_applied = False
     def needs_half_flip(self, agent):
         if self.targets is None:
             return False
@@ -4350,9 +4297,8 @@ class jump_shot:
 
         direction = (ball_location - agent.me.location).normalize()
 
-        self.goal_aim_point = _jump_shot_goal_aim_point(
-            agent, self.targets, ball_location
-        )
+        if self.goal_aim_point is None:
+            self.goal_aim_point = _relative_goal_aim_point(agent, self.targets)
         shot_vector = (
             self.goal_aim_point - ball_location
         ).flatten().normalize()
@@ -4362,524 +4308,6 @@ class jump_shot:
         local_target = agent.me.local_location(offset_target)
 
         return local_target.x < 0
-
-
-    def run(self, agent: VirxERLU):
-        if not agent.shooting:
-            agent.shooting = True
-
-        # Rust applies shot_patience once when the routine first owns the
-        # intercept. Do not keep moving the committed intercept every packet.
-        if not getattr(self, "patience_applied", False):
-            self.intercept_time = self.patience.adjust(
-                agent, self.intercept_time, self.targets
-            )
-            self.patience_applied = True
-
-        T = self.intercept_time - agent.time
-        time_remaining = cap(T, 0.000001, 6)
-
-        # Keep the aim point stable after launch, but refresh it from the
-        # selected prediction slice throughout the ground approach.
-        if self.goal_aim_point is None:
-            self.goal_aim_point = _jump_shot_goal_aim_point(
-                agent, self.targets
-            )
-
-        # Refresh the selected prediction slice until the jump begins. Once
-        # airborne, keep the committed intercept fixed just like Volt-Rust.
-        if not self.jumping:
-            prediction = getattr(agent, "ball_prediction_struct", None)
-            slices = getattr(prediction, "slices", None) if prediction is not None else None
-            if not slices:
-                agent.pop()
-                agent.shooting = False
-                agent.shot_weight = -1
-                agent.shot_time = -1
-                if agent.me.airborne:
-                    agent.push(recovery())
-                return
-
-            slice_n = round(T * 120) - 1
-            slice_n = max(0, min(slice_n, len(slices) - 1))
-            ball_physics = slices[slice_n].physics
-            self.ball_location = Vector(
-                ball_physics.location.x,
-                ball_physics.location.y,
-                ball_physics.location.z
-            )
-            self.ball_velocity = Vector(
-                ball_physics.velocity.x,
-                ball_physics.velocity.y,
-                ball_physics.velocity.z
-            )
-            self.needed_jump_time = virxrlcu.get_jump_time(
-                self.ball_location.z - agent.me.location.z,
-                agent.me.velocity.z,
-                agent.gravity.z
-            )
-            self.goal_aim_point = _jump_shot_goal_aim_point(
-                agent, self.targets, self.ball_location
-            )
-
-        goal_aim = self.goal_aim_point
-
-        # Party Cannon shot direction: blend the direct goal-centre vector
-        # with the predicted post-impact scoring direction, then apply the
-        # jump-specific wall correction.
-        goal_shot_direction = (
-            goal_aim - self.ball_location
-        ).flatten().normalize()
-        predicted_shot_direction = (
-            self._contact_aim._party_cannon_shot_direction(
-                agent,
-                self.ball_location,
-                self.ball_velocity,
-                T,
-                shot_target_override=goal_aim
-            )
-        ).flatten().normalize()
-
-        if (
-            goal_shot_direction.magnitude() > 0.001
-            and predicted_shot_direction.magnitude() > 0.001
-        ):
-            self.shot_vector = (
-                goal_shot_direction * 0.65
-                + predicted_shot_direction * 0.35
-            ).normalize()
-        else:
-            self.shot_vector = goal_shot_direction
-
-        self.shot_vector, wall_normal, wall_clearance = WallShot.adjust_jump(
-            self.ball_location, self.shot_vector
-        )
-        self.wall_shot_active = wall_normal is not None
-        self.wall_shot_normal = wall_normal
-
-        # Use the actual hitbox length and rotated local hitbox offset.
-        # The car reference point is placed behind the ball so the front of
-        # the hitbox reaches the 92.75-unit ball contact surface.
-        self.offset_target = self._contact_aim._party_cannon_hitbox_target(
-            agent, self.ball_location, self.shot_vector
-        )
-        self.contact_approach_target = self.offset_target.copy()
-        self.contact_point = self.ball_location - self.shot_vector * 92.75
-
-        local_ball = agent.me.local_location(self.ball_location).flatten()
-        local_target = agent.me.local_location(self.offset_target).flatten()
-        contact_distance = agent.me.location.dist(self.offset_target)
-        contact_limit = (
-            92.75 + float(agent.me.hitbox.length)
-        ) * 1.02
-
-        # ------------------------- GROUND APPROACH -------------------------
-        if not self.jumping:
-            t_j = T - self.needed_jump_time * 1.15
-            final_target = self.offset_target.copy().flatten()
-            distance_remaining = agent.me.location.flat_dist(final_target)
-            final_target = cap_in_field(agent, final_target)
-            local_final_target = agent.me.local_location(final_target)
-            angle_to_target = abs(
-                math.atan2(local_final_target.y, local_final_target.x)
-            )
-
-            vf = agent.me.velocity + agent.gravity * T
-            if agent.me.airborne:
-                distance_remaining = agent.me.local_location(
-                    self.offset_target.flatten()
-                ).x
-            distance_remaining -= agent.me.hitbox.length / 3
-            speed_required = distance_remaining / time_remaining
-            ball_speed_toward_shot = agent.ball.velocity.dot(self.shot_vector)
-
-            if (
-                speed_required < 1900
-                and agent.me.boost > 50
-                and T > 2
-                and distance_remaining > 2560
-                and ball_speed_toward_shot > 1000
-            ):
-                speed_required *= 0.75
-
-            current_forward_speed = agent.me.local(agent.me.velocity).x
-            power_dodge_window = (
-                T < 0.35
-                and T > 0.1
-                and agent.me.local_location(agent.ball.location).x > 0
-                and current_forward_speed > 700
-            )
-            drive_speed = speed_required
-            if power_dodge_window:
-                drive_speed = max(
-                    drive_speed,
-                    min(current_forward_speed, 1200)
-                )
-
-            _, velocity = defaultDrive(
-                agent, drive_speed, local_final_target
-            )
-            if abs(velocity) < 0.001:
-                velocity = 1.0
-
-            local_offset_target = agent.me.local_location(
-                self.offset_target.flatten()
-            )
-            local_vf = agent.me.local(vf.flatten())
-            time_to_contact = distance_remaining / (
-                velocity + dodge_impulse(agent)
-            )
-
-            # Keep the existing VirxERLU CLib jump-shot viability check as
-            # the Python-side equivalent of Rust's runtime reachability gate.
-            runtime_reachable = virxrlcu.jump_shot_is_viable(
-                T,
-                agent.boost_accel,
-                tuple(agent.gravity),
-                agent.me.get_raw(agent),
-                self.offset_target.z,
-                tuple((final_target - agent.me.location).normalize()),
-                distance_remaining
-            )
-
-            close_enough = (
-                abs(velocity) < 100
-                and distance_remaining < agent.me.hitbox.length * 0.5
-            )
-            # Compare distance with predicted travel distance. The old
-            # condition compared velocity (uu/s) directly with distance (uu),
-            # so it could launch too early or reject a reachable contact.
-            current_forward_speed = agent.me.local(
-                agent.me.velocity
-            ).x
-            predicted_forward_travel = max(
-                0.0,
-                0.5 * (current_forward_speed + local_vf.x) * max(T, 0.0)
-            )
-            required_forward_travel = max(
-                0.0,
-                local_offset_target.x - agent.me.hitbox.length / 3
-            )
-            aligned = (
-                abs(local_offset_target.y) < 92
-                and local_offset_target.x > 0
-                and predicted_forward_travel >= required_forward_travel
-            )
-            normal_ready = (
-                (close_enough or aligned)
-                and T <= self.needed_jump_time * 1.08
-            )
-
-            if normal_ready and runtime_reachable:
-                self.quick_shot = T <= 0.45
-                self.jumping = True
-                self.jump_time = -1
-                print(
-                    f"[RUST JUMP SHOT] launch quick={self.quick_shot} "
-                    f"T={T:.3f} jump={self.needed_jump_time:.3f} "
-                    f"distance={distance_remaining:.1f} "
-                    f"speed={velocity:.1f} aligned={aligned}",
-                    flush=True
-                )
-                return
-            elif normal_ready and not runtime_reachable:
-                print(
-                    f"[RUST JUMP SHOT] launch blocked T={T:.3f} "
-                    f"distance={distance_remaining:.1f} "
-                    f"speed={velocity:.1f} boost={agent.me.boost:.0f}",
-                    flush=True
-                )
-
-            if (
-                T <= self.needed_jump_time
-                or (
-                    t_j > 0
-                    and distance_remaining > 50
-                    and not runtime_reachable
-                )
-            ):
-                print(
-                    f"[RUST JUMP SHOT] abort approach "
-                    f"T={T:.3f} Tj={t_j:.3f} "
-                    f"distance={distance_remaining:.1f} "
-                    f"jump={self.needed_jump_time:.3f}",
-                    flush=True
-                )
-                agent.pop()
-                agent.shooting = False
-                agent.shot_weight = -1
-                agent.shot_time = -1
-                if agent.me.airborne:
-                    agent.push(recovery())
-                return
-
-            if (
-                agent.boost_amount != "unlimited"
-                and agent.me.boost < 48
-                and angle_to_target < 0.03
-                and velocity > 600
-                and time_to_contact >= self.needed_jump_time * 1.15 + 1.5
-            ):
-                if agent.gravity.z < -450 and time_to_contact < 5:
-                    agent.push(wave_dash(local_offset_target))
-                else:
-                    agent.push(flip(local_offset_target))
-                return
-
-            return
-
-        # -------------------------- JUMP / FLIGHT --------------------------
-        if self.jump_time == -1:
-            self.jump_time = agent.time
-        jump_elapsed = max(0.0, agent.time - self.jump_time)
-
-        if T <= -0.8 or (not agent.me.airborne and self.counter >= 3):
-            print(
-                f"[RUST JUMP SHOT] abort flight T={T:.3f} "
-                f"airborne={agent.me.airborne} counter={self.counter} "
-                f"elapsed={jump_elapsed:.3f}",
-                flush=True
-            )
-            agent.pop()
-            agent.shooting = False
-            agent.shot_weight = -1
-            agent.shot_time = -1
-            agent.push(recovery())
-            return
-
-        vf = (
-            agent.me.velocity
-            + agent.gravity * T
-        )
-        xf = (
-            agent.me.location
-            + agent.me.velocity * T
-            + agent.gravity * (0.5 * T * T)
-        )
-        if jump_elapsed <= 1.0e-6:
-            vf += agent.me.up * jump_speed
-            xf += agent.me.up * (jump_speed * T)
-
-        hf = vf.z
-        tau = max(jump_max_duration - jump_elapsed, 0.0)
-        vf += agent.me.up * (jump_acc * tau)
-        xf += agent.me.up * (
-            jump_acc * tau * (T - 0.5 * tau)
-        )
-
-        delta_x = self.offset_target - xf
-        if delta_x.magnitude() > 50:
-            local_aim = agent.me.local(delta_x)
-        else:
-            local_aim = agent.me.local(self.shot_vector.flatten())
-
-        if self.counter < 3 and not self.dodging:
-            defaultPD(agent, local_aim, upside_down=False)
-            agent.controller.pitch = max(
-                agent.controller.pitch, -0.35
-            )
-            if (
-                self.ball_location.z > 130
-                and self.ball_location.z > agent.me.location.z + 65
-                and not self.quick_shot
-            ):
-                agent.controller.pitch = 1.0
-                agent.controller.roll = (
-                    -0.20 * sign(agent.controller.yaw)
-                    if abs(agent.controller.yaw) > 0.08
-                    else 0.0
-                )
-
-            # Predict the hitbox's world offset at impact using the current
-            # aerial-control command. Rebuild the contact point from that
-            # future orientation, then correct the controller toward it.
-            if T > 0.0:
-                controls = (
-                    agent.controller.roll,
-                    agent.controller.pitch,
-                    agent.controller.yaw
-                )
-                predicted_forward, _, predicted_up = (
-                    self._contact_aim._predict_air_orientation(
-                        agent, min(T, 2.0), controls
-                    )
-                )
-                predicted_target = (
-                    self._contact_aim._party_cannon_hitbox_target(
-                        agent,
-                        self.ball_location,
-                        self.shot_vector,
-                        orientation=(predicted_forward, predicted_up)
-                    )
-                )
-                if predicted_target.dist(self.offset_target) > 1.0:
-                    self.offset_target = predicted_target
-                    self.contact_point = (
-                        self.ball_location - self.shot_vector * 92.75
-                    )
-                    delta_x = self.offset_target - xf
-                    local_aim = (
-                        agent.me.local(delta_x)
-                        if delta_x.magnitude() > 50
-                        else agent.me.local(self.shot_vector.flatten())
-                    )
-                    defaultPD(agent, local_aim, upside_down=False)
-                    agent.controller.pitch = max(
-                        agent.controller.pitch, -0.35
-                    )
-                    if (
-                        self.ball_location.z > 130
-                        and self.ball_location.z > agent.me.location.z + 65
-                        and not self.quick_shot
-                    ):
-                        agent.controller.pitch = 1.0
-                        agent.controller.roll = (
-                            -0.20 * sign(agent.controller.yaw)
-                            if abs(agent.controller.yaw) > 0.08
-                            else 0.0
-                        )
-
-                local_target = agent.me.local_location(
-                    self.offset_target
-                ).flatten()
-                contact_distance = agent.me.location.dist(
-                    self.offset_target
-                )
-
-        if (
-            self.counter < 3
-            and T > 0
-            and delta_x.magnitude() > 1
-        ):
-            distance_to_contact = delta_x.magnitude()
-            contact_direction = delta_x.normalize()
-            current_speed_to_contact = agent.me.velocity.dot(
-                contact_direction
-            )
-            required_acceleration = (
-                2.0 * (
-                    distance_to_contact
-                    - current_speed_to_contact * T
-                ) / max(T * T, dt * dt)
-            )
-            forward_need = distance_to_contact / T
-            forward_angle = math.acos(cap(
-                agent.me.forward.dot(contact_direction), -1, 1
-            ))
-            # Feather boost only when the remaining distance requires more
-            # acceleration than throttle alone can supply. This also avoids
-            # boosting into a badly aligned contact or past supersonic speed.
-            agent.controller.boost = (
-                required_acceleration > throttle_accel * 1.10
-                and forward_angle < 0.4
-                and current_speed_to_contact < max_speed - 75
-                and agent.me.boost > 0
-            )
-            agent.controller.throttle = cap(
-                forward_need / (66.667 * (1 / 120)),
-                -1,
-                1
-            )
-
-        if self.counter == 3:
-            shot_alignment = (
-                agent.me.forward.flatten().normalize().dot(
-                    self.shot_vector.flatten().normalize()
-                )
-            )
-            # A close car is not enough: only spend the dodge when the nose
-            # is already aligned with the planned outgoing shot direction.
-            dodge_contact_ready = (
-                contact_distance < contact_limit + 65
-                and shot_alignment > 0.94
-            )
-            dodge_window_open = jump_elapsed <= 1.25
-
-            if (
-                dodge_contact_ready
-                and dodge_window_open
-                and local_target.x > 0
-            ):
-                dodge_direction = agent.me.local(
-                    self.shot_vector.flatten()
-                ).flatten().normalize()
-                if dodge_direction.magnitude() < 0.001:
-                    dodge_direction = Vector(x=1)
-                self.dodge_direction = dodge_direction
-                self.counter = 4
-                agent.last_flip_time = agent.time
-                print(
-                    f"[RUST JUMP SHOT] forward dodge "
-                    f"elapsed={jump_elapsed:.3f} "
-                    f"distance={contact_distance:.1f} T={T:.3f}",
-                    flush=True
-                )
-                agent.controller.jump = True
-                agent.controller.pitch = -dodge_direction.x
-                agent.controller.yaw = dodge_direction.y
-                agent.controller.roll = 0.0
-            elif (
-                jump_elapsed > 1.25
-                or local_target.x <= 0
-                or (
-                    contact_distance > contact_limit + 150
-                    and T < 0.12
-                )
-            ):
-                print(
-                    f"[RUST JUMP SHOT] no dodge "
-                    f"local_x={local_target.x:.1f} "
-                    f"distance={contact_distance:.1f} "
-                    f"limit={contact_limit:.1f} T={T:.3f}",
-                    flush=True
-                )
-                self.counter = 5
-
-        elif self.counter == 4:
-            self.dodging = True
-        elif self.counter == 5:
-            agent.pop()
-            agent.shooting = False
-            agent.shot_weight = -1
-            agent.shot_time = -1
-            agent.push(recovery())
-            return
-
-        if self.counter < 3:
-            if (
-                jump_elapsed <= jump_max_duration
-                and (
-                    jump_elapsed <= 0.10
-                    or hf <= self.offset_target.z
-                )
-            ):
-                agent.controller.jump = True
-            else:
-                self.counter += 1
-
-        if self.counter == 5:
-            agent.pop()
-            agent.shooting = False
-            agent.shot_weight = -1
-            agent.shot_time = -1
-            agent.push(recovery())
-            return
-
-        l_vf = vf + agent.me.location
-        agent.line(
-            l_vf - Vector(z=100),
-            l_vf + Vector(z=100),
-            agent.renderer.red
-        )
-
-class side_shot(jump_shot):
-    """Jump shot that deliberately approaches from the side and dodges inward."""
-
-    def __init__(self, intercept_time, targets=None, approach_side="right"):
-        super().__init__(intercept_time, targets)
-        self.side_mode = True
-        self.side_lateral_distance = None
-        self.approach_side = approach_side
 
 
     def run(self, agent: VirxERLU):
@@ -5618,6 +5046,16 @@ class side_shot(jump_shot):
 
         l_vf = vf + agent.me.location
         agent.line(l_vf-Vector(z=100), l_vf+Vector(z=100), agent.renderer.red)
+
+class side_shot(jump_shot):
+    """Jump shot that deliberately approaches from the side and dodges inward."""
+
+    def __init__(self, intercept_time, targets=None, approach_side="right"):
+        super().__init__(intercept_time, targets)
+        self.side_mode = True
+        self.side_lateral_distance = None
+        self.approach_side = approach_side
+
 
 class ground_shot:
     # Hits a target point at a target time towards a target direction
