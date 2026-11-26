@@ -10,7 +10,7 @@ from typing import List, Tuple
 
 import numpy as np
 from gui import Gui
-from rlbot.flat import AirState, ControllerState, GamePacket, MatchPhase
+from rlbot.flat import AirState, ControllerState, GamePacket, MatchPhase, Vector3
 from rlbot.managers import Bot
 
 
@@ -220,8 +220,8 @@ class VirxERLU(Bot):
             )
 
             self.renderer.draw_line_3d(
-                start.copy(),
-                end.copy(),
+                Vector3(x=start.x, y=start.y, z=start.z),
+                Vector3(x=end.x, y=end.y, z=end.z),
                 self.renderer.create_color(
                     255,
                     *color
@@ -237,7 +237,7 @@ class VirxERLU(Bot):
             )
 
             vectors = tuple(
-                vector.copy()
+                Vector3(x=vector.x, y=vector.y, z=vector.z)
                 for vector in vectors
             )
 
@@ -451,11 +451,15 @@ class VirxERLU(Bot):
                             )
 
                         self.renderer.draw_string_3d(
-                            tuple(self.me.location),
-                            2,
-                            2,
                             "\n".join(self.debug[0]),
+                            Vector3(
+                                x=self.me.location.x,
+                                y=self.me.location.y,
+                                z=self.me.location.z
+                            ),
+                            2,
                             self.renderer.team_color(
+                                self.team,
                                 alt_color=True
                             )
                         )
@@ -533,6 +537,7 @@ class VirxERLU(Bot):
 
                         hitbox_color = (
                             self.renderer.team_color(
+                                self.team,
                                 alt_color=True
                             )
                         )
@@ -595,12 +600,12 @@ class VirxERLU(Bot):
                             )
 
                         self.renderer.draw_string_2d(
-                            20,
-                            300,
-                            2,
-                            2,
                             "\n".join(self.debug[1]),
+                            0.02,
+                            0.28,
+                            2,
                             self.renderer.team_color(
+                                self.team,
                                 alt_color=True
                             )
                         )
