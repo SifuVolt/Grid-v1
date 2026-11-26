@@ -348,7 +348,13 @@ class VirxERLU(Bot):
         self,
         packet: GamePacket
     ) -> ControllerState:
+        rendering_started = False
         try:
+            # Start one render group for this packet. All routine and debug
+            # drawing below must happen between begin_rendering/end_rendering.
+            self.renderer.begin_rendering()
+            rendering_started = True
+
             # Reset controller every tick.
             self.controller = ControllerState()
 
@@ -633,6 +639,9 @@ class VirxERLU(Bot):
                 else:
                     self.debug = [[], []]
 
+            self.renderer.end_rendering()
+            rendering_started = False
+
             return (
                 ControllerState()
                 if self.disable_driving
@@ -640,6 +649,13 @@ class VirxERLU(Bot):
             )
 
         except Exception:
+            # Do not leave a render group open if packet processing fails.
+            if rendering_started:
+                try:
+                    self.renderer.end_rendering()
+                except Exception:
+                    pass
+                rendering_started = False
             t_file = os.path.join(
                 self.traceback_file[0],
                 "VirxERLU" + self.traceback_file[1]
