@@ -1,4 +1,4 @@
-from util.routines import Aerial, double_jump, ground_shot, jump_shot, side_shot, virxrlcu
+from util.routines import Aerial, double_jump, ground_shot, jump_shot, side_shot, virxrlcu, wall_approach
 from util.utils import Vector, math, side, cap
 from util.grid_double_jump import find_double_jump as grid_find_double_jump
 
@@ -269,14 +269,6 @@ def find_wall_drive(agent, cap_=5.0):
             f"boost={car.boost:.0f}",
             flush=True
         )
-        print(
-            "[NOOB WALL FIND] disabled: wall repositioning removed",
-            flush=True
-        )
-
-    # Do not send the bot on a wall route to reposition for a shot.
-    # Direct aerials selected by the normal shot finder remain available.
-    return None
 
     if car.airborne and car_wall_surface(car, agent.team) is None:
         return None
