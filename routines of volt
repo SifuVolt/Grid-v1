@@ -68,13 +68,16 @@ def _relative_goal_aim_point(agent, targets=None):
 
     return goal_center
 
-def _jump_shot_goal_aim_point(agent, targets=None):
-    """Use a higher goal target only when the ball is deep in our own half."""
+def _jump_shot_goal_aim_point(agent, targets=None, ball_location=None):
+    """Choose the goal height from the predicted intercept ball position."""
     goal_center = _relative_goal_aim_point(agent, targets)
 
     # side(team) makes our own half negative for either team. The halfway
     # point of our own half is 2560 units from midfield toward our goal.
-    own_half_depth = agent.ball.location.y * side(agent.team)
+    reference_ball = (
+        agent.ball.location if ball_location is None else ball_location
+    )
+    own_half_depth = reference_ball.y * side(agent.team)
     if own_half_depth < -2560:
         goal_center.z = 470
     elif not agent.me.airborne:
@@ -1206,9 +1209,34 @@ class Aerial:
         )
         safe_time = max(time_remaining, dt)
         if car_final_velocity is None:
-            car_final_velocity = (
-                (ball - agent.me.location) / safe_time
-            ).cap(0, max_speed)
+            # Predict impact velocity from the car's actual motion and the
+            # acceleration it can produce before contact. Displacement / time
+            # is average velocity, not the car's velocity at impact, and can
+            # badly overstate or understate the power of a distant shot.
+            travel = ball - agent.me.location
+            travel_direction = travel.normalize()
+            if travel_direction.magnitude() < 0.001:
+                travel_direction = agent.me.forward.normalize()
+
+            forward_alignment = cap(
+                agent.me.forward.dot(travel_direction), 0, 1
+            )
+            available_boost = max(0.0, float(agent.me.boost))
+            boost_time = min(
+                safe_time, available_boost / boost_per_second
+            )
+            effective_boost_time = (
+                boost_time * forward_alignment * forward_alignment
+            )
+            predicted_velocity = (
+                agent.me.velocity
+                + agent.gravity * safe_time
+                + agent.me.forward * (
+                    throttle_accel * safe_time
+                    + max(0.0, agent.boost_accel) * effective_boost_time
+                )
+            )
+            car_final_velocity = predicted_velocity.cap(0, max_speed)
 
         velocity_for_power = (
             car_final_velocity * 6 + ball_velocity
@@ -1313,7 +1341,9 @@ class Aerial:
         )
         return centre
 
-    def _party_cannon_hitbox_target(self, agent, ball, shot_direction):
+    def _party_cannon_hitbox_target(
+        self, agent, ball, shot_direction, orientation=None
+    ):
         # Party Cannon's 155-unit standoff is approximately ball radius +
         # half the Octane hitbox length. Use Volt's actual hitbox dimensions.
         hitbox = agent.me.hitbox
@@ -1331,10 +1361,14 @@ class Aerial:
             offset_x = float(getattr(local_offset, "x", 0.0))
             offset_y = float(getattr(local_offset, "y", 0.0))
             offset_z = float(getattr(local_offset, "z", 0.0))
+            if orientation is None:
+                forward, up = agent.me.forward, agent.me.up
+            else:
+                forward, up = orientation
             world_offset = (
-                agent.me.forward * offset_x
-                + agent.me.up.cross(agent.me.forward) * offset_y
-                + agent.me.up * offset_z
+                forward * offset_x
+                + up.cross(forward) * offset_y
+                + up * offset_z
             )
 
         return (
@@ -4316,8 +4350,9 @@ class jump_shot:
 
         direction = (ball_location - agent.me.location).normalize()
 
-        if self.goal_aim_point is None:
-            self.goal_aim_point = _jump_shot_goal_aim_point(agent, self.targets)
+        self.goal_aim_point = _jump_shot_goal_aim_point(
+            agent, self.targets, ball_location
+        )
         shot_vector = (
             self.goal_aim_point - ball_location
         ).flatten().normalize()
@@ -4344,10 +4379,12 @@ class jump_shot:
         T = self.intercept_time - agent.time
         time_remaining = cap(T, 0.000001, 6)
 
-        # Cache the goal aim point from the live ball on the first frame.
+        # Keep the aim point stable after launch, but refresh it from the
+        # selected prediction slice throughout the ground approach.
         if self.goal_aim_point is None:
-            self.goal_aim_point = _jump_shot_goal_aim_point(agent, self.targets)
-        goal_aim = self.goal_aim_point
+            self.goal_aim_point = _jump_shot_goal_aim_point(
+                agent, self.targets
+            )
 
         # Refresh the selected prediction slice until the jump begins. Once
         # airborne, keep the committed intercept fixed just like Volt-Rust.
@@ -4381,6 +4418,11 @@ class jump_shot:
                 agent.me.velocity.z,
                 agent.gravity.z
             )
+            self.goal_aim_point = _jump_shot_goal_aim_point(
+                agent, self.targets, self.ball_location
+            )
+
+        goal_aim = self.goal_aim_point
 
         # Party Cannon shot direction: blend the direct goal-centre vector
         # with the predicted post-impact scoring direction, then apply the
@@ -4504,12 +4546,24 @@ class jump_shot:
                 abs(velocity) < 100
                 and distance_remaining < agent.me.hitbox.length * 0.5
             )
+            # Compare distance with predicted travel distance. The old
+            # condition compared velocity (uu/s) directly with distance (uu),
+            # so it could launch too early or reject a reachable contact.
+            current_forward_speed = agent.me.local(
+                agent.me.velocity
+            ).x
+            predicted_forward_travel = max(
+                0.0,
+                0.5 * (current_forward_speed + local_vf.x) * max(T, 0.0)
+            )
+            required_forward_travel = max(
+                0.0,
+                local_offset_target.x - agent.me.hitbox.length / 3
+            )
             aligned = (
                 abs(local_offset_target.y) < 92
-                and local_vf.x >= (
-                    local_offset_target.x - agent.me.hitbox.length / 3
-                )
                 and local_offset_target.x > 0
+                and predicted_forward_travel >= required_forward_travel
             )
             normal_ready = (
                 (close_enough or aligned)
@@ -4636,20 +4690,89 @@ class jump_shot:
                     else 0.0
                 )
 
+            # Predict the hitbox's world offset at impact using the current
+            # aerial-control command. Rebuild the contact point from that
+            # future orientation, then correct the controller toward it.
+            if T > 0.0:
+                controls = (
+                    agent.controller.roll,
+                    agent.controller.pitch,
+                    agent.controller.yaw
+                )
+                predicted_forward, _, predicted_up = (
+                    self._contact_aim._predict_air_orientation(
+                        agent, min(T, 2.0), controls
+                    )
+                )
+                predicted_target = (
+                    self._contact_aim._party_cannon_hitbox_target(
+                        agent,
+                        self.ball_location,
+                        self.shot_vector,
+                        orientation=(predicted_forward, predicted_up)
+                    )
+                )
+                if predicted_target.dist(self.offset_target) > 1.0:
+                    self.offset_target = predicted_target
+                    self.contact_point = (
+                        self.ball_location - self.shot_vector * 92.75
+                    )
+                    delta_x = self.offset_target - xf
+                    local_aim = (
+                        agent.me.local(delta_x)
+                        if delta_x.magnitude() > 50
+                        else agent.me.local(self.shot_vector.flatten())
+                    )
+                    defaultPD(agent, local_aim, upside_down=False)
+                    agent.controller.pitch = max(
+                        agent.controller.pitch, -0.35
+                    )
+                    if (
+                        self.ball_location.z > 130
+                        and self.ball_location.z > agent.me.location.z + 65
+                        and not self.quick_shot
+                    ):
+                        agent.controller.pitch = 1.0
+                        agent.controller.roll = (
+                            -0.20 * sign(agent.controller.yaw)
+                            if abs(agent.controller.yaw) > 0.08
+                            else 0.0
+                        )
+
+                local_target = agent.me.local_location(
+                    self.offset_target
+                ).flatten()
+                contact_distance = agent.me.location.dist(
+                    self.offset_target
+                )
+
         if (
             self.counter < 3
             and T > 0
             and delta_x.magnitude() > 1
         ):
-            forward_need = delta_x.dot(agent.me.forward) / T
+            distance_to_contact = delta_x.magnitude()
             contact_direction = delta_x.normalize()
+            current_speed_to_contact = agent.me.velocity.dot(
+                contact_direction
+            )
+            required_acceleration = (
+                2.0 * (
+                    distance_to_contact
+                    - current_speed_to_contact * T
+                ) / max(T * T, dt * dt)
+            )
+            forward_need = distance_to_contact / T
             forward_angle = math.acos(cap(
                 agent.me.forward.dot(contact_direction), -1, 1
             ))
+            # Feather boost only when the remaining distance requires more
+            # acceleration than throttle alone can supply. This also avoids
+            # boosting into a badly aligned contact or past supersonic speed.
             agent.controller.boost = (
-                forward_need
-                >= (agent.boost_accel + 66.667) * (13 / 120)
+                required_acceleration > throttle_accel * 1.10
                 and forward_angle < 0.4
+                and current_speed_to_contact < max_speed - 75
                 and agent.me.boost > 0
             )
             agent.controller.throttle = cap(
@@ -4664,23 +4787,24 @@ class jump_shot:
                     self.shot_vector.flatten().normalize()
                 )
             )
-            close_contact = contact_distance < contact_limit
-            aligned_contact = (
+            # A close car is not enough: only spend the dodge when the nose
+            # is already aligned with the planned outgoing shot direction.
+            dodge_contact_ready = (
                 contact_distance < contact_limit + 65
-                and shot_alignment > 0.985
+                and shot_alignment > 0.94
             )
             dodge_window_open = jump_elapsed <= 1.25
 
             if (
-                (close_contact or aligned_contact)
+                dodge_contact_ready
                 and dodge_window_open
                 and local_target.x > 0
             ):
-                dodge_direction = (
-                    local_ball.normalize()
-                    if local_ball.magnitude() > 1
-                    else Vector(x=1)
-                )
+                dodge_direction = agent.me.local(
+                    self.shot_vector.flatten()
+                ).flatten().normalize()
+                if dodge_direction.magnitude() < 0.001:
+                    dodge_direction = Vector(x=1)
                 self.dodge_direction = dodge_direction
                 self.counter = 4
                 agent.last_flip_time = agent.time
