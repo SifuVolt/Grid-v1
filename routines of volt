@@ -4178,6 +4178,58 @@ class jump_shot:
         self.contact_face_label = None
         self._last_air_prediction_debug = -1.0
 
+    def _jump_shot_hitbox_target(self, agent, ball, shot_direction):
+        """
+        Aim using the front face or any point along the top-front edge.
+
+        The top-front edge spans the hitbox width between the wheels, so
+        either upper corner (or any point between them) can be the contact
+        point. Choose the point whose required car-centre position is
+        closest to the car's current position.
+        """
+        hitbox = agent.me.hitbox
+        half_length = float(getattr(hitbox, "length", 118.01)) * 0.5
+        half_width = float(getattr(hitbox, "width", 84.2)) * 0.5
+        half_height = float(getattr(hitbox, "height", 36.16)) * 0.5
+        ball_radius = 92.75
+
+        forward = agent.me.forward.normalize()
+        up = agent.me.up.normalize()
+        right = up.cross(forward).normalize()
+        contact_surface = ball - shot_direction * ball_radius
+
+        local_offset = getattr(agent.me, "hitbox_offset", None)
+        if local_offset is None:
+            local_offset = getattr(hitbox, "offset", None)
+        world_offset = Vector()
+        if local_offset is not None:
+            world_offset = (
+                forward * float(getattr(local_offset, "x", 0.0))
+                + right * float(getattr(local_offset, "y", 0.0))
+                + up * float(getattr(local_offset, "z", 0.0))
+            )
+
+        # Keep the existing front-centre contact as an option.
+        front_centre = (
+            contact_surface - world_offset - forward * half_length
+        )
+
+        # Project onto the top-front edge, clamped between both top corners.
+        top_base = (
+            contact_surface - world_offset
+            - forward * half_length - up * half_height
+        )
+        lateral = cap(
+            (top_base - agent.me.location).dot(right),
+            -half_width,
+            half_width
+        )
+        top_edge = top_base - right * lateral
+
+        if top_edge.dist(agent.me.location) < front_centre.dist(agent.me.location):
+            return top_edge
+        return front_centre
+
     def _predict_air_orientation(self, agent, horizon, controls):
         """Integrate Rocket League's measured aerial-control model at 120 Hz."""
         forward = agent.me.forward.normalize()
@@ -4400,7 +4452,7 @@ class jump_shot:
         # Use the actual hitbox length and rotated local hitbox offset.
         # The car reference point is placed behind the ball so the front of
         # the hitbox reaches the 92.75-unit ball contact surface.
-        self.offset_target = self._contact_aim._party_cannon_hitbox_target(
+        self.offset_target = self._jump_shot_hitbox_target(
             agent, self.ball_location, self.shot_vector
         )
         self.contact_approach_target = self.offset_target.copy()
@@ -4809,7 +4861,7 @@ class side_shot(jump_shot):
 
         # Aim the car reference point so the front of its actual hitbox,
         # rather than its origin, reaches the chosen ball contact surface.
-        hitbox_target = self._contact_aim._party_cannon_hitbox_target(
+        hitbox_target = self._jump_shot_hitbox_target(
             agent, self.ball_location, self.shot_vector
         )
         self.offset_target = hitbox_target.copy()
