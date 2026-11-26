@@ -4178,58 +4178,6 @@ class jump_shot:
         self.contact_face_label = None
         self._last_air_prediction_debug = -1.0
 
-    def _jump_shot_hitbox_target(self, agent, ball, shot_direction):
-        """
-        Aim using the front face or any point along the top-front edge.
-
-        The top-front edge spans the hitbox width between the wheels, so
-        either upper corner (or any point between them) can be the contact
-        point. Choose the point whose required car-centre position is
-        closest to the car's current position.
-        """
-        hitbox = agent.me.hitbox
-        half_length = float(getattr(hitbox, "length", 118.01)) * 0.5
-        half_width = float(getattr(hitbox, "width", 84.2)) * 0.5
-        half_height = float(getattr(hitbox, "height", 36.16)) * 0.5
-        ball_radius = 92.75
-
-        forward = agent.me.forward.normalize()
-        up = agent.me.up.normalize()
-        right = up.cross(forward).normalize()
-        contact_surface = ball - shot_direction * ball_radius
-
-        local_offset = getattr(agent.me, "hitbox_offset", None)
-        if local_offset is None:
-            local_offset = getattr(hitbox, "offset", None)
-        world_offset = Vector()
-        if local_offset is not None:
-            world_offset = (
-                forward * float(getattr(local_offset, "x", 0.0))
-                + right * float(getattr(local_offset, "y", 0.0))
-                + up * float(getattr(local_offset, "z", 0.0))
-            )
-
-        # Keep the existing front-centre contact as an option.
-        front_centre = (
-            contact_surface - world_offset - forward * half_length
-        )
-
-        # Project onto the top-front edge, clamped between both top corners.
-        top_base = (
-            contact_surface - world_offset
-            - forward * half_length - up * half_height
-        )
-        lateral = cap(
-            (top_base - agent.me.location).dot(right),
-            -half_width,
-            half_width
-        )
-        top_edge = top_base - right * lateral
-
-        if top_edge.dist(agent.me.location) < front_centre.dist(agent.me.location):
-            return top_edge
-        return front_centre
-
     def _predict_air_orientation(self, agent, horizon, controls):
         """Integrate Rocket League's measured aerial-control model at 120 Hz."""
         forward = agent.me.forward.normalize()
@@ -4452,7 +4400,7 @@ class jump_shot:
         # Use the actual hitbox length and rotated local hitbox offset.
         # The car reference point is placed behind the ball so the front of
         # the hitbox reaches the 92.75-unit ball contact surface.
-        self.offset_target = self._jump_shot_hitbox_target(
+        self.offset_target = self._contact_aim._party_cannon_hitbox_target(
             agent, self.ball_location, self.shot_vector
         )
         self.contact_approach_target = self.offset_target.copy()
@@ -4522,6 +4470,18 @@ class jump_shot:
                 velocity + dodge_impulse(agent)
             )
 
+            # Keep the existing VirxERLU CLib jump-shot viability check as
+            # the Python-side equivalent of Rust's runtime reachability gate.
+            runtime_reachable = virxrlcu.jump_shot_is_viable(
+                T,
+                agent.boost_accel,
+                tuple(agent.gravity),
+                agent.me.get_raw(agent),
+                self.offset_target.z,
+                tuple((final_target - agent.me.location).normalize()),
+                distance_remaining
+            )
+
             close_enough = (
                 abs(velocity) < 100
                 and distance_remaining < agent.me.hitbox.length * 0.5
@@ -4538,22 +4498,36 @@ class jump_shot:
                 and T <= self.needed_jump_time * 1.08
             )
 
-            if normal_ready:
+            if normal_ready and runtime_reachable:
                 self.quick_shot = T <= 0.45
                 self.jumping = True
                 self.jump_time = -1
                 print(
-                    f"[JUMP SHOT] launch quick={self.quick_shot} "
+                    f"[RUST JUMP SHOT] launch quick={self.quick_shot} "
                     f"T={T:.3f} jump={self.needed_jump_time:.3f} "
                     f"distance={distance_remaining:.1f} "
                     f"speed={velocity:.1f} aligned={aligned}",
                     flush=True
                 )
                 return
-
-            if T <= self.needed_jump_time:
+            elif normal_ready and not runtime_reachable:
                 print(
-                    f"[JUMP SHOT] abort approach "
+                    f"[RUST JUMP SHOT] launch blocked T={T:.3f} "
+                    f"distance={distance_remaining:.1f} "
+                    f"speed={velocity:.1f} boost={agent.me.boost:.0f}",
+                    flush=True
+                )
+
+            if (
+                T <= self.needed_jump_time
+                or (
+                    t_j > 0
+                    and distance_remaining > 50
+                    and not runtime_reachable
+                )
+            ):
+                print(
+                    f"[RUST JUMP SHOT] abort approach "
                     f"T={T:.3f} Tj={t_j:.3f} "
                     f"distance={distance_remaining:.1f} "
                     f"jump={self.needed_jump_time:.3f}",
@@ -4667,9 +4641,23 @@ class jump_shot:
             )
 
         if self.counter == 3:
+            shot_alignment = (
+                agent.me.forward.flatten().normalize().dot(
+                    self.shot_vector.flatten().normalize()
+                )
+            )
             close_contact = contact_distance < contact_limit
+            aligned_contact = (
+                contact_distance < contact_limit + 65
+                and shot_alignment > 0.985
+            )
+            dodge_window_open = jump_elapsed <= 1.25
 
-            if close_contact and local_target.x > 0:
+            if (
+                (close_contact or aligned_contact)
+                and dodge_window_open
+                and local_target.x > 0
+            ):
                 dodge_direction = (
                     local_ball.normalize()
                     if local_ball.magnitude() > 1
@@ -4689,7 +4677,8 @@ class jump_shot:
                 agent.controller.yaw = dodge_direction.y
                 agent.controller.roll = 0.0
             elif (
-                local_target.x <= 0
+                jump_elapsed > 1.25
+                or local_target.x <= 0
                 or (
                     contact_distance > contact_limit + 150
                     and T < 0.12
@@ -4861,7 +4850,7 @@ class side_shot(jump_shot):
 
         # Aim the car reference point so the front of its actual hitbox,
         # rather than its origin, reaches the chosen ball contact surface.
-        hitbox_target = self._jump_shot_hitbox_target(
+        hitbox_target = self._contact_aim._party_cannon_hitbox_target(
             agent, self.ball_location, self.shot_vector
         )
         self.offset_target = hitbox_target.copy()
