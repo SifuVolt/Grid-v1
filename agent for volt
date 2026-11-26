@@ -377,23 +377,28 @@ class VirxERLU(Bot):
                     and getattr(routine, "jumping", False)
                     for routine in self.stack
                 )
+                committed_aerial = any(
+                    routine.__class__.__name__ == "Aerial"
+                    and getattr(routine, "aerial_committed", False)
+                    for routine in self.stack
+                )
 
                 if stack_routine_name in {
-                    "Aerial",
                     "jump_shot",
                     "double_jump",
                     "ground_shot",
                     "short_shot"
-                } or committed_jump_shot:
+                } or committed_jump_shot or committed_aerial:
                     self.shooting = True
                 else:
                     self.shooting = False
 
                 try:
-                    # Do not run challenger/strategy selection while a jump
-                    # shot is committed. The active stack routine (including
-                    # any nested dodge or recovery) still runs below.
-                    if not committed_jump_shot:
+                    # Aerials may be replaced during their ground approach,
+                    # but once launch commits they cannot be interrupted.
+                    # The active stack routine (including nested dodge or
+                    # recovery) still runs below.
+                    if not (committed_jump_shot or committed_aerial):
                         self.run_logic()
 
                 except Exception:
