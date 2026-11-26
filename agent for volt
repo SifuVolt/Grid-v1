@@ -379,7 +379,7 @@ class VirxERLU(Bot):
                 # The strategy may otherwise replace the active routine when
                 # an opponent becomes closer on a later packet.
                 committed_jump_shot = any(
-                    routine.__class__.__name__ == "jump_shot"
+                    routine.__class__.__name__ in {"jump_shot", "side_shot"}
                     and getattr(routine, "jumping", False)
                     for routine in self.stack
                 )
@@ -387,6 +387,7 @@ class VirxERLU(Bot):
                 if stack_routine_name in {
                     "Aerial",
                     "jump_shot",
+                    "side_shot",
                     "double_jump",
                     "ground_shot",
                     "short_shot"
