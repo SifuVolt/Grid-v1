@@ -4470,18 +4470,6 @@ class jump_shot:
                 velocity + dodge_impulse(agent)
             )
 
-            # Keep the existing VirxERLU CLib jump-shot viability check as
-            # the Python-side equivalent of Rust's runtime reachability gate.
-            runtime_reachable = virxrlcu.jump_shot_is_viable(
-                T,
-                agent.boost_accel,
-                tuple(agent.gravity),
-                agent.me.get_raw(agent),
-                self.offset_target.z,
-                tuple((final_target - agent.me.location).normalize()),
-                distance_remaining
-            )
-
             close_enough = (
                 abs(velocity) < 100
                 and distance_remaining < agent.me.hitbox.length * 0.5
@@ -4498,36 +4486,22 @@ class jump_shot:
                 and T <= self.needed_jump_time * 1.08
             )
 
-            if normal_ready and runtime_reachable:
+            if normal_ready:
                 self.quick_shot = T <= 0.45
                 self.jumping = True
                 self.jump_time = -1
                 print(
-                    f"[RUST JUMP SHOT] launch quick={self.quick_shot} "
+                    f"[JUMP SHOT] launch quick={self.quick_shot} "
                     f"T={T:.3f} jump={self.needed_jump_time:.3f} "
                     f"distance={distance_remaining:.1f} "
                     f"speed={velocity:.1f} aligned={aligned}",
                     flush=True
                 )
                 return
-            elif normal_ready and not runtime_reachable:
-                print(
-                    f"[RUST JUMP SHOT] launch blocked T={T:.3f} "
-                    f"distance={distance_remaining:.1f} "
-                    f"speed={velocity:.1f} boost={agent.me.boost:.0f}",
-                    flush=True
-                )
 
-            if (
-                T <= self.needed_jump_time
-                or (
-                    t_j > 0
-                    and distance_remaining > 50
-                    and not runtime_reachable
-                )
-            ):
+            if T <= self.needed_jump_time:
                 print(
-                    f"[RUST JUMP SHOT] abort approach "
+                    f"[JUMP SHOT] abort approach "
                     f"T={T:.3f} Tj={t_j:.3f} "
                     f"distance={distance_remaining:.1f} "
                     f"jump={self.needed_jump_time:.3f}",
@@ -4641,23 +4615,9 @@ class jump_shot:
             )
 
         if self.counter == 3:
-            shot_alignment = (
-                agent.me.forward.flatten().normalize().dot(
-                    self.shot_vector.flatten().normalize()
-                )
-            )
             close_contact = contact_distance < contact_limit
-            aligned_contact = (
-                contact_distance < contact_limit + 65
-                and shot_alignment > 0.985
-            )
-            dodge_window_open = jump_elapsed <= 1.25
 
-            if (
-                (close_contact or aligned_contact)
-                and dodge_window_open
-                and local_target.x > 0
-            ):
+            if close_contact and local_target.x > 0:
                 dodge_direction = (
                     local_ball.normalize()
                     if local_ball.magnitude() > 1
@@ -4677,8 +4637,7 @@ class jump_shot:
                 agent.controller.yaw = dodge_direction.y
                 agent.controller.roll = 0.0
             elif (
-                jump_elapsed > 1.25
-                or local_target.x <= 0
+                local_target.x <= 0
                 or (
                     contact_distance > contact_limit + 150
                     and T < 0.12
