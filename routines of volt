@@ -1598,21 +1598,31 @@ class Aerial:
     def _party_cannon_best_aerial_candidate(
         self, agent, target, time_remaining, turn_first=False
     ):
-        candidates = []
-        for double_jump in (False, True):
-            candidate = self._party_cannon_aerial_candidate(
-                agent, target, time_remaining, double_jump,
-                turn_first=turn_first
-            )
-            if candidate is not None:
-                candidates.append(candidate)
+        single = self._party_cannon_aerial_candidate(
+            agent, target, time_remaining, False, turn_first=turn_first
+        )
+        double = self._party_cannon_aerial_candidate(
+            agent, target, time_remaining, True, turn_first=turn_first
+        )
+        candidates = [
+            candidate for candidate in (single, double)
+            if candidate is not None
+        ]
         if not candidates:
             return None
+
         # Match Party Cannon: use the jump mode with the lower boost cost.
-        return min(
+        best = min(
             candidates,
             key=lambda item: (item["boost"], item["double_jump"])
         )
+        best["single_boost_estimate"] = (
+            None if single is None else single["boost"]
+        )
+        best["double_boost_estimate"] = (
+            None if double is None else double["boost"]
+        )
+        return best
 
     def _commit_aerial_launch(self, agent, candidate):
         self.aerial_committed = True
@@ -1635,6 +1645,8 @@ class Aerial:
         print(
             f"[AERIAL COMMIT] jump={'DOUBLE' if self.jump_type_fast else 'SINGLE'} "
             f"boost_est={candidate['boost']:.1f} "
+            f"single_boost={candidate['single_boost_estimate']} "
+            f"double_boost={candidate['double_boost_estimate']} "
             f"required_accel={candidate['required_acceleration']:.0f} "
             f"turn_time={candidate['turn_time']:.2f} "
             f"turn_distance={candidate['turn_distance']:.0f} "
