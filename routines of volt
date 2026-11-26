@@ -1160,6 +1160,9 @@ class Aerial:
         self.side_wall_launched = False
         self.wall_shot_active = False
         self.wall_shot_normal = None
+        self.aerial_committed = False
+        self.immediate_launch = None
+        self.aerial_launch_debug_time = -1.0
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -1372,6 +1375,376 @@ class Aerial:
 
         return boost_estimate
 
+    @staticmethod
+    def _party_cannon_turn_radius(speed):
+        speed = cap(abs(float(speed)), 0.01, max_speed)
+        if speed <= 500:
+            return 145.0 + 106.0 * speed / 500.0
+        if speed <= 1000:
+            return 251.0 + 174.0 * (speed - 500.0) / 500.0
+        if speed <= 1500:
+            return 425.0 + 302.0 * (speed - 1000.0) / 500.0
+        if speed <= 1750:
+            return 727.0 + 182.0 * (speed - 1500.0) / 250.0
+        return 909.0 + 227.0 * (speed - 1750.0) / 550.0
+
+    @staticmethod
+    def _party_cannon_speed_after_turn(speed, angle, modifier=1.0):
+        factor = (
+            math.exp(max(0.0, angle) * 0.49 * modifier)
+            * max(0.0, angle) * 0.49 * modifier
+        )
+        if speed > 1234:
+            factor *= 0.2
+        return cap((1234.0 * factor + speed) / (factor + 1.0), 0.0, max_speed)
+
+    @staticmethod
+    def _party_cannon_speed_from_turn_radius(radius):
+        radius = cap(radius, 145.0, 1136.0)
+        if radius <= 251:
+            return 500.0 * (radius - 145.0) / 106.0
+        if radius <= 425:
+            return 500.0 + 500.0 * (radius - 251.0) / 174.0
+        if radius <= 727:
+            return 1000.0 + 500.0 * (radius - 425.0) / 302.0
+        if radius <= 909:
+            return 1500.0 + 250.0 * (radius - 727.0) / 182.0
+        return 1750.0 + 550.0 * (radius - 909.0) / 227.0
+
+    def _party_cannon_ground_turn(self, car, target):
+        """Party Cannon Drive turn estimate adapted to Volt's ground vectors."""
+        target_flat = target.flatten()
+        car_flat = car.location.flatten()
+        to_target = target_flat - car_flat
+        distance = to_target.magnitude()
+        forward = car.forward.flatten().normalize()
+        if forward.magnitude() < 0.001:
+            forward = to_target.normalize()
+        right = car.up.cross(forward).flatten().normalize()
+        direction = to_target.normalize()
+        angle = math.acos(cap(forward.dot(direction), -1.0, 1.0))
+        current_speed = car.velocity.dot(forward)
+        turn_speed = self._party_cannon_speed_after_turn(
+            current_speed, angle, 0.5
+        )
+        radius = self._party_cannon_turn_radius(turn_speed)
+        side_sign = 1.0 if right.dot(to_target) >= 0 else -1.0
+        turn_side = right * side_sign
+        centre = car_flat + turn_side * radius
+        centre_distance = (target_flat - centre).magnitude()
+        if centre_distance < radius:
+            radius = max(145.0, centre_distance * 0.5)
+            centre = car_flat + turn_side * radius
+            centre_distance = (target_flat - centre).magnitude()
+
+        tangent_angle = math.acos(cap(
+            radius / max(centre_distance, radius, 1.0), 0.0, 1.0
+        ))
+        turn_angle = cap(angle - tangent_angle, 0.0, math.pi)
+        turn_speed = max(
+            400.0, self._party_cannon_speed_from_turn_radius(radius)
+        )
+        turn_time = radius * turn_angle / turn_speed
+        turn_distance = (
+            radius * turn_angle
+            + math.sqrt(max(centre_distance * centre_distance - radius * radius, 0.0))
+        )
+        end_position = (
+            car.location
+            + forward * (radius * math.sin(turn_angle))
+            + turn_side * (radius * (1.0 - math.cos(turn_angle)))
+        )
+        end_velocity = direction * self._party_cannon_speed_after_turn(
+            current_speed, angle, 0.5
+        )
+        return {
+            "time": turn_time,
+            "distance": turn_distance,
+            "position": end_position,
+            "velocity": end_velocity,
+            "forward": direction,
+        }
+
+    def _party_cannon_jump_prediction(
+        self, agent, time_remaining, double_jump,
+        start_position=None, start_velocity=None
+    ):
+        """Predict Volt's actual jump impulses, gravity and 120 Hz timing."""
+        car = agent.me
+        T = max(0.0, float(time_remaining))
+        position = car.location if start_position is None else start_position
+        velocity = car.velocity if start_velocity is None else start_velocity
+
+        if car.airborne:
+            return (
+                position + velocity * T + agent.gravity * (0.5 * T * T),
+                velocity + agent.gravity * T
+            )
+
+        up = car.up.normalize()
+        held = min(jump_max_duration, T)
+        sticky = min(0.05, T)
+        jump_displacement = (
+            jump_speed * T
+            + jump_acc * held * (T - 0.5 * held)
+            - 325.0 * sticky * (T - 0.5 * sticky)
+        )
+        predicted_position = (
+            position + velocity * T
+            + agent.gravity * (0.5 * T * T)
+            + up * jump_displacement
+        )
+        predicted_velocity = (
+            velocity + agent.gravity * T
+            + up * (jump_speed + jump_acc * held - 325.0 * sticky)
+        )
+
+        # The double-jump impulse is delayed until after the 0.2s hold and
+        # three release frames, exactly as the controller sequence requires.
+        second_jump_delay = jump_max_duration + 3 * dt
+        if double_jump and T > second_jump_delay:
+            predicted_position += up * jump_speed * (T - second_jump_delay)
+            predicted_velocity += up * jump_speed
+        return predicted_position, predicted_velocity
+
+    def _party_cannon_aerial_candidate(
+        self, agent, target, time_remaining, double_jump, turn_first=False
+    ):
+        """Return a feasible single/double aerial estimate, or None."""
+        car = agent.me
+        T = max(0.0, float(time_remaining))
+        start_position = car.location.copy()
+        start_velocity = car.velocity.copy()
+        start_forward = car.forward.copy()
+        turn_time = 0.0
+        turn_distance = 0.0
+
+        if turn_first and not car.airborne:
+            turn = self._party_cannon_ground_turn(
+                car, Vector(target.x, target.y, 0)
+            )
+            turn_time = turn["time"]
+            turn_distance = turn["distance"]
+            if turn_time >= T - dt:
+                return None
+            start_position = turn["position"]
+            start_velocity = turn["velocity"]
+            start_forward = turn["forward"]
+            T -= turn_time
+
+        final_position, final_velocity = self._party_cannon_jump_prediction(
+            agent, T, double_jump,
+            start_position=start_position,
+            start_velocity=start_velocity
+        )
+        offset = target - final_position
+        distance = offset.magnitude()
+        required_acceleration = 0.0
+        ratio = 0.0
+        boost_estimate = 0.0
+        velocity_estimate = final_velocity
+
+        if distance > 1.0:
+            direction = offset / distance
+            angle = max(0.0001, math.acos(cap(
+                direction.dot(start_forward.normalize()), -1.0, 1.0
+            )))
+            aerial_turn_time = 1.2 * math.sqrt(angle / 9.0)
+            tau1 = min(
+                T - dt,
+                aerial_turn_time * cap(1.0 - 0.4 / angle, 0.0, 1.0)
+            )
+            usable_time = max(dt, T - tau1)
+            required_acceleration = 2.0 * distance / (usable_time * usable_time)
+            total_acceleration = agent.boost_accel + throttle_accel
+            ratio = required_acceleration / max(1.0, total_acceleration)
+            if ratio >= 0.9:
+                return None
+
+            tau2 = T - (
+                (T - tau1)
+                * math.sqrt(1.0 - cap(ratio, 0.0, 1.0))
+            )
+            boost_time = max(0.0, tau2 - tau1)
+            boost_estimate = boost_time * boost_per_second
+            velocity_estimate = (
+                final_velocity + direction * total_acceleration * boost_time
+            )
+
+        if velocity_estimate.magnitude() >= max_speed * 0.9:
+            return None
+
+        unlimited = agent.boost_amount == "unlimited"
+        available_boost = max(0.0, float(car.boost))
+        if not unlimited and (
+            available_boost <= 0.0
+            or boost_estimate >= available_boost * 0.9
+        ):
+            return None
+
+        return {
+            "double_jump": bool(double_jump),
+            "boost": boost_estimate,
+            "required_acceleration": required_acceleration,
+            "final_velocity": velocity_estimate,
+            "ratio": ratio,
+            "turn_time": turn_time,
+            "turn_distance": turn_distance,
+            "remaining_time": T,
+        }
+
+    def _party_cannon_best_aerial_candidate(
+        self, agent, target, time_remaining, turn_first=False
+    ):
+        candidates = []
+        for double_jump in (False, True):
+            candidate = self._party_cannon_aerial_candidate(
+                agent, target, time_remaining, double_jump,
+                turn_first=turn_first
+            )
+            if candidate is not None:
+                candidates.append(candidate)
+        if not candidates:
+            return None
+        # Match Party Cannon: use the jump mode with the lower boost cost.
+        return min(
+            candidates,
+            key=lambda item: (item["boost"], item["double_jump"])
+        )
+
+    def _commit_aerial_launch(self, agent, candidate):
+        self.aerial_committed = True
+        self.jump_type_fast = candidate["double_jump"]
+        self.double_jump_time = None
+        self.counter = 0
+        self.double_jump_complete = False
+        self.first_jump_impulse_applied = False
+        self.fast_pitchback_logged = False
+        self.jump_time = agent.time
+
+        if not agent.me.airborne:
+            self.jumping = True
+            agent.controller.jump = True
+        else:
+            self.jumping = False
+            self.jump_time = -1.0
+
+        agent.shooting = True
+        print(
+            f"[AERIAL COMMIT] jump={'DOUBLE' if self.jump_type_fast else 'SINGLE'} "
+            f"boost_est={candidate['boost']:.1f} "
+            f"required_accel={candidate['required_acceleration']:.0f} "
+            f"turn_time={candidate['turn_time']:.2f} "
+            f"turn_distance={candidate['turn_distance']:.0f} "
+            f"final_speed={candidate['final_velocity'].magnitude():.0f} "
+            f"T={candidate['remaining_time']:.2f}",
+            flush=True
+        )
+
+    def _prepare_aerial_launch(self, agent, time_remaining):
+        """Validate contact height/boost before committing to the aerial."""
+        if self.aerial_committed:
+            return True
+
+        if self.target is None or self.target.z <= 300.0:
+            target_z = 0.0 if self.target is None else self.target.z
+            print(
+                f"[AERIAL REJECT] contact target too low z={target_z:.0f} "
+                f"(requires >300)",
+                flush=True
+            )
+            agent.pop()
+            agent.shooting = False
+            return False
+
+        car = agent.me
+        if car.airborne:
+            candidate = self._party_cannon_best_aerial_candidate(
+                agent, self.target, time_remaining, turn_first=False
+            )
+            if candidate is None:
+                print(
+                    f"[AERIAL REJECT] airborne contact unreachable "
+                    f"boost={car.boost:.1f} T={time_remaining:.2f}",
+                    flush=True
+                )
+                agent.pop()
+                agent.shooting = False
+                return False
+            self._commit_aerial_launch(agent, candidate)
+            return True
+
+        if self.immediate_launch is None:
+            velocity_flat = car.velocity.flatten()
+            target_direction = (self.target - car.location).flatten().normalize()
+            velocity_speed = velocity_flat.magnitude()
+            velocity_angle = 0.0
+            if velocity_speed > 1.0 and target_direction.magnitude() > 0.001:
+                velocity_angle = math.acos(cap(
+                    velocity_flat.normalize().dot(target_direction), -1.0, 1.0
+                ))
+            self.immediate_launch = (
+                velocity_angle < 0.6 or velocity_speed < 500.0
+            )
+
+        if self.immediate_launch:
+            candidate = self._party_cannon_best_aerial_candidate(
+                agent, self.target, time_remaining, turn_first=False
+            )
+            if candidate is None:
+                print(
+                    f"[AERIAL REJECT] immediate launch lacks reachability "
+                    f"boost={car.boost:.1f} T={time_remaining:.2f}",
+                    flush=True
+                )
+                agent.pop()
+                agent.shooting = False
+                return False
+            self._commit_aerial_launch(agent, candidate)
+            return True
+
+        turn_candidate = self._party_cannon_best_aerial_candidate(
+            agent, self.target, time_remaining, turn_first=True
+        )
+        if turn_candidate is None:
+            print(
+                f"[AERIAL REJECT] cannot reach after ground turn "
+                f"boost={car.boost:.1f} T={time_remaining:.2f}",
+                flush=True
+            )
+            agent.pop()
+            agent.shooting = False
+            return False
+
+        drive_target = self.target.flatten()
+        local_target = car.local_location(drive_target)
+        drive_time = max(
+            dt, time_remaining - turn_candidate["turn_time"] - 0.20
+        )
+        distance = car.location.flatten().dist(drive_target)
+        required_speed = cap(distance / drive_time, 500.0, max_speed)
+        defaultDrive(agent, required_speed, local_target)
+
+        if abs(agent.controller.steer) < 0.2:
+            aligned_candidate = self._party_cannon_best_aerial_candidate(
+                agent, self.target, time_remaining, turn_first=False
+            )
+            if aligned_candidate is not None:
+                self._commit_aerial_launch(agent, aligned_candidate)
+                return True
+
+        if agent.time - self.aerial_launch_debug_time >= 0.4:
+            self.aerial_launch_debug_time = agent.time
+            print(
+                f"[AERIAL TURN SETUP] steer={agent.controller.steer:.2f} "
+                f"turn_time={turn_candidate['turn_time']:.2f} "
+                f"turn_distance={turn_candidate['turn_distance']:.0f} "
+                f"boost_est={turn_candidate['boost']:.1f} "
+                f"T={time_remaining:.2f}",
+                flush=True
+            )
+        return False
+
     def _select_wall_aerial_jump(self, agent, time_remaining):
         """
         Compare single- and double-jump wall launches against the same
@@ -1550,13 +1923,23 @@ class Aerial:
         if not launch_ready:
             return True
 
+        wall_candidate = self._party_cannon_best_aerial_candidate(
+            agent, self.target, time_remaining, turn_first=False
+        )
+        if wall_candidate is None or self.target.z <= 300.0:
+            print(
+                f"[AERIAL SIDE WALL] REJECT boost/contact feasibility "
+                f"boost={car.boost:.1f} target_z={self.target.z:.0f} "
+                f"T={time_remaining:.2f}",
+                flush=True
+            )
+            self.side_wall_route = False
+            return False
+
         self.side_wall_route = False
         self.side_wall_launched = True
-        (
-            self.jump_type_fast,
-            single_error,
-            double_error
-        ) = self._select_wall_aerial_jump(agent, time_remaining)
+        self.aerial_committed = True
+        self.jump_type_fast = wall_candidate["double_jump"]
         self.jumping = True
         self.jump_time = agent.time
         self.double_jump_time = None
@@ -1565,11 +1948,12 @@ class Aerial:
         self.first_jump_impulse_applied = False
         self.fast_pitchback_logged = False
         agent.controller.jump = True
+        agent.shooting = True
         print(
             f"[AERIAL SIDE WALL] LAUNCH side={wall_side:+d} "
             f"jump={'DOUBLE' if self.jump_type_fast else 'SINGLE'} "
-            f"single_error={single_error:.0f} "
-            f"double_error={double_error:.0f} "
+            f"boost_est={wall_candidate['boost']:.1f} "
+            f"required_accel={wall_candidate['required_acceleration']:.0f} "
             f"height_error={height_error:.0f} lane_error={lane_error:.0f} "
             f"T={time_remaining:.2f}",
             flush=True
@@ -1771,8 +2155,15 @@ class Aerial:
 
         # Side-wall setup is part of Aerial itself. It can drive up from the
         # floor or continue climbing when already attached to that side wall.
-        if not self.jumping and self._run_side_wall_takeoff(agent, T):
-            return
+        if not self.jumping and not self.aerial_committed:
+            if self._run_side_wall_takeoff(agent, T):
+                return
+
+        # Grounded aerials must pass the launch feasibility check before
+        # pressing jump. Already-airborne cars use their live ballistic state.
+        if not self.jumping and not self.aerial_committed:
+            if not self._prepare_aerial_launch(agent, T):
+                return
 
         # Keep predicting the jump after the input sequence finishes. The
         # car's live velocity already contains completed jump impulses, so
