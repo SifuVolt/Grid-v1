@@ -68,6 +68,23 @@ def _relative_goal_aim_point(agent, targets=None):
 
     return goal_center
 
+def _jump_shot_goal_aim_point(agent, targets=None):
+    """Use a higher goal target only when the ball is deep in our own half."""
+    goal_center = _relative_goal_aim_point(agent, targets)
+
+    # side(team) makes our own half negative for either team. The halfway
+    # point of our own half is 2560 units from midfield toward our goal.
+    own_half_depth = agent.ball.location.y * side(agent.team)
+    if own_half_depth < -2560:
+        goal_center.z = 470
+    elif not agent.me.airborne:
+        goal_center.z = 310
+    else:
+        goal_center.z = 210
+
+    return goal_center
+
+
 def _contact_approach_from_label(ball_location, shot_vector, label, distance):
     """Rebuild a selected contact approach around the latest ball prediction."""
     shot_direction = shot_vector.copy().flatten().normalize()
@@ -4300,7 +4317,7 @@ class jump_shot:
         direction = (ball_location - agent.me.location).normalize()
 
         if self.goal_aim_point is None:
-            self.goal_aim_point = _relative_goal_aim_point(agent, self.targets)
+            self.goal_aim_point = _jump_shot_goal_aim_point(agent, self.targets)
         shot_vector = (
             self.goal_aim_point - ball_location
         ).flatten().normalize()
@@ -4329,7 +4346,7 @@ class jump_shot:
 
         # Cache the goal aim point from the live ball on the first frame.
         if self.goal_aim_point is None:
-            self.goal_aim_point = _relative_goal_aim_point(agent, self.targets)
+            self.goal_aim_point = _jump_shot_goal_aim_point(agent, self.targets)
         goal_aim = self.goal_aim_point
 
         # Refresh the selected prediction slice until the jump begins. Once
@@ -4376,7 +4393,8 @@ class jump_shot:
                 agent,
                 self.ball_location,
                 self.ball_velocity,
-                T
+                T,
+                shot_target_override=goal_aim
             )
         ).flatten().normalize()
 
