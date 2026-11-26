@@ -842,3 +842,12 @@ This file is the project handoff and change checklist. Read it before every code
 - Added `[JUMP SHOT PREDICT]` diagnostics for planned yaw/roll, learned yaw/roll acceleration, and prediction horizon.
 - Commit: `1cd6cd4`.
 - This is a short-horizon online estimate, not a full Rocket League angular dynamics simulator. It needs in-game validation, especially during the first airborne frame before the acceleration estimate has learned the car's response. No compile, simulation, or in-game test has been performed.
+
+
+## Renderer API compatibility (2026-11-26)
+
+- Updated `agent for volt` (the `util/agent.py` VirxERLU base-agent source) for the RLBot v2 renderer API.
+- VirxERLU's custom `Vector` objects are converted to `rlbot.flat.Vector3` before line/polyline rendering.
+- `Renderer.team_color` is called with the required team index and `alt_color=True`.
+- Updated 2D/3D text rendering calls to the current argument order. 2D debug text uses normalized screen coordinates.
+- Static source verification confirmed no remaining `team_color(alt_color=True)` calls or old text-render argument order. No live RLBot match test has been run.
