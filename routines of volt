@@ -1513,6 +1513,8 @@ class Aerial:
         """Return a feasible single/double aerial estimate, or None."""
         car = agent.me
         T = max(0.0, float(time_remaining))
+        if T <= dt:
+            return None
         start_position = car.location.copy()
         start_velocity = car.velocity.copy()
         start_forward = car.forward.copy()
@@ -1961,9 +1963,8 @@ class Aerial:
         return False
 
     def run(self, agent: VirxERLU):
-        if not agent.shooting:
-            agent.shooting = True
-
+        # The agent remains interruptible while approaching/turning. The
+        # launch commit below sets shooting=True and locks the aerial in.
         T = self.intercept_time - agent.time
         xf = agent.me.location + agent.me.velocity * T + 0.5 * agent.gravity * T * T
         vf = agent.me.velocity + agent.gravity * T
