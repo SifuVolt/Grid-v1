@@ -24,7 +24,7 @@ class VirxERLU(Bot):
         self.last_flip_time = -999.0
         self.tournament = True
         self.startup_time = time_ns()
-
+        self.tournament = False
         self.debug = [[], []]
         self.debugging = not self.tournament
         self.debug_lines = True
@@ -152,7 +152,7 @@ class VirxERLU(Bot):
     def retire(self):
         # RLBot v5 handles its own connection shutdown.
 
-        if not self.tournament and hasattr(self, "gui"):
+        if not getattr(self, "tournament", False) and hasattr(self, "gui"):
             self.gui.stop()
 
     def get_ready(self, packet: GamePacket):
