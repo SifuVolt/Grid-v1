@@ -4802,7 +4802,7 @@ class jump_shot:
             time = speed_distance_remaining / (velocity + dodge_impulse(agent))
 
 
-            if (
+            launch_ready = (
                 (
                     self.side_mode
                     and distance_remaining < 180
@@ -4821,11 +4821,41 @@ class jump_shot:
                         and direction * local_offset_target.x > 0
                     )
                 ) and T <= self.needed_jump_time * 1.08
-            ):
+            )
+
+            # Rust's runtime launch gate re-validates the live, final contact
+            # approach before committing to the jump. Python's CLib wrapper
+            # performs the same generic turn/boost reachability simulation
+            # followed by jump-height viability. Keep the fast-shot path and
+            # side-shot controller unchanged so this accuracy check does not
+            # suppress the original power dodge.
+            runtime_reachable = (
+                self.side_mode
+                or T <= 0.2
+                or virxrlcu.jump_shot_is_viable(
+                    T,
+                    agent.boost_accel,
+                    tuple(agent.gravity),
+                    agent.me.get_raw(agent),
+                    self.offset_target.z,
+                    tuple((final_target - agent.me.location).normalize()),
+                    distance_remaining
+                )
+            )
+
+            if launch_ready and runtime_reachable:
                 self.quick_shot = T <= 0.45
                 self.jumping = True
                 print(
-                    f"[JUMP SHOT TYPE] quick={self.quick_shot} T={T:.3f}",
+                    f"[JUMP SHOT TYPE] quick={self.quick_shot} T={T:.3f} "
+                    f"runtime_reachable={runtime_reachable}",
+                    flush=True
+                )
+            elif launch_ready and not runtime_reachable and T > self.needed_jump_time:
+                print(
+                    f"[JUMP SHOT LAUNCH BLOCKED] T={T:.3f} "
+                    f"distance={distance_remaining:.1f} "
+                    f"target_z={self.offset_target.z:.1f}",
                     flush=True
                 )
             elif T <= self.needed_jump_time or (
