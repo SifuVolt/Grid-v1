@@ -10,7 +10,7 @@ from typing import List, Tuple
 
 import numpy as np
 from gui import Gui
-from rlbot.flat import AirState, ControllerState, GamePacket, MatchPhase, Vector3
+from rlbot.flat import AirState, ControllerState, GamePacket, MatchPhase
 from rlbot.managers import Bot
 
 
@@ -24,7 +24,7 @@ class VirxERLU(Bot):
         self.last_flip_time = -999.0
         self.tournament = True
         self.startup_time = time_ns()
-        self.tournament = False
+
         self.debug = [[], []]
         self.debugging = not self.tournament
         self.debug_lines = True
@@ -152,7 +152,7 @@ class VirxERLU(Bot):
     def retire(self):
         # RLBot v5 handles its own connection shutdown.
 
-        if not getattr(self, "tournament", False) and hasattr(self, "gui"):
+        if not self.tournament and hasattr(self, "gui"):
             self.gui.stop()
 
     def get_ready(self, packet: GamePacket):
@@ -220,8 +220,8 @@ class VirxERLU(Bot):
             )
 
             self.renderer.draw_line_3d(
-                Vector3(x=start.x, y=start.y, z=start.z),
-                Vector3(x=end.x, y=end.y, z=end.z),
+                start.copy(),
+                end.copy(),
                 self.renderer.create_color(
                     255,
                     *color
@@ -237,7 +237,7 @@ class VirxERLU(Bot):
             )
 
             vectors = tuple(
-                Vector3(x=vector.x, y=vector.y, z=vector.z)
+                vector.copy()
                 for vector in vectors
             )
 
@@ -348,13 +348,7 @@ class VirxERLU(Bot):
         self,
         packet: GamePacket
     ) -> ControllerState:
-        rendering_started = False
         try:
-            # Start one render group for this packet. All routine and debug
-            # drawing below must happen between begin_rendering/end_rendering.
-            self.renderer.begin_rendering()
-            rendering_started = True
-
             # Reset controller every tick.
             self.controller = ControllerState()
 
@@ -379,7 +373,7 @@ class VirxERLU(Bot):
                 # The strategy may otherwise replace the active routine when
                 # an opponent becomes closer on a later packet.
                 committed_jump_shot = any(
-                    routine.__class__.__name__ in {"jump_shot", "side_shot"}
+                    routine.__class__.__name__ == "jump_shot"
                     and getattr(routine, "jumping", False)
                     for routine in self.stack
                 )
@@ -387,7 +381,6 @@ class VirxERLU(Bot):
                 if stack_routine_name in {
                     "Aerial",
                     "jump_shot",
-                    "side_shot",
                     "double_jump",
                     "ground_shot",
                     "short_shot"
@@ -458,15 +451,11 @@ class VirxERLU(Bot):
                             )
 
                         self.renderer.draw_string_3d(
-                            "\n".join(self.debug[0]),
-                            Vector3(
-                                x=self.me.location.x,
-                                y=self.me.location.y,
-                                z=self.me.location.z
-                            ),
+                            tuple(self.me.location),
                             2,
+                            2,
+                            "\n".join(self.debug[0]),
                             self.renderer.team_color(
-                                self.team,
                                 alt_color=True
                             )
                         )
@@ -544,7 +533,6 @@ class VirxERLU(Bot):
 
                         hitbox_color = (
                             self.renderer.team_color(
-                                self.team,
                                 alt_color=True
                             )
                         )
@@ -607,12 +595,12 @@ class VirxERLU(Bot):
                             )
 
                         self.renderer.draw_string_2d(
-                            "\n".join(self.debug[1]),
-                            0.02,
-                            0.28,
+                            20,
+                            300,
                             2,
+                            2,
+                            "\n".join(self.debug[1]),
                             self.renderer.team_color(
-                                self.team,
                                 alt_color=True
                             )
                         )
@@ -640,9 +628,6 @@ class VirxERLU(Bot):
                 else:
                     self.debug = [[], []]
 
-            self.renderer.end_rendering()
-            rendering_started = False
-
             return (
                 ControllerState()
                 if self.disable_driving
@@ -650,13 +635,6 @@ class VirxERLU(Bot):
             )
 
         except Exception:
-            # Do not leave a render group open if packet processing fails.
-            if rendering_started:
-                try:
-                    self.renderer.end_rendering()
-                except Exception:
-                    pass
-                rendering_started = False
             t_file = os.path.join(
                 self.traceback_file[0],
                 "VirxERLU" + self.traceback_file[1]
