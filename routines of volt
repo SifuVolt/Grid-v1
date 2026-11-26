@@ -439,6 +439,19 @@ class wall_approach:
             and (1 if car.location.y >= 0 else -1) == wall_side
         )
 
+        # Once attached to the relevant wall, never turn around and drive
+        # back down/along the wall to chase a target that is now behind us.
+        # Abandon this wall route and let normal shot selection take over.
+        if on_wall and local_target.x < -250:
+            agent.pop()
+            agent.shooting = False
+            print(
+                f"[NOOB WALL SHOT] Abort: target passed behind car "
+                f"local_x={local_target.x:.0f} T={T:.2f}",
+                flush=True
+            )
+            return
+
         if on_wall:
             surface_up = (
                 Vector(-wall_side, 0, 0)
