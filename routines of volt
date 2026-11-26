@@ -4252,57 +4252,12 @@ class jump_shot:
         defaultPD(agent, local_shot_direction.flatten())
 
         ball_is_airborne = self.ball_location.z > 130
-
-        # Predict where the car's nose will be when the forward dodge
-        # actually reaches the ball. A forward dodge adds a substantial
-        # velocity impulse along the car's forward axis; ignoring that
-        # impulse makes the old "ball above car" test release the S-tilt
-        # too early when the contact is farther away than expected.
-        contact_time = max(
-            0.0, self.intercept_time - agent.time
-        )
-        dodge_lead_time = min(0.16, max(0.06, contact_time * 0.35))
-        post_dodge_time = max(0.0, contact_time - dodge_lead_time)
-        predicted_car_at_contact = (
-            agent.me.location
-            + agent.me.velocity * contact_time
-            + agent.gravity * (0.5 * contact_time * contact_time)
-            + agent.me.forward.normalize()
-              * dodge_impulse(agent) * post_dodge_time
-        )
-
-        hitbox = agent.me.hitbox
-        nose_height = (
-            agent.me.forward.normalize().z
-            * float(getattr(hitbox, "length", 118.01)) * 0.5
-            + agent.me.up.normalize().z
-            * float(getattr(hitbox, "height", 36.16)) * 0.5
-        )
-        predicted_nose_z = predicted_car_at_contact.z + nose_height
-        ball_is_above_predicted_nose = (
-            self.ball_location.z > predicted_nose_z + 12
-        )
-
+        ball_is_above_car = self.ball_location.z > agent.me.location.z + 65
         hold_s = (
             ball_is_airborne
-            and ball_is_above_predicted_nose
+            and ball_is_above_car
             and not self.quick_shot
         )
-
-        if (
-            self._last_air_prediction_debug < 0
-            or agent.time - self._last_air_prediction_debug >= 0.30
-        ):
-            self._last_air_prediction_debug = agent.time
-            print(
-                f"[JUMP SHOT DODGE PREDICT] T={contact_time:.3f} "
-                f"dodge_impulse={dodge_impulse(agent):.1f} "
-                f"post_dodge={post_dodge_time:.3f} "
-                f"nose_z={predicted_nose_z:.1f} "
-                f"ball_z={self.ball_location.z:.1f} "
-                f"hold_S={hold_s}",
-                flush=True
-            )
 
         if hold_s:
             agent.controller.pitch = 1
