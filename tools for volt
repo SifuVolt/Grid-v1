@@ -1313,7 +1313,10 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
     gravity = tuple(agent.gravity)
 
     max_aerial_height = 1200 if len(agent.friends) == 0 and len(agent.foes) == 1 else math.inf
-    min_aerial_height = 551 if max_aerial_height > 1200 and agent.me.location.z >= 2044 - agent.me.hitbox.height * 1.1 else (150 if agent.boost_amount == 'unlimited' or agent.me.airborne else 450)
+    # Let the Aerial routine apply Party Cannon's exact 300-unit
+    # predicted contact-target gate instead of pre-filtering grounded balls
+    # with the older, stricter 450-unit ball-centre threshold.
+    min_aerial_height = 551 if max_aerial_height > 1200 and agent.me.location.z >= 2044 - agent.me.hitbox.height * 1.1 else (150 if agent.boost_amount == 'unlimited' or agent.me.airborne else 300)
 
     is_on_ground = not agent.me.airborne
     can_ground = is_on_ground and can_ground
