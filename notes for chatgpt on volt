@@ -8,6 +8,7 @@ This file is the project handoff and change checklist. Read it before every code
 
 ## 1. Editing rules
 
+- At the start of every Volt task, locate and read `notes for chatgpt on volt` from the active branch, even when the user links a different file. Also read `instructions for chatgpt on volt` to understand the live decision path, then inspect the relevant current source modules (`tools for volt`, `routines of volt`, and/or `utils from util of volt`) before designing a change. This is a standing user requirement.
 - Fetch the latest target file from the active branch immediately before editing. Never rely on an old copy or a previous conversation's SHA.
 - Make focused edits. Do not replace entire routines or files unless explicitly requested.
 - Preserve the existing working baseline. The user frequently reverts experiments; inspect the live branch before assuming a prior change is still present.
@@ -30,6 +31,7 @@ This file is the project handoff and change checklist. Read it before every code
 - Common VirxERLU physics values cited by the user/source: max speed 2300, throttle acceleration about 66.67, braking about -3500, boost acceleration about 33.33 per second (check the live agent fields/constants before relying on a number), jump duration about 0.2 s, jump speed about 291.67, jump acceleration about 1458.33.
 - Volt's car wrapper exposes `airborne`; do not assume `on_ground` or `has_wheel_contact` exists.
 - Local files do not automatically sync with GitHub.
+- Important branch-layout caveat (verified 2026-11-28): the root `rlbot.toml` currently loads `src/bot.toml`, which names/runs Noob Black via `src/bot.py`; it does not directly launch the separate Volt files listed below. Do not silently assume a root `python run.py` launch exercises Volt. Confirm the user's Volt launcher/config before interpreting runtime behaviour or claiming these Volt changes are active in-game.
 
 ## 3. Main files and responsibilities
 
@@ -851,3 +853,16 @@ This file is the project handoff and change checklist. Read it before every code
 - `Renderer.team_color` is called with the required team index and `alt_color=True`.
 - Updated 2D/3D text rendering calls to the current argument order. 2D debug text uses normalized screen coordinates.
 - Static source verification confirmed no remaining `team_color(alt_color=True)` calls or old text-render argument order. No live RLBot match test has been run.
+
+
+## Ground carry-cut mechanic (2026-11-28)
+
+- Added a new independent `ground_carry_cut` routine in `routines of volt`. It is not a restoration of the reverted historical `ground_carry` or the earlier dribble experiments in sections 19–20.
+- The routine has three grounded phases: approach to get a slow, low ball just ahead/under the hood; a brief controlled carry aligned with the ball's current travel; then a turn-aware left/right cut toward the opponent goal. It uses Volt's existing `defaultDrive` steering/throttle controller, caps speed during the carry/cut, and disables boost/handbrake during those phases.
+- The routine only attempts its final forward dodge when the car is aligned with the cut direction, has sufficient ground speed, and the ball remains within the hood contact window. It exits on loss of contact, opponent recovery/pressure, excessive ball height/vertical speed/forward speed, own-half danger, car leaving the ground, or timeout.
+- The agent can select it in two narrow situations: (1) a targeted low `ground_shot` candidate within 1.5 seconds of receiving a teammate's `DEFENDER_BUMPED` event, with sufficient space from opponents; or (2) a targetless `ANY_SHOT_FOUND` `ground_shot` fallback when no goal-directed shot was found. It is limited to the elected challenger in team modes and has a 2.4-second selection cooldown.
+- `transition_bump` reports a close-range bump event when the target enters the 260-unit distance threshold, or disappears after having been within 420 units. This is a proximity heuristic, not proof that Rocket League registered a bump/demo; validate the signal and the carry selection in-game.
+- The existing `ground_shot`, jump-shot, aerial, wall-shot, and shot-finder geometry were not rewritten. `tools for volt` was inspected and left unchanged because it already supplies the ground-shot candidates needed by the selector.
+- Diagnostics use `[TRANSITION BUMP CONTACT]`, `[TEAMPLAY] defender bump received`, `[GROUND CARRY CUT SELECT]`, and `[GROUND CARRY CUT]`.
+- Commits: routine and bump event `0eccd6b503c564dabde5bd76f7ffda74827cb349`; agent selection/teamplay integration `a84d4a8dbca3e41af86efa71ea642818b62e6eeb`; direct fallback and separate event handling `c7b4bbe0244c52e5b7533f6730768527666772df`.
+- Static GitHub review and re-fetch only. No Python compile, simulation, or in-game test has been run. The user must pull/copy the commits locally and test. Check the active launcher configuration first: the branch root currently loads the separate Noob Black `src/bot.py` configuration, not these Volt files.
