@@ -5901,6 +5901,7 @@ class side_contact_jump_shot:
         self.ball_location = None
         self.ball_velocity = Vector()
         self.goal_aim_point = None
+        self.planned_shot_direction = None
         self.shot_vector = None
         self.car_target = None
         self.approach_waypoint = None
@@ -5964,12 +5965,13 @@ class side_contact_jump_shot:
 
     def _build_side_geometry(self, agent):
         ball = self.ball_location
-        goal = (
-            self.goal_aim_point
-            if self.goal_aim_point is not None
-            else _relative_goal_aim_point(agent, self.targets)
+        goal_direction = (
+            self.planned_shot_direction
+            if self.planned_shot_direction is not None
+            else (
+                self.goal_aim_point - ball
+            ).flatten().normalize()
         )
-        goal_direction = (goal - ball).flatten().normalize()
         if goal_direction.magnitude() < 0.001:
             return False
 
@@ -6071,13 +6073,12 @@ class side_contact_jump_shot:
                 goal_direction.magnitude() > 0.001
                 and predicted_direction.magnitude() > 0.001
             ):
-                goal_direction = (
+                self.planned_shot_direction = (
                     goal_direction * 0.70
                     + predicted_direction * 0.30
                 ).normalize()
-                self.goal_aim_point = (
-                    self.ball_location + goal_direction * 1000
-                )
+            else:
+                self.planned_shot_direction = goal_direction
 
             if not self._build_side_geometry(agent):
                 self._finish(agent, "invalid_side_geometry")
