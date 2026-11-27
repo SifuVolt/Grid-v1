@@ -666,13 +666,11 @@ class Bot(VirxERLU):
 
         # In team games, only the elected challenger may turn this into
         # an attacking carry. The cover/transition players retain their roles.
-        if self.friends:
-            active_challenger = self.get_grid_active_challenger()
-            if (
-                active_challenger is not None
-                and active_challenger != self.me.index
-            ):
-                return shot
+        if (
+            self.friends
+            and self.get_grid_active_challenger() != self.me.index
+        ):
+            return shot
 
         ball = self.ball.location
         velocity = self.ball.velocity
