@@ -866,3 +866,16 @@ This file is the project handoff and change checklist. Read it before every code
 - Diagnostics use `[TRANSITION BUMP CONTACT]`, `[TEAMPLAY] defender bump received`, `[GROUND CARRY CUT SELECT]`, and `[GROUND CARRY CUT]`.
 - Commits: routine and bump event `0eccd6b503c564dabde5bd76f7ffda74827cb349`; agent selection/teamplay integration `a84d4a8dbca3e41af86efa71ea642818b62e6eeb`; direct fallback and separate event handling `c7b4bbe0244c52e5b7533f6730768527666772df`.
 - Static GitHub review and re-fetch only. No Python compile, simulation, or in-game test has been run. The user must pull/copy the commits locally and test. Check the active launcher configuration first: the branch root currently loads the separate Noob Black `src/bot.py` configuration, not these Volt files.
+
+## 12. Ground carry controller overhaul (2026-11-28)
+
+- The Python `ground_carry_cut` is now a continuous possession controller rather than a fixed approach/carry/cut sequence.
+- It reuses `Aerial._party_cannon_hitbox_target` from jump-shot geometry so the car reference point accounts for actual hitbox length and rotated hitbox offset.
+- The carry approach uses small centre-biased lateral contact offsets (27 uu), with a maximum 9-degree steering correction per touch toward the goal direction.
+- Boost is permitted in short aligned acceleration windows when car speed is below the requested touch speed; the controller no longer unconditionally disables boost.
+- Touch speed is recalculated from current ball speed and capped below maximum speed to avoid uncontrolled high-speed contact. The controller logs ball/car speed, goal-direction error, touch angle, boost and side offset.
+- A descending-ball catch path now searches the live ball prediction for a descending floor-contact slice, estimates car arrival with a turn-in penalty, and only selects the carry when the car can plausibly reach the landing point and opponents are not already close.
+- Once the ball settles in a narrow hood-contact region, the carry may transition to a flick. If ball trajectory is already within 7 degrees of goalward and has useful speed, the carry routine releases possession control rather than forcing another touch.
+- Selection still respects the elected challenger in team games and does not override defensive-emergency handling. A targeted ground shot is only converted after the teammate-bump trigger; ordinary carry selection remains for targetless touches or a reachable descending catch.
+- This implementation has only been statically reviewed after editing. It has not been compiled or tested in-game. Verify first that the Party Cannon Python port is the launcher actually being run; the repository root config may still launch the separate Noob Black entrypoint.
+
