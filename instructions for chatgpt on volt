@@ -257,7 +257,7 @@ class Bot(VirxERLU):
             "double_jump",
             "Aerial",
             "Redirect",
-            "side_shot"
+            "side_shot", "side_contact_jump_shot"
         }
         if not self.is_clear() and any(
             routine.__class__.__name__ in active_shot_names
@@ -2323,7 +2323,7 @@ class Bot(VirxERLU):
                 "jump_shot",
                 "elevated_shot",
                 "double_jump",
-                "side_shot",
+                "side_shot", "side_contact_jump_shot",
             }
 
             # Keep the existing power clear running.
@@ -2351,7 +2351,7 @@ class Bot(VirxERLU):
             committed_active_shot = active_routine.__class__.__name__ in {
                 "ground_shot",
                 "ground_carry_cut", "jump_shot", "elevated_shot", "double_jump",
-                "Aerial", "Redirect", "side_shot"
+                "Aerial", "Redirect", "side_shot", "side_contact_jump_shot"
             }
 
         # RedUtils AerialShot becomes uninterruptible as soon as its launch
@@ -2441,7 +2441,7 @@ class Bot(VirxERLU):
                         "elevated_shot",
                         "ground_shot",
                         "ground_carry_cut",
-                        "side_shot",
+                        "side_shot", "side_contact_jump_shot",
                         "Aerial",
                         "Redirect",
                         "wall_approach"
@@ -2485,7 +2485,7 @@ class Bot(VirxERLU):
                                 "jump_shot",
                                 "elevated_shot",
                                 "double_jump",
-                                "side_shot",
+                                "side_shot", "side_contact_jump_shot",
                                 "Aerial",
                                 "Redirect"
                             }
@@ -2626,7 +2626,7 @@ class Bot(VirxERLU):
                             "jump_shot",
                             "elevated_shot",
                             "double_jump",
-                            "side_shot",
+                            "side_shot", "side_contact_jump_shot",
                             "Aerial",
                             "Redirect",
                             "wall_approach"
@@ -2671,7 +2671,7 @@ class Bot(VirxERLU):
             active_shot_names = {
                 "ground_shot",
                 "ground_carry_cut", "jump_shot", "elevated_shot",
-                "double_jump", "Aerial", "Redirect", "side_shot"
+                "double_jump", "Aerial", "Redirect", "side_shot", "side_contact_jump_shot"
             }
             if (
                 shot is None
