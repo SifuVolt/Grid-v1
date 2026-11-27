@@ -5913,28 +5913,37 @@ class side_shot(jump_shot):
 
 class ground_carry_cut:
     """
-    Carry a low rolling ball on the car's nose, make one controlled
-    goalward cut, then dodge through the ball when contact is still valid.
-
-    This is deliberately separate from ground_shot: normal ground-shot
-    timing and contact geometry remain the fallback when the carry is lost.
+    Controlled ground possession: catch a descending ball, build a close
+    hitbox-aware carry, then steer its velocity toward goal with small touches.
+    A settled hood contact can be converted into a flick.
     """
 
-    def __init__(self, intercept_time, targets=None):
+    def __init__(
+        self, intercept_time, targets=None, catch_mode=False,
+        catch_location=None
+    ):
         self.intercept_time = intercept_time
         self.targets = targets
+        self.catch_mode = catch_mode
+        self.catch_location = catch_location
         self.start_time = None
-        self.phase = "approach"
+        self.phase = "catch" if catch_mode else "approach"
         self.phase_start = None
         self.carry_direction = None
-        self.cut_direction = None
+        self.touch_direction = None
+        self.last_touch_direction = None
         self.cut_angle = 0.0
-        self.standoff = None
         self.lost_contact_since = None
+        self.last_debug_time = -1.0
+        self.contact_aim = Aerial(
+            intercept_time, targets, fast_aerial=False
+        )
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
         self.targets = getattr(shot, "targets", None)
+        self.contact_aim.intercept_time = self.intercept_time
+        self.contact_aim.targets = self.targets
 
     def needs_half_flip(self, agent):
         return False
@@ -5954,9 +5963,36 @@ class ground_carry_cut:
             z=0
         )
 
+    def _predicted_landing(self, agent):
+        prediction = getattr(agent, "ball_prediction_struct", None)
+        slices = getattr(prediction, "slices", None) if prediction is not None else None
+        if not slices:
+            return None
+
+        for index in range(max(1, round(0.12 / dt)), len(slices)):
+            physics = slices[index].physics
+            location = physics.location
+            velocity = physics.velocity
+            if location.z <= 116 and velocity.z < -35:
+                return (
+                    Vector(location.x, location.y, 92.75),
+                    index * dt,
+                    Vector(velocity.x, velocity.y, 0)
+                )
+        return None
+
+    def _contact_target(self, agent, ball, direction, side_offset=0.0):
+        # Reuse jump_shot's Party Cannon hitbox-centre calculation, including
+        # the rotated hitbox offset and the real hitbox length.
+        target = self.contact_aim._party_cannon_hitbox_target(
+            agent, ball, direction
+        )
+        lateral = Vector(-direction.y, direction.x, 0).normalize()
+        return target + lateral * side_offset
+
     def _finish(self, agent, reason):
         print(
-            f"[GROUND CARRY CUT] abort={reason} phase={self.phase}",
+            f"[GROUND CARRY] finish={reason} phase={self.phase}",
             flush=True
         )
         agent.pop()
@@ -5964,30 +6000,43 @@ class ground_carry_cut:
         agent.shot_weight = -1
         agent.shot_time = -1
 
-    def _drive_behind_ball(self, agent, ball, direction, target_speed,
-                           lateral_offset=0.0):
-        lateral = Vector(-direction.y, direction.x, 0)
-        target = (
-            ball
-            - direction * self.standoff
-            - lateral * lateral_offset
+    def _drive_to_contact(self, agent, ball, direction, target_speed,
+                          side_offset=0.0):
+        target = self._contact_target(
+            agent, ball, direction, side_offset
         ).flatten()
         target = cap_in_field(agent, target)
         local_target = agent.me.local_location(target)
         defaultDrive(agent, target_speed, local_target)
-        # A boost burst or handbrake slide would break the controlled carry.
-        agent.controller.boost = False
+
+        # Spend boost in short, aligned acceleration windows. This increases
+        # the speed of the next touch without boosting through a large turn.
+        local_angle = abs(math.atan2(local_target.y, local_target.x))
+        car_speed = agent.me.velocity.flatten().magnitude()
+        agent.controller.boost = bool(
+            agent.boost_amount != "unlimited"
+            and agent.me.boost > 1.0
+            and local_target.x > 0
+            and local_angle < 0.38
+            and car_speed < target_speed - 110
+        )
         agent.controller.handbrake = False
         return local_target
 
+    def _clear_shot_state(self, agent):
+        agent.shooting = False
+        agent.shot_weight = -1
+        agent.shot_time = -1
+
     def run(self, agent: VirxERLU):
         car = agent.me
-        ball = agent.ball.location
-        ball_velocity = agent.ball.velocity
-        ball_position = Vector(ball.x, ball.y, ball.z)
-        ball_flat_velocity = Vector(
-            ball_velocity.x, ball_velocity.y, 0
+        raw_ball = agent.ball.location
+        raw_velocity = agent.ball.velocity
+        ball = Vector(raw_ball.x, raw_ball.y, raw_ball.z)
+        ball_velocity = Vector(
+            raw_velocity.x, raw_velocity.y, raw_velocity.z
         )
+        ball_flat_velocity = ball_velocity.flatten()
         ball_speed = ball_flat_velocity.magnitude()
 
         if self.start_time is None:
@@ -5999,205 +6048,214 @@ class ground_carry_cut:
             agent.push(recovery())
             return
 
-        if (
-            agent.time - self.start_time > 3.6
-            or ball_position.z > 165
-            or abs(ball_velocity.z) > 150
-            or ball_speed > 1050
-            or ball_position.y * side(agent.team) > 850
-        ):
-            self._finish(agent, "carry_window_closed")
+        if agent.time - self.start_time > 4.8:
+            self._finish(agent, "routine_timeout")
             return
 
         live_foes = [
             foe for foe in agent.foes
             if not getattr(foe, "demolished", False)
         ]
-        closest_foe = min(
-            (
-                foe.location.flat_dist(ball_position)
-                for foe in live_foes
-            ),
+        nearest_foe = min(
+            (foe.location.flat_dist(ball) for foe in live_foes),
             default=float("inf")
         )
-        if closest_foe < 470:
-            self._finish(agent, "opponent_recovered")
+        if nearest_foe < 390:
+            self._finish(agent, "opponent_pressure")
             return
 
         goal_direction = (
-            agent.foe_goal.location - ball_position
+            agent.foe_goal.location - ball
         ).flatten().normalize()
         if goal_direction.magnitude() < 0.001:
             self._finish(agent, "invalid_goal_direction")
             return
 
-        car_forward = car.forward.flatten().normalize()
-        if self.carry_direction is None:
-            if ball_speed > 250:
-                incoming_direction = ball_flat_velocity.normalize()
+        # Catch phase: drive to the predicted floor contact instead of
+        # rejecting the play merely because the ball is still descending.
+        if self.phase == "catch":
+            landing = self._predicted_landing(agent)
+            if landing is None:
+                if ball.z <= 145 and abs(ball_velocity.z) < 170:
+                    self.phase = "approach"
+                    self.phase_start = agent.time
+                else:
+                    self._finish(agent, "landing_prediction_unavailable")
+                    return
             else:
-                incoming_direction = car_forward
+                landing_ball, landing_time, landing_velocity = landing
+                self.catch_location = landing_ball
+                if ball.z <= 165 and ball_velocity.z < 120:
+                    self.phase = "approach"
+                    self.phase_start = agent.time
+                else:
+                    incoming = landing_velocity.normalize()
+                    if incoming.magnitude() < 0.001:
+                        incoming = goal_direction
+                    self.carry_direction = (
+                        incoming * 0.35 + goal_direction * 0.65
+                    ).normalize()
+                    if self.carry_direction.magnitude() < 0.001:
+                        self.carry_direction = goal_direction
+                    target_speed = cap(
+                        car.velocity.flatten().magnitude() + 450,
+                        1050, 1750
+                    )
+                    self._drive_to_contact(
+                        agent, landing_ball, self.carry_direction,
+                        target_speed
+                    )
+                    if (
+                        agent.time - self.start_time > 3.0
+                        or landing_time < 0.10
+                        and car.location.flat_dist(landing_ball) > 550
+                    ):
+                        self._finish(agent, "catch_unreachable")
+                    return
 
-            if (
-                incoming_direction.magnitude() < 0.001
-                or incoming_direction.dot(goal_direction) < -0.20
-            ):
-                incoming_direction = goal_direction
+        if (
+            ball.z > 190
+            or abs(ball_velocity.z) > 190
+            or ball_speed > 1250
+            or ball.y * side(agent.team) > 850
+        ):
+            self._finish(agent, "carry_window_closed")
+            return
 
+        if self.carry_direction is None:
+            incoming = ball_flat_velocity.normalize()
+            if incoming.magnitude() < 0.001:
+                incoming = car.forward.flatten().normalize()
+            if incoming.magnitude() < 0.001 or incoming.dot(goal_direction) < -0.25:
+                incoming = goal_direction
             self.carry_direction = (
-                incoming_direction * 0.82 + goal_direction * 0.18
+                incoming * 0.72 + goal_direction * 0.28
             ).normalize()
-            self.cut_angle = self._signed_angle(
-                self.carry_direction, goal_direction
-            )
+            self.contact_aim.targets = self.targets
 
-            # Skip the carry if a normal straight ground shot is already aligned,
-            # or if the required turn is too extreme to retain controlled contact.
-            if (
-                abs(self.cut_angle) < math.radians(12)
-                or abs(self.cut_angle) > math.radians(100)
-            ):
-                self._finish(agent, "no_useful_cut_angle")
-                return
-
-            bounded_cut = cap(
-                self.cut_angle,
-                -math.radians(72),
-                math.radians(72)
-            )
-            self.cut_direction = self._rotate(
-                self.carry_direction, bounded_cut
-            ).normalize()
-            self.standoff = cap(
-                car.hitbox.length * 0.5 + 92.75 - 18,
-                120,
-                165
-            )
-
-        local_ball = car.local_location(ball_position)
+        local_ball = car.local_location(ball)
         ball_under_hood = (
-            70 <= local_ball.x <= 255
-            and abs(local_ball.y) <= 130
-            and 5 <= local_ball.z <= 150
+            65 <= local_ball.x <= 245
+            and abs(local_ball.y) <= 105
+            and -5 <= local_ball.z <= 145
         )
         ball_near_hood = (
-            45 <= local_ball.x <= 285
-            and abs(local_ball.y) <= 175
-            and -10 <= local_ball.z <= 165
+            40 <= local_ball.x <= 285
+            and abs(local_ball.y) <= 155
+            and -20 <= local_ball.z <= 175
         )
 
-        if self.phase != "approach":
+        if self.phase in {"carry", "steer"}:
             if ball_near_hood:
                 self.lost_contact_since = None
             elif self.lost_contact_since is None:
                 self.lost_contact_since = agent.time
-            elif agent.time - self.lost_contact_since > 0.18:
-                self._finish(agent, "ball_left_hood")
+            elif agent.time - self.lost_contact_since > 0.16:
+                self._finish(agent, "lost_possession")
                 return
 
         if self.phase == "approach":
-            target = (
-                ball_position - self.carry_direction * self.standoff
-            ).flatten()
-            distance = car.location.flat_dist(target)
-            target_speed = cap(
-                ball_speed + (420 if distance > 420 else 250),
-                700,
-                1325
+            direction = self.carry_direction
+            target_speed = cap(ball_speed + 420, 900, 1550)
+            self._drive_to_contact(
+                agent, ball, direction, target_speed
             )
-            self._drive_behind_ball(
-                agent, ball_position, self.carry_direction, target_speed
-            )
-
+            forward = car.forward.flatten().normalize()
             if (
                 ball_under_hood
-                and car_forward.dot(self.carry_direction)
-                >= math.cos(math.radians(32))
+                and forward.dot(direction) >= math.cos(math.radians(34))
             ):
                 self.phase = "carry"
                 self.phase_start = agent.time
                 print(
-                    f"[GROUND CARRY CUT] carry acquired "
-                    f"ball_local=({local_ball.x:.0f},{local_ball.y:.0f},"
-                    f"{local_ball.z:.0f}) speed={car.velocity.flatten().magnitude():.0f}",
+                    f"[GROUND CARRY] possession acquired "
+                    f"local=({local_ball.x:.0f},{local_ball.y:.0f},"
+                    f"{local_ball.z:.0f}) car_speed={car.velocity.flatten().magnitude():.0f}",
                     flush=True
                 )
-            elif agent.time - self.phase_start > 2.0:
+            elif agent.time - self.phase_start > 2.4:
                 self._finish(agent, "approach_timeout")
             return
 
+        # Every touch only corrects a small part of the remaining trajectory
+        # error. This avoids one large corner hit that kills ball momentum.
+        velocity_direction = ball_flat_velocity.normalize()
+        if velocity_direction.magnitude() < 0.001:
+            velocity_direction = self.carry_direction
+        trajectory_error = self._signed_angle(
+            velocity_direction, goal_direction
+        )
+        remaining_error = abs(trajectory_error)
+
+        if remaining_error <= math.radians(7) and ball_speed >= 380:
+            self._finish(agent, "trajectory_goalward")
+            return
+
+        max_touch_angle = math.radians(9)
+        touch_angle = cap(
+            trajectory_error, -max_touch_angle, max_touch_angle
+        )
+        self.touch_direction = self._rotate(
+            velocity_direction, touch_angle
+        ).normalize()
+        if self.touch_direction.magnitude() < 0.001:
+            self.touch_direction = goal_direction
+
+        turn_sign = 1.0 if trajectory_error > 0 else -1.0
+        # A small offset puts the ball on the centre-biased left/right
+        # portion of the front hitbox, not the outer top corner.
+        side_offset = turn_sign * 27.0
+        target_speed = cap(ball_speed + 300, 900, 1700)
+        self._drive_to_contact(
+            agent, ball, self.touch_direction, target_speed,
+            side_offset=side_offset
+        )
+
         if self.phase == "carry":
-            target_speed = cap(ball_speed + 180, 600, 1080)
-            self._drive_behind_ball(
-                agent, ball_position, self.carry_direction, target_speed
-            )
+            self.phase = "steer"
+            self.phase_start = agent.time
 
-            if (
-                agent.time - self.phase_start >= 0.35
-                or ball_speed >= 680
-            ):
-                self.phase = "cut"
-                self.phase_start = agent.time
-                cut_side = "left" if self.cut_angle > 0 else "right"
-                print(
-                    f"[GROUND CARRY CUT] cut={cut_side} "
-                    f"angle={math.degrees(self.cut_angle):.1f} "
-                    f"ball_speed={ball_speed:.0f}",
-                    flush=True
-                )
+        # Flick only when the ball is genuinely settled on the hood, not
+        # merely passing through the broad approach envelope.
+        car_speed = car.velocity.flatten().magnitude()
+        stable_hood = (
+            75 <= local_ball.x <= 185
+            and abs(local_ball.y) <= 52
+            and -5 <= local_ball.z <= 85
+            and abs(ball_velocity.z) < 95
+            and car_speed >= 700
+            and ball_speed < car_speed + 180
+        )
+        if stable_hood and remaining_error < math.radians(32):
+            flick_target = Vector(
+                x=max(1, local_ball.x),
+                y=local_ball.y,
+                z=0
+            )
+            print(
+                f"[GROUND CARRY] flick local=({local_ball.x:.0f},"
+                f"{local_ball.y:.0f},{local_ball.z:.0f}) "
+                f"ball_speed={ball_speed:.0f} car_speed={car_speed:.0f}",
+                flush=True
+            )
+            agent.pop()
+            self._clear_shot_state(agent)
+            agent.push(flip(flick_target, cancel=False))
             return
 
-        if self.phase == "cut":
-            turn_sign = 1 if self.cut_angle > 0 else -1
-            target_speed = cap(ball_speed + 90, 600, 960)
-            self._drive_behind_ball(
-                agent,
-                ball_position,
-                self.cut_direction,
-                target_speed,
-                lateral_offset=turn_sign * 38
+        if (
+            self.last_debug_time < 0
+            or agent.time - self.last_debug_time >= 0.35
+        ):
+            self.last_debug_time = agent.time
+            print(
+                f"[GROUND CARRY] phase={self.phase} "
+                f"ball_speed={ball_speed:.0f} car_speed={car_speed:.0f} "
+                f"goal_error={math.degrees(trajectory_error):.1f} "
+                f"touch={math.degrees(touch_angle):.1f} "
+                f"boost={car.boost:.1f} side={side_offset:.0f}",
+                flush=True
             )
-
-            car_forward = car.forward.flatten().normalize()
-            alignment = car_forward.dot(self.cut_direction)
-            local_ball = car.local_location(ball_position)
-            ball_under_hood = (
-                65 <= local_ball.x <= 240
-                and abs(local_ball.y) <= 150
-                and 0 <= local_ball.z <= 150
-            )
-            car_speed = car.velocity.flatten().magnitude()
-
-            if (
-                agent.time - self.phase_start >= 0.25
-                and alignment >= math.cos(math.radians(20))
-                and ball_under_hood
-                and car_speed >= 500
-            ):
-                flip_target = Vector(
-                    x=max(1, local_ball.x),
-                    y=local_ball.y,
-                    z=0
-                )
-                print(
-                    f"[GROUND CARRY CUT] flip side="
-                    f"{'left' if turn_sign > 0 else 'right'} "
-                    f"align={math.degrees(math.acos(cap(alignment, -1, 1))):.1f} "
-                    f"local_ball=({local_ball.x:.0f},{local_ball.y:.0f},"
-                    f"{local_ball.z:.0f}) speed={car_speed:.0f}",
-                    flush=True
-                )
-                agent.pop()
-                agent.shooting = False
-                agent.shot_weight = -1
-                agent.shot_time = -1
-                agent.push(flip(flip_target, cancel=False))
-                return
-
-            if agent.time - self.phase_start > 1.35:
-                self._finish(agent, "cut_timeout")
-            return
-
 
 class ground_shot:
     # Hits a target point at a target time towards a target direction
