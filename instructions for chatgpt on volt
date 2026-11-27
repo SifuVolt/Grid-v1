@@ -59,6 +59,10 @@ class Bot(VirxERLU):
         self.teamplay_contact_time = 10.0
         self.teamplay_status = "NO_SHOT"
         self.transition_bump_cooldown_until = -999.0
+        self.last_defender_bump_time = -999.0
+        self.last_defender_bump_from = None
+        self.ground_carry_cut_bump_used_at = -999.0
+        self.ground_carry_cut_cooldown_until = -999.0
         self.kickoff_routine_started = False
         self.last_emergency_clear_time = -999.0
         self.emergency_save_zone_active = False
@@ -247,6 +251,7 @@ class Bot(VirxERLU):
         # by should_commit_to_shot below.
         active_shot_names = {
             "ground_shot",
+            "ground_carry_cut",
             "jump_shot",
             "elevated_shot",
             "double_jump",
@@ -626,6 +631,131 @@ class Bot(VirxERLU):
         return self.ball.location.flat_dist(
             self.friend_goal.location
         ) < distance and self.ball.velocity.y * side > 250
+    def _maybe_ground_carry_cut(self, shot, shot_type):
+        """
+        Convert a suitable low ground-shot candidate into a short carry/cut.
+
+        Trigger either shortly after a teammate's defender bump, or for a
+        targetless general ground touch when no directional shot was found.
+        """
+        if (
+            shot is None
+            or shot.__class__.__name__ != "ground_shot"
+            or self.me.airborne
+        ):
+            return shot
+
+        now = self.time
+        last_bump = getattr(self, "last_defender_bump_time", -999.0)
+        bump_trigger = (
+            shot_type == "SHOT_FOUND"
+            and now - last_bump <= 1.5
+            and last_bump > getattr(
+                self, "ground_carry_cut_bump_used_at", -999.0
+            )
+        )
+        general_trigger = (
+            shot_type == "ANY_SHOT_FOUND"
+            and getattr(shot, "targets", None) is None
+            and now >= getattr(
+                self, "ground_carry_cut_cooldown_until", -999.0
+            )
+        )
+        if not (bump_trigger or general_trigger):
+            return shot
+
+        # In team games, only the elected challenger may turn this into
+        # an attacking carry. The cover/transition players retain their roles.
+        if self.friends:
+            active_challenger = self.get_grid_active_challenger()
+            if (
+                active_challenger is not None
+                and active_challenger != self.me.index
+            ):
+                return shot
+
+        ball = self.ball.location
+        velocity = self.ball.velocity
+        ball_speed = math.hypot(velocity.x, velocity.y)
+        ball_depth = ball.y * utils.side(self.team)
+
+        # Keep the carry for a controllable, low, slow ball in the central
+        # field, not an airborne touch, fast clear, or defensive emergency.
+        if (
+            ball.z > 155
+            or abs(velocity.z) > 140
+            or ball_speed > 900
+            or ball_depth > 500
+            or self.me.location.flat_dist(ball) > 1800
+            or self.defensive_emergency()
+        ):
+            return shot
+
+        live_foes = [
+            foe for foe in self.foes
+            if not getattr(foe, "demolished", False)
+        ]
+        nearest_foe = min(
+            (
+                foe.location.flat_dist(ball)
+                for foe in live_foes
+            ),
+            default=float("inf")
+        )
+        free_space = 650 if bump_trigger else 800
+        if nearest_foe < free_space:
+            return shot
+
+        goal_direction = (
+            self.foe_goal.location - ball
+        ).flatten().normalize()
+        if goal_direction.magnitude() < 0.001:
+            return shot
+
+        if ball_speed > 250:
+            incoming_direction = Vector(
+                velocity.x, velocity.y, 0
+            ).normalize()
+        else:
+            incoming_direction = self.me.forward.flatten().normalize()
+
+        if (
+            incoming_direction.magnitude() < 0.001
+            or incoming_direction.dot(goal_direction) < -0.20
+        ):
+            incoming_direction = goal_direction
+
+        planned_direction = (
+            incoming_direction * 0.82 + goal_direction * 0.18
+        ).normalize()
+        signed_cross = (
+            planned_direction.x * goal_direction.y
+            - planned_direction.y * goal_direction.x
+        )
+        cut_angle = math.atan2(
+            signed_cross,
+            max(-1.0, min(1.0, planned_direction.dot(goal_direction)))
+        )
+        if not math.radians(12) <= abs(cut_angle) <= math.radians(100):
+            return shot
+
+        self.ground_carry_cut_cooldown_until = now + 2.4
+        if bump_trigger:
+            self.ground_carry_cut_bump_used_at = last_bump
+
+        reason = "post_bump" if bump_trigger else "targetless_ground_touch"
+        print(
+            f"[GROUND CARRY CUT SELECT] reason={reason} "
+            f"ball_z={ball.z:.0f} ball_speed={ball_speed:.0f} "
+            f"cut={math.degrees(cut_angle):.1f} "
+            f"nearest_foe={nearest_foe:.0f}",
+            flush=True
+        )
+        return routines.ground_carry_cut(
+            shot.intercept_time,
+            getattr(shot, "targets", None)
+        )
+
     def find_teamplay_opportunity(self):
         """Score a shot using contact time, approach angle, and shooting line."""
 
@@ -682,6 +812,8 @@ class Bot(VirxERLU):
 
         if shot is None:
             return None, 0.0, 10.0, "NO_SHOT"
+
+        shot = self._maybe_ground_carry_cut(shot, shot_type)
 
         contact_time = max(
             0.0,
@@ -1424,6 +1556,7 @@ class Bot(VirxERLU):
         # These names must match the actual routine class names.
         shot_names = {
             "ground_shot",
+            "ground_carry_cut",
             "jump_shot",
             "double_jump",
             "Aerial",
@@ -1845,6 +1978,7 @@ class Bot(VirxERLU):
 
                 ordinary_shots = {
                     "ground_shot",
+                    "ground_carry_cut",
                     "jump_shot",
                     "double_jump",
                     "short_shot"
@@ -2097,6 +2231,7 @@ class Bot(VirxERLU):
                 "Aerial",
                 "Redirect",
                 "ground_shot",
+                "ground_carry_cut",
                 "jump_shot",
                 "elevated_shot",
                 "double_jump",
@@ -2126,7 +2261,8 @@ class Bot(VirxERLU):
         if not self.is_clear():
             active_routine = self.stack[0]
             committed_active_shot = active_routine.__class__.__name__ in {
-                "ground_shot", "jump_shot", "elevated_shot", "double_jump",
+                "ground_shot",
+                "ground_carry_cut", "jump_shot", "elevated_shot", "double_jump",
                 "Aerial", "Redirect", "side_shot"
             }
 
@@ -2161,6 +2297,7 @@ class Bot(VirxERLU):
         )
         ordinary_ground_shots = {
             "ground_shot",
+            "ground_carry_cut",
             "jump_shot",
             "double_jump",
             "Aerial",
@@ -2215,6 +2352,7 @@ class Bot(VirxERLU):
                         "jump_shot",
                         "elevated_shot",
                         "ground_shot",
+                        "ground_carry_cut",
                         "side_shot",
                         "Aerial",
                         "Redirect",
@@ -2255,6 +2393,7 @@ class Bot(VirxERLU):
                         else:
                             ordinary_shots = {
                                 "ground_shot",
+                                "ground_carry_cut",
                                 "jump_shot",
                                 "elevated_shot",
                                 "double_jump",
@@ -2265,9 +2404,14 @@ class Bot(VirxERLU):
 
                             # Don't cancel an ordinary shot just because a
                             # different ordinary shot is suggested.
+                            replace_ground_with_carry = (
+                                current_shot_name == "ground_shot"
+                                and new_shot_name == "ground_carry_cut"
+                            )
                             if (
                                 current_shot_name in ordinary_shots
                                 and new_shot_name in ordinary_shots
+                                and not replace_ground_with_carry
                             ):
                                 current_intercept = getattr(
                                     self.stack[0], "intercept_time", float("inf")
@@ -2280,7 +2424,10 @@ class Bot(VirxERLU):
                                 ):
                                     return
 
-                            if committed_routine_lock:
+                            if (
+                                committed_routine_lock
+                                and not replace_ground_with_carry
+                            ):
                                 return
                             self.clear()
                             self.push(shot)
@@ -2384,6 +2531,7 @@ class Bot(VirxERLU):
                     else:
                         ordinary_shots = {
                             "ground_shot",
+                            "ground_carry_cut",
                             "jump_shot",
                             "elevated_shot",
                             "double_jump",
@@ -2395,10 +2543,15 @@ class Bot(VirxERLU):
 
                         # Don't cancel an ordinary shot just because a
                         # different ordinary shot is suggested.
+                        replace_ground_with_carry = (
+                            current_shot_name == "ground_shot"
+                            and new_shot_name == "ground_carry_cut"
+                        )
                         if (
                             current_shot_name in ordinary_shots
                             and new_shot_name in ordinary_shots
                             and new_shot_name != "wall_approach"
+                            and not replace_ground_with_carry
                         ):
                             current_intercept = getattr(
                                 self.stack[0], "intercept_time", float("inf")
@@ -2411,7 +2564,10 @@ class Bot(VirxERLU):
                             ):
                                 return
 
-                        if committed_routine_lock:
+                        if (
+                            committed_routine_lock
+                            and not replace_ground_with_carry
+                        ):
                             return
                         self.clear()
                         self.push(shot)
@@ -2422,7 +2578,8 @@ class Bot(VirxERLU):
             # don't let a stale jump/dodge routine fire anyway. Clear only
             # the shot action and fall through into ordinary driving/defence.
             active_shot_names = {
-                "ground_shot", "jump_shot", "elevated_shot",
+                "ground_shot",
+                "ground_carry_cut", "jump_shot", "elevated_shot",
                 "double_jump", "Aerial", "Redirect", "side_shot"
             }
             if (
@@ -2531,9 +2688,19 @@ class Bot(VirxERLU):
                 "LOW_BOOST",
                 "NO_SHOT",
                 "DEFEND",
-                "SHADOW"
+                "SHADOW",
+                "DEFENDER_BUMPED"
             }:
                 return
+
+            if status == "DEFENDER_BUMPED":
+                self.last_defender_bump_time = self.time
+                self.last_defender_bump_from = index
+                print(
+                    f"[TEAMPLAY] defender bump received from={index}; "
+                    f"carry-cut window opened",
+                    flush=True
+                )
 
             score = float(message.get("score", 0))
             contact_time = float(message.get("contact_time", 99))
