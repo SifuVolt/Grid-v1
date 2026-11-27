@@ -879,3 +879,15 @@ This file is the project handoff and change checklist. Read it before every code
 - Selection still respects the elected challenger in team games and does not override defensive-emergency handling. A targeted ground shot is only converted after the teammate-bump trigger; ordinary carry selection remains for targetless touches or a reachable descending catch.
 - This implementation has only been statically reviewed after editing. It has not been compiled or tested in-game. Verify first that the Party Cannon Python port is the launcher actually being run; the repository root config may still launch the separate Noob Black entrypoint.
 
+## 13. Side-contact jump shot (2026-11-28)
+
+- The user reverted the prior ground-carry experiment; do not reapply that carry implementation unless explicitly requested.
+- New mechanic: `side_contact_jump_shot` is a separate jump-shot option for a reachable jump-shot intercept where the normal nose-first behind-the-ball approach is materially misaligned.
+- Selection currently applies to jump-shot candidates (`shot_type == 1`) when the car-to-ball approach alignment against the goalward shot direction is below 0.72 and the side setup plus jump timing is estimated to fit before the intercept.
+- The routine stages the car beside the ball with the side hitbox facing goalward. It computes the car-centre target from ball radius (92.75), half hitbox width, and rotated hitbox offset. It chooses the perpendicular car-forward orientation requiring the smaller turn, which determines whether the goalward side dodge is local-left or local-right.
+- The desired contact is on the ball surface toward the car, with ball/car longitudinal centres aligned (small local-X error) and the ball at the chosen side of the car. The routine approaches a waypoint 300 uu behind the final car-centre target, then closes to the calculated contact position.
+- The current implementation uses the existing jump-time estimate, holds the first jump for `jump_max_duration`, releases it, and issues a lateral dodge only when the predicted side-contact geometry is within tolerance. The dodge direction is checked against the goalward vector during geometry construction.
+- The existing `side_shot` goal-line correction remains separate; this new routine addresses poor nose-first approach geometry rather than only projected misses outside the posts.
+- Registered `side_contact_jump_shot` in the agent's ordinary-shot/commit locks so teamplay does not treat it as an untracked routine.
+- This change has only been statically reviewed. It has not been compiled or tested in Rocket League. Watch first for setup ETA accuracy, the final perpendicular orientation, local-left/right sign, and whether the side-face contact window is too strict.
+
