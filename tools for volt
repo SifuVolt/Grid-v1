@@ -1,4 +1,4 @@
-from util.routines import Aerial, double_jump, ground_shot, jump_shot, side_shot, virxrlcu, wall_approach
+from util.routines import Aerial, double_jump, ground_shot, jump_shot, side_shot, side_contact_jump_shot, virxrlcu, wall_approach
 from util.utils import Vector, math, side, cap
 from util.grid_double_jump import find_double_jump as grid_find_double_jump
 
@@ -1671,7 +1671,99 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
         best_targets
     )
 
-    if best_shot["shot_type"] == 3:
+    side_contact_routine = None
+    if best_shot["shot_type"] == 1 and can_jump:
+        if best_targets is not None:
+            side_goal_center = Vector(
+                (best_targets[0][0] + best_targets[1][0]) * 0.5,
+                (best_targets[0][1] + best_targets[1][1]) * 0.5,
+                (best_targets[0][2] + best_targets[1][2]) * 0.5
+            )
+        else:
+            side_goal_center = agent.foe_goal.location
+
+        side_shot_direction = (
+            side_goal_center - best_ball_location
+        ).flatten().normalize()
+        car_from_ball = (
+            agent.me.location - best_ball_location
+        ).flatten().normalize()
+        normal_alignment = (
+            car_from_ball.dot(side_shot_direction * -1)
+            if side_shot_direction.magnitude() > 0.001 else 1.0
+        )
+
+        # Only replace a jump shot when its nose-first behind-the-ball
+        # approach is materially misaligned.
+        if normal_alignment < 0.72:
+            left_of_shot = Vector(
+                -side_shot_direction.y,
+                side_shot_direction.x,
+                0
+            ).normalize()
+            current_forward = agent.me.forward.flatten().normalize()
+            desired_forward = (
+                left_of_shot
+                if current_forward.dot(left_of_shot)
+                >= current_forward.dot(left_of_shot * -1)
+                else left_of_shot * -1
+            )
+            side_standoff = (
+                92.75
+                + float(getattr(agent.me.hitbox, "width", 84.2)) * 0.5
+            )
+            side_target = (
+                best_ball_location
+                - side_shot_direction * side_standoff
+            ).flatten()
+            side_waypoint = side_target - desired_forward * 300
+            setup_distance = agent.me.location.flat_dist(side_waypoint)
+            local_waypoint = agent.me.local_location(side_waypoint)
+            travel_angle = abs(math.atan2(
+                local_waypoint.y, local_waypoint.x
+            ))
+            orientation_angle = math.acos(max(
+                -1.0, min(1.0, current_forward.dot(desired_forward))
+            ))
+            setup_speed = max(
+                900.0,
+                min(
+                    1800.0,
+                    agent.me.velocity.flatten().magnitude() + 500.0
+                )
+            )
+            setup_time = (
+                setup_distance / setup_speed
+                + travel_angle * 0.30
+                + orientation_angle * 0.18
+            )
+            needed_jump = virxrlcu.get_jump_time(
+                best_ball_location.z - agent.me.location.z,
+                agent.me.velocity.z,
+                agent.gravity.z
+            )
+            required_time = (
+                setup_time + max(0.22, needed_jump * 0.70) + 0.10
+            )
+            if (
+                time_to_intercept > required_time
+                and abs(side_target.x) < 3900
+                and abs(side_target.y) < 4900
+            ):
+                side_contact_routine = side_contact_jump_shot(
+                    best_intercept_time, best_targets
+                )
+                print(
+                    f"[SHOT PLANNER] selected side_contact_jump_shot "
+                    f"normal_alignment={normal_alignment:.2f} "
+                    f"setup={setup_time:.2f} required={required_time:.2f} "
+                    f"T={time_to_intercept:.2f}",
+                    flush=True
+                )
+
+    if side_contact_routine is not None:
+        routine = side_contact_routine
+    elif best_shot["shot_type"] == 3:
         routine = Aerial(
             best_intercept_time,
             best_targets,
