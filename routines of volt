@@ -6085,7 +6085,7 @@ class ground_carry_cut:
             else:
                 landing_ball, landing_time, landing_velocity = landing
                 self.catch_location = landing_ball
-                if ball.z <= 165 and ball_velocity.z < 120:
+                if ball.z <= 130 and abs(ball_velocity.z) < 170:
                     self.phase = "approach"
                     self.phase_start = agent.time
                 else:
