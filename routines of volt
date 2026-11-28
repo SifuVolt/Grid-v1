@@ -5132,7 +5132,7 @@ class jump_shot:
             predicted_forward, predicted_right, predicted_up = (
                 self._predict_air_orientation(
                     agent,
-                    max(0.0, T),
+                    min(max(0.0, T), 0.15),
                     (
                         agent.controller.roll,
                         agent.controller.pitch,
