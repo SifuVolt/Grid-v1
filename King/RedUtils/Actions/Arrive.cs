@@ -1,121 +1,141 @@
-﻿using System;
+using System;
 using RedUtils.Math;
 
 namespace RedUtils
 {
-	/// <summary>An action meant to drive the car to a certain location, at a certain time and/or facing a certain direction</summary>
-	public class Arrive : IAction
+public class Arrive : IAction
 	{
-		/// <summary>If we have arrived, or ran out of time</summary>
-		public bool Finished { get; private set; }
-		/// <summary>Whether or not this function is interruptible</summary>
-		public bool Interruptible { get; private set; }
-
-		/// <summary>The destination the car will arrive at</summary>
 		public Vec3 Target;
-		/// <summary>The direction the car will try to face at arrival</summary>
+
 		public Vec3 Direction;
-		/// <summary>The time of arrival</summary>
+
 		public float ArrivalTime;
-		/// <summary>Whether or not we should flip while driving to the location</summary>
+
 		public bool AllowFlipping;
-		/// <summary>How much time we need to drive forward before arriving (mainly used if we plan on jumping/dodging just before arriving)</summary>
+
 		public float RecoveryTime;
-		/// <summary>The drive action</summary>
+
 		public Drive Drive;
 
-		/// <summary>How much time is left before we arrive or this action expires</summary>
+		public bool OnTime;
+
+		public bool Finished { get; private set; }
+
+		public bool Interruptible { get; private set; }
+
 		public float TimeRemaining { get; private set; }
 
-		/// <summary>Initializes a new arrival action.</summary>
-		/// <param name="direction">The direction the car will try to face at the time of arrival. If null, any direction is allowed.</param>
-		/// <param name="arrivalTime">The specific time of arrival. If negative, it will not be a specific time and we will not waste boost getting there.</param>
-		/// <param name="allowFlipping">Whether or not we are going to allow dodges to increase speed</param>
-		/// <param name="recoveryTime">How much time we should give the car to recover before arriving</param>
-		public Arrive(Car car, Vec3 target, Vec3? direction = null, float arrivalTime = -1f, bool allowFlipping = true, float recoveryTime = 0f)
+		public Arrive(Car car, Vec3 target, Vec3 direction)
 		{
 			Interruptible = true;
 			Finished = false;
-
 			Target = target;
-			Direction = direction ?? Vec3.Zero;
+			Direction = direction;
+			ArrivalTime = -1f;
+			AllowFlipping = true;
+			Drive = new Drive(car, Target, 2300f, AllowFlipping, wasteBoost: false);
+			RecoveryTime = 0f;
+		}
+
+		public Arrive(Car car, Vec3 target, float arrivalTime)
+		{
+			Interruptible = true;
+			Finished = false;
+			Target = target;
+			Direction = Vec3.Zero;
+			ArrivalTime = arrivalTime;
+			AllowFlipping = true;
+			Drive = new Drive(car, Target, 2300f, AllowFlipping, wasteBoost: true);
+			RecoveryTime = 0f;
+		}
+
+		public Arrive(Car car, Vec3 target, Vec3 direction, float arrivalTime)
+		{
+			Interruptible = true;
+			Finished = false;
+			Target = target;
+			Direction = direction;
+			ArrivalTime = arrivalTime;
+			AllowFlipping = true;
+			Drive = new Drive(car, Target, 2300f, AllowFlipping, wasteBoost: true);
+			RecoveryTime = 0f;
+		}
+
+		public Arrive(Car car, Vec3 target, Vec3 direction, float arrivalTime, bool allowFlipping)
+		{
+			Interruptible = true;
+			Finished = false;
+			Target = target;
+			Direction = direction;
 			ArrivalTime = arrivalTime;
 			AllowFlipping = allowFlipping;
-			Drive = new Drive(car, Target, Car.MaxSpeed, AllowFlipping, arrivalTime >= 0f);
+			Drive = new Drive(car, Target, 2300f, AllowFlipping, wasteBoost: true);
+			RecoveryTime = 0f;
+		}
+
+		public Arrive(Car car, Vec3 target, Vec3 direction, float arrivalTime, bool allowFlipping, float recoveryTime)
+		{
+			Interruptible = true;
+			Finished = false;
+			Target = target;
+			Direction = direction;
+			ArrivalTime = arrivalTime;
+			AllowFlipping = allowFlipping;
+			Drive = new Drive(car, Target, 2300f, AllowFlipping, wasteBoost: true);
 			RecoveryTime = recoveryTime;
 		}
 
-		/// <summary>Drives the car to a certain location, at a certain time and/or facing a certain direction</summary>
 		public void Run(RUBot bot)
 		{
-			// Calculates various important values
-			float distance = Distance(bot.Me);
-			float carSpeed = bot.Me.Velocity.Length();
-
-			// Calculates how much time we have before we should arrive
-			TimeRemaining = ArrivalTime < 0 ? distance / Car.MaxSpeed : MathF.Max(ArrivalTime - Game.Time, 0.001f);
-
-			// Based on the time remaining, calculate our target speed
-			float targetSpeed = distance / TimeRemaining;
-
-			// Predicts (roughly) the location of the car after dodging
-			Vec3 predictedLocation = bot.Me.LocationAfterDodge();
-			// If we were given a direction, calculate a shifted version of our target so that we face the given direction
-			Vec3 shiftedTarget;
-			if (Direction.Length() > 0)
+			float num = Distance(bot.Me);
+			float num2 = bot.Me.Velocity.Length();
+			TimeRemaining = ((ArrivalTime < 0f) ? (num / 2300f) : MathF.Max(ArrivalTime - Game.Time, 0.001f));
+			float num3 = TimeRemaining - Eta(bot.Me);
+			Vec3 target;
+			Vec3 vec2;
+			if (Direction.Length() > 0f)
 			{
-				// Gets the surface normal of the surface we should be on at arrival
-				Vec3 surfaceNormal = Field.NearestSurface(Target).Normal;
-				// Gets the direction to the target, flattened by the surface normal
-				Vec3 directionToTarget = bot.Me.Location.FlatDirection(Target, surfaceNormal);
-
-				// Calculates the amount we should shift the current target
-				float additionalShift = RecoveryTime * carSpeed;
-				float shift = MathF.Min(Field.DistanceBetweenPoints(Target, bot.Me.Location) * 0.6f, Utils.Cap(carSpeed, 1410, Car.MaxSpeed) * 1.5f);
-				float turnRadius = Drive.TurnRadius(Utils.Cap(carSpeed, 500, Car.MaxSpeed)) * 1.2f;
-
-				shift *= targetSpeed < 2200 || ArrivalTime < 0 ? Utils.Cap((shift - additionalShift) / turnRadius, 0f, 1f) : 0;
-
-				// Shifts the target such that the direction it is shifted is not on the other side of the final target relative to the car
-				Vec3 leftDirection = directionToTarget.Cross(surfaceNormal).Normalize();
-				Vec3 rightDirection = directionToTarget.Cross(-surfaceNormal).Normalize();
-				shiftedTarget = Field.LimitToNearestSurface(Target - Direction.Clamp(leftDirection, rightDirection, surfaceNormal).Normalize() * shift);
+				Vec3 normal = Field.NearestSurface(Target).Normal;
+				Vec3 vec = bot.Me.Location.FlatDirection(Target, normal);
+				float num4 = MathF.Min(Field.DistanceBetweenPoints(Target, bot.Me.Location) * 0.4f, Utils.Cap(num2, 1410f, 2300f) * 0.8f);
+				float num5 = Utils.Cap(num2, 500f, 2300f);
+				float num6 = Drive.TurnRadius(num5);
+				float num7 = num6 * bot.Me.Forward.FlatAngle(Target, bot.Me.Up) / num5;
+				bool flag = Drive.TurnRadius(bot.Me, Target) - 100f < num6;
+				num4 *= (((TimeRemaining > RecoveryTime + num7 + 0.1f && ((!flag && num3 > 0.1f) || vec.Angle(Direction) > 1.6f)) || ArrivalTime < 0f) ? Utils.Cap(num4 / (num6 * 1.5f), 0f, 1f) : 0f);
+				Vec3 start = vec.Cross(normal).Normalize();
+				Vec3 end = vec.Cross(-normal).Normalize();
+				target = Field.LimitToNearestSurface(Target - Direction.Clamp(start, end, normal).Normalize() * num4);
+				vec2 = Field.LimitToNearestSurface(Target - Direction.Clamp(start, end, normal).Normalize() * num4 * 0.5f);
 			}
 			else
 			{
-				// If we weren't given a direction, just don't shift the target
-				shiftedTarget = Target;
+				target = Target;
+				vec2 = Target;
 			}
-
-			// How much time we have left to flip
-			float timeLeft = bot.Me.Location.FlatDist(Target) / MathF.Max(carSpeed + 500, 1410);
-
-			// Only allow dodges if we are sure we won't land too far over, and that we have enough time to recover
-			Drive.AllowDodges = MathF.Sign(predictedLocation.FlatDirection(Target).Dot(Direction.Cross())) == MathF.Sign(bot.Me.Location.FlatDirection(Target).Dot(Direction.Cross())) && timeLeft > 1.35f + RecoveryTime;
-			Drive.Target = shiftedTarget;
+			float num8 = bot.Me.Location.FlatDist(Target) / MathF.Max(num2 + 500f, 1410f);
+			float targetSpeed = (Drive.GetDistance(bot.Me, vec2) + Field.DistanceBetweenPoints(vec2, Target)) / TimeRemaining;
+			Vec3 vec3 = bot.Me.LocationAfterSpeedFlip(bot.Me.Boost > 0);
+			Drive.AllowDodges = MathF.Sign(vec3.FlatDirection(Target).Dot(Direction.Cross())) == MathF.Sign(bot.Me.Location.FlatDirection(Target).Dot(Direction.Cross())) && num8 > 1.4f + RecoveryTime;
+			Drive.Target = target;
 			Drive.TargetSpeed = targetSpeed;
-			Drive.Run(bot); // Drive towards the shifted target
-
-			// If the drive sub action isn't interruptible, then this action isn't interruptible either
+			Drive.Run(bot);
+			OnTime = ArrivalTime < 0f || MathF.Max(TimeRemaining * 1.05f, TimeRemaining + 0.1f) > Eta(bot.Me);
 			Interruptible = Drive.Interruptible;
-
-			// If we have arrived, or we ran out of time, finish this action
-			if (Field.LimitToNearestSurface(bot.Me.Location).Dist(Field.LimitToNearestSurface(Target)) < 100 || (ArrivalTime < Game.Time && ArrivalTime > 0))
+			if (Field.LimitToNearestSurface(bot.Me.Location).Dist(Field.LimitToNearestSurface(Target)) < 100f || (ArrivalTime < Game.Time && ArrivalTime > 0f))
 			{
 				Finished = true;
 			}
 		}
 
-		/// <summary>Finds the distance left to drive</summary>
 		public float Distance(Car car)
 		{
 			return Drive.GetDistance(car, Target);
 		}
 
-		/// <summary>Estimates the time left before we arrive, assuming we drive as fast as possible</summary>
 		public float Eta(Car car)
 		{
-			return Drive.GetEta(car, Target);
+			return Drive.GetEta(car, Target, Drive.Backwards, AllowFlipping);
 		}
 	}
 }
