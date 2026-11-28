@@ -4730,6 +4730,10 @@ class jump_shot:
         self.wall_shot_normal = None
         self.contact_face_label = None
         self._last_air_prediction_debug = -1.0
+        # Once the forward dodge is triggered, keep the jump-shot action
+        # alive long enough for the flip animation to finish. Strategy-level
+        # opponent checks must not replace its direction during this window.
+        self.post_contact_lock_until = -1.0
 
     def _predict_air_orientation(self, agent, horizon, controls):
         """Integrate Rocket League's measured aerial-control model at 120 Hz."""
@@ -5219,6 +5223,7 @@ class jump_shot:
                 self.dodge_direction = dodge_direction
                 self.counter = 4
                 agent.last_flip_time = agent.time
+                self.post_contact_lock_until = agent.time + 0.60
                 print(
                     f"[RUST JUMP SHOT] forward dodge "
                     f"elapsed={jump_elapsed:.3f} "
@@ -5248,6 +5253,18 @@ class jump_shot:
 
         elif self.counter == 4:
             self.dodging = True
+            # The dodge impulse is already committed. Keep the controller
+            # neutral so a later steering/retreat action cannot turn it into
+            # a backflip or redirect the ongoing flip.
+            agent.controller.jump = False
+            agent.controller.pitch = 0.0
+            agent.controller.yaw = 0.0
+            agent.controller.roll = 0.0
+            agent.controller.steer = 0.0
+            agent.controller.boost = False
+            agent.controller.throttle = 1.0
+            if agent.time >= self.post_contact_lock_until:
+                self.counter = 5
         elif self.counter == 5:
             agent.pop()
             agent.shooting = False
