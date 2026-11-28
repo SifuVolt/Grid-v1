@@ -25,13 +25,13 @@ jobs:
       - name: Download original King assemblies
         run: |
           mkdir -p King/Recovered
-          curl -fL "https://raw.githubusercontent.com/RLBot/RLBotPack/master/RLBotPack/King/Bot.dll" -o /tmp/King.Bot.dll
-          curl -fL "https://raw.githubusercontent.com/RLBot/RLBotPack/master/RLBotPack/King/RedUtils.dll" -o /tmp/King.RedUtils.dll
+          curl -fL "https://raw.githubusercontent.com/RLBot/RLBotPack/master/RLBotPack/King/Bot.dll" -o /tmp/Bot.dll
+          curl -fL "https://raw.githubusercontent.com/RLBot/RLBotPack/master/RLBotPack/King/RedUtils.dll" -o /tmp/RedUtils.dll
 
       - name: Decompile King strategy assembly
         run: |
           dotnet tool install ilspycmd --tool-path /tmp/ilspy
-          /tmp/ilspy/ilspycmd /tmp/King.Bot.dll > King/Recovered/King.decompiled.cs
+          /tmp/ilspy/ilspycmd /tmp/Bot.dll > King/Recovered/King.decompiled.cs
           test -s King/Recovered/King.decompiled.cs
 
       - name: Commit recovered source
