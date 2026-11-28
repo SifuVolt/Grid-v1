@@ -5,7 +5,7 @@ namespace RedUtils
 {
 public class GroundShot : Shot
 	{
-		private readonly int _startBoostAmount;
+		private readonly float _startBoostAmount;
 
 		private readonly float _updateInterval = 0.2f;
 
