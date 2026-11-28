@@ -943,3 +943,12 @@ This file is the project handoff and change checklist. Read it before every code
 - Side-flip orientation is held through the jump. The existing S-tilt is retained for airborne balls. The car turns at the staging point, launches with a 0.18-second side-flip lead, and accepts the extra lateral dodge travel in its contact window. Side contact uses hitbox width for the final contact-distance check; ordinary jump-shot hitbox geometry is not modified.
 - The selected contact normal is refreshed when the routine is updated. This is a first physics-informed implementation; turn-in distance, timing, and contact outcome require in-game tuning.
 - No compile, RLBot simulation, or Rocket League in-game test has been run. The root rlbot.toml launcher caveat in section 2 still applies.
+
+## 20. Double-jump rebound follow-up aerial (2026-11-28)
+
+- A completed double_jump shot may hand off to Aerial after the first ball touch when the planned shot ray is aimed into the opponent's backboard or an attacking corner.
+- Route detection projects the planned shot direction to the opponent backboard plane and checks whether a side wall is reached first in the attacking half. Ordinary goal-bound shots that do not project into those rebound zones do not trigger the follow-up.
+- The handoff requires the second jump to have been consumed, a nearby ball-velocity change consistent with contact, and at least 12 boost (or unlimited boost). The next reachable airborne intercept is searched from the updated prediction.
+- The follow-up Aerial receives a boost-lock flag. While its follow-up intercept is still ahead and boost remains, it overrides the normal boost-demand gate and keeps boost/throttle on through alignment corrections, preserving forward thrust instead of dropping boost during the handoff.
+- This deliberately spends the remaining boost during the follow-up; it does not reserve boost once the rebound chase is committed. The ordinary Aerial controller and its contact/aim calculations remain responsible for steering to the second touch.
+- This is a first implementation and has not been compiled or tested in Rocket League. Confirm the ball-contact detection, backboard/corner classification, and boost continuity in-game before tuning.
