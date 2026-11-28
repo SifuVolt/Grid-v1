@@ -710,6 +710,9 @@ class double_jump:
         self.prev_jump = False
         self.counter = 0
         self.should_chip = False
+        self.last_live_ball_velocity = None
+        self.last_live_ball_location = None
+        self.followup_contact_seen = False
 
     def update(self, shot):
         self.base_intercept_time = shot.intercept_time
@@ -840,6 +843,49 @@ class double_jump:
 
         offset_target = ball_location - shot_vector * agent.best_shot_value
         return agent.me.local_location(offset_target).x < 0
+
+    def _followup_rebound_route(self, agent, ball):
+        """Return backboard/corner only when the planned shot ray reaches it."""
+        direction = self.shot_vector.flatten().normalize()
+        if direction.magnitude() < 0.001:
+            return None
+
+        team_side = side(agent.team)
+        direction_depth = direction.y * team_side
+        ball_depth = ball.y * team_side
+
+        # The ball must be sent toward the opponent's end of the arena.
+        if direction_depth >= -0.20:
+            return None
+
+        backwall_depth = -5120.0
+        backwall_distance = (
+            (backwall_depth - ball_depth) / direction_depth
+        )
+        if backwall_distance <= 0:
+            return None
+
+        backwall_x = ball.x + direction.x * backwall_distance
+
+        sidewall_distance = float("inf")
+        if direction.x > 0.001:
+            sidewall_distance = (4096.0 - ball.x) / direction.x
+        elif direction.x < -0.001:
+            sidewall_distance = (-4096.0 - ball.x) / direction.x
+
+        if (
+            sidewall_distance > 0
+            and sidewall_distance < backwall_distance
+        ):
+            sidewall_depth = (
+                ball_depth + direction_depth * sidewall_distance
+            )
+            if sidewall_depth < -1400.0:
+                return "corner"
+
+        if abs(backwall_x) > 3500.0:
+            return "corner"
+        return "backboard"
 
     def _finish(self, agent):
         agent.pop()
@@ -1020,6 +1066,17 @@ class double_jump:
                 self.jump_frames = 0
                 self.second_jump_sent = False
                 self.prev_jump = False
+                self.last_live_ball_velocity = Vector(
+                    agent.ball.velocity.x,
+                    agent.ball.velocity.y,
+                    agent.ball.velocity.z
+                )
+                self.last_live_ball_location = Vector(
+                    agent.ball.location.x,
+                    agent.ball.location.y,
+                    agent.ball.location.z
+                )
+                self.followup_contact_seen = False
 
             elif agent.me.airborne:
                 agent.push(recovery(final_target if Tj > 0 else None))
@@ -1128,6 +1185,72 @@ class double_jump:
                     1
                 )
 
+        # A double-jump touch aimed into the opponent's backboard/corner is
+        # a setup for a second aerial touch, not the end of the attack.
+        live_ball_velocity = Vector(
+            agent.ball.velocity.x,
+            agent.ball.velocity.y,
+            agent.ball.velocity.z
+        )
+        live_ball_location = Vector(
+            agent.ball.location.x,
+            agent.ball.location.y,
+            agent.ball.location.z
+        )
+        if (
+            self.second_jump_sent
+            and bool(getattr(agent.me, "doublejumped", False))
+            and not self.followup_contact_seen
+            and self.last_live_ball_velocity is not None
+        ):
+            velocity_change = (
+                live_ball_velocity - self.last_live_ball_velocity
+            ).magnitude()
+            car_ball_distance = agent.me.location.dist(live_ball_location)
+            if velocity_change > 350 and car_ball_distance < 600:
+                self.followup_contact_seen = True
+                followup_route = self._followup_rebound_route(
+                    agent, live_ball_location
+                )
+                enough_boost = (
+                    agent.boost_amount == "unlimited"
+                    or agent.me.boost >= 12
+                )
+                if followup_route is not None and enough_boost:
+                    followup = fast_intercept_finder().find(
+                        agent,
+                        earliest_time=agent.time + 0.04,
+                        cap_=3.0
+                    )
+                    if followup is not None:
+                        followup.followup_boost_lock = True
+                        followup.followup_route = followup_route
+                        agent.pop()
+                        agent.shooting = False
+                        agent.push(followup)
+                        print(
+                            f"[DOUBLE JUMP FOLLOWUP] route={followup_route} "
+                            f"velocity_change={velocity_change:.0f} "
+                            f"boost={agent.me.boost:.1f} "
+                            f"aerial_T={followup.intercept_time - agent.time:.2f}",
+                            flush=True
+                        )
+                        return
+                    print(
+                        f"[DOUBLE JUMP FOLLOWUP] no reachable aerial "
+                        f"route={followup_route} boost={agent.me.boost:.1f}",
+                        flush=True
+                    )
+                elif followup_route is not None:
+                    print(
+                        f"[DOUBLE JUMP FOLLOWUP] skipped low boost "
+                        f"route={followup_route} boost={agent.me.boost:.1f}",
+                        flush=True
+                    )
+
+        self.last_live_ball_velocity = live_ball_velocity
+        self.last_live_ball_location = live_ball_location
+
         # End the routine after the contact window has passed.
         if T <= -0.4 or (
             not agent.me.airborne and self.jump_frames >= 30
@@ -1163,6 +1286,9 @@ class Aerial:
         self.aerial_committed = False
         self.immediate_launch = None
         self.aerial_launch_debug_time = -1.0
+        self.followup_boost_lock = False
+        self.followup_route = None
+        self.followup_boost_debug_time = -1.0
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -2435,6 +2561,29 @@ class Aerial:
         else:
             agent.controller.boost = False
             agent.controller.throttle = 0
+
+        # Keep thrust through the rebound chase. The ordinary contact
+        # controller may briefly drop boost while it re-aligns; that would
+        # throw away the momentum created by the double-jump launch.
+        if (
+            self.followup_boost_lock
+            and T > 0
+            and agent.me.boost > 0
+            and not self.dodging
+        ):
+            agent.controller.boost = True
+            agent.controller.throttle = 1
+            if (
+                self.followup_boost_debug_time < 0
+                or agent.time - self.followup_boost_debug_time >= 0.4
+            ):
+                self.followup_boost_debug_time = agent.time
+                print(
+                    f"[AERIAL FOLLOWUP BOOST] route={self.followup_route} "
+                    f"boost={agent.me.boost:.1f} T={T:.2f} "
+                    f"speed={agent.me.velocity.magnitude():.0f}",
+                    flush=True
+                )
 
 
         if T <= -0.4 or (not self.jumping and T > 1.5 and not virxrlcu.aerial_shot_is_viable(T, agent.boost_accel, tuple(agent.gravity), agent.me.get_raw(agent), tuple(self.target))):
