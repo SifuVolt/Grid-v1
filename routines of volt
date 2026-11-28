@@ -2513,6 +2513,8 @@ class AerialJumpShot(Aerial):
             fast_aerial=False,
             single_jump_shot=True
         )
+        # Do not spend the short intercept window on a ground-turn setup.
+        self.immediate_launch = True
 
 
 class half_flip:
