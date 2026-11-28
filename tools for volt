@@ -642,7 +642,7 @@ def useful_non_aerial_shot(agent, ball_location, ball_velocity, shot, intercept_
     return True
 
 
-def select_ball_contact(agent, ball_location, targets):
+def select_ball_contact(agent, ball_location, targets, time_to_intercept=None):
     """
     Select which side of the ball Volt should approach.
 
@@ -675,26 +675,71 @@ def select_ball_contact(agent, ball_location, targets):
 
     best = None
     best_score = -999
+    centre_score = None
+    best_eta = float("inf")
+
+    hitbox = agent.me.hitbox
+    half_width = float(getattr(hitbox, "width", 84.2)) * 0.5
+    ball_velocity = getattr(agent.ball, "velocity", Vector()).flatten()
 
     for label, normal in candidates:
         approach_alignment = car_from_ball.dot(normal)
-
-        # How much this contact direction deviates from the
-        # direction needed to send the ball toward the target.
         shot_alignment = (-normal).dot(shot_dir)
 
-        # Strongly favour contacts Volt can actually approach.
-        score = (
-            approach_alignment * 0.75
-            + shot_alignment * 0.25
+        # Estimate the route to a side-face staging point. Include current
+        # heading, turn cost, and velocity already directed along the route.
+        staging_distance = 92.75 + half_width + 420.0
+        staging_target = ball_location + normal * staging_distance
+        route = (staging_target - agent.me.location).flatten()
+        route_distance = route.magnitude()
+        route_direction = route.normalize() if route_distance > 1 else Vector()
+        local_route = agent.me.local(route_direction)
+        turn_angle = abs(math.atan2(local_route.y, local_route.x))
+        route_speed = agent.me.velocity.flatten().dot(route_direction)
+        travel_speed = cap(route_speed + 700.0, 650.0, 1800.0)
+        travel_eta = (
+            route_distance / travel_speed
+            + turn_angle * 0.34
+            + turn_angle * turn_angle * 0.10
         )
+
+        # A side contact needs a final quarter-turn into a perpendicular
+        # chassis heading. Charge that manoeuvre in the candidate score.
+        side_turn_cost = (
+            0.18 if label in ("left", "right") else 0.0
+        )
+
+        closing_speed = (
+            agent.me.velocity.flatten().dot(-normal)
+            - ball_velocity.dot(-normal)
+        )
+        power_score = cap(closing_speed / 1500.0, -0.35, 1.0)
+
+        time_penalty = 0.0
+        if time_to_intercept is not None:
+            time_penalty = max(
+                0.0,
+                travel_eta + side_turn_cost - time_to_intercept + 0.12
+            ) * 0.55
+
+        score = (
+            approach_alignment * 0.62
+            + shot_alignment * 0.25
+            + power_score * 0.13
+            - turn_angle * 0.10
+            - side_turn_cost
+            - time_penalty
+        )
+
+        if label == "centre":
+            centre_score = score
 
         if score > best_score:
             best_score = score
             best = (label, normal)
+            best_eta = travel_eta + side_turn_cost
 
     label, normal = best
-
     ball_radius = 92.75
     approach_distance = max(120, agent.best_shot_value)
 
@@ -704,6 +749,11 @@ def select_ball_contact(agent, ball_location, targets):
         "contact_point": ball_location + normal * ball_radius,
         "approach_target": ball_location + normal * approach_distance,
         "score": best_score,
+        "side_gain": (
+            best_score - centre_score
+            if centre_score is not None else 0.0
+        ),
+        "approach_eta": best_eta,
     }
 def target_aim_point(ball_location, ball_velocity, target, gravity=-650):
     """
@@ -1668,7 +1718,8 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
     contact = select_ball_contact(
         agent,
         best_ball_location,
-        best_targets
+        best_targets,
+        time_to_intercept
     )
 
     if best_shot["shot_type"] == 3:
@@ -1771,6 +1822,30 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                     f"travel_estimate={side_setup_time:.2f}",
                     flush=True
                 )
+
+        if (
+            not side_shot_selected
+            and contact["label"] in ("left", "right")
+            and contact.get("side_gain", 0.0) > 0.06
+            and contact.get("approach_eta", float("inf"))
+                < time_to_intercept + 0.10
+            and time_to_intercept
+                > contact.get("approach_eta", 0.0) + 0.22
+        ):
+            # The side contact is better than a central approach and leaves
+            # time for the staging run and perpendicular turn-in.
+            routine = side_shot(
+                best_intercept_time, best_targets, contact["label"]
+            )
+            side_shot_selected = True
+            print(
+                f"[SHOT PLANNER] calculated side flip "
+                f"side={contact['label']} "
+                f"gain={contact.get('side_gain', 0.0):.3f} "
+                f"eta={contact.get('approach_eta', 0.0):.2f} "
+                f"T={time_to_intercept:.2f}",
+                flush=True
+            )
 
         if not side_shot_selected:
             routine = jump_shot(best_intercept_time, best_targets)
