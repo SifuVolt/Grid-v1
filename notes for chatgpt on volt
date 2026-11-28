@@ -977,6 +977,6 @@ This file is the project handoff and change checklist. Read it before every code
 - It reuses the existing Aerial 3D shot-direction and hitbox-aware contact-target calculations, but forces the launch candidate to a single jump (never a second jump).
 - Launch sequence: commit immediately without a ground-turn setup, single jump, short pitch-back window, then continuous boost while the controller tracks the predicted contact target. The normal forward-projection boost feathering is bypassed for this routine.
 - At the contact window, the dodge impulse is aligned with the predicted outgoing shot vector so the nose/front hitbox drives through the selected contact face toward goal.
-- This selection applies only to single-jump shot candidates (`shot_type == 1`) with `T <= 3.0` in both goal-targeted and untargeted finders. Ground shots and true Aerial (`shot_type == 3`) candidates retain their existing routines.
+- This selection applies only to single-jump shot candidates (`shot_type == 1`) with `T <= 3.0` in the goal-targeted finder, untargeted finder, and shallow-zone `fast_intercept_finder`. Ground shots and true Aerial (`shot_type == 3`) candidates retain their existing routines.
 - The routine is included in the agent's ordinary-shot and committed-shot tracking sets so it can refresh/lock consistently with other shots.
 - No compile or in-game test has been run. Confirm the active RLBot launcher: the checked-in root config currently loads Noob Black through `src/bot.toml`, not this separate Volt agent.
