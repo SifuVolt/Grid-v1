@@ -6131,6 +6131,7 @@ class side_shot(jump_shot):
                     agent.controller.jump = True
 
                     agent.last_flip_time = agent.time
+                    self.post_contact_lock_until = agent.time + 0.60
                     self.dodging = True
                     self.counter = 4
 
@@ -6154,9 +6155,19 @@ class side_shot(jump_shot):
                     self.counter = 5
 
             elif self.counter == 4:
-                # The dodge has started. Let the existing recovery/timeout
-                # logic take over instead of repeatedly initiating a new dodge.
+                # The dodge impulse is committed. Keep steering neutral until
+                # its animation has finished so the next strategy decision
+                # cannot turn this side/front flip into a retreating flip.
                 self.dodging = True
+                agent.controller.jump = False
+                agent.controller.pitch = 0.0
+                agent.controller.yaw = 0.0
+                agent.controller.roll = 0.0
+                agent.controller.steer = 0.0
+                agent.controller.boost = False
+                agent.controller.throttle = 1.0
+                if agent.time >= self.post_contact_lock_until:
+                    self.counter = 5
 
             elif self.counter == 5:
                 print(
