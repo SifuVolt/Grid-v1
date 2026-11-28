@@ -1360,6 +1360,68 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             horizon=cap_
         )
 
+    # AerialJumpShot priority scan: independently test single-jump reachability
+    # over the first three seconds before double-jump/aerial selection.
+    priority_jump_shot = None
+    if can_jump and (
+        agent.boost_amount == "unlimited" or agent.me.boost > 0
+    ):
+        for priority_slice in slices:
+            priority_time = priority_slice.game_seconds
+            priority_remaining = priority_time - agent.time - (1 / 120)
+            if priority_remaining <= 0:
+                continue
+            if priority_remaining > 3.0:
+                break
+            priority_location = (
+                priority_slice.physics.location.x,
+                priority_slice.physics.location.y,
+                priority_slice.physics.location.z
+            )
+            if abs(priority_location[1]) > 5212.75:
+                break
+            priority_ball_info = (
+                priority_location,
+                (
+                    priority_slice.physics.velocity.x,
+                    priority_slice.physics.velocity.y,
+                    priority_slice.physics.velocity.z
+                )
+            )
+            priority_result = _parse_shot_with_boost_budget(
+                agent,
+                virxrlcu.parse_slice_for_shot_with_target,
+                (False, True, False, False),
+                priority_remaining,
+                game_info,
+                gravity,
+                priority_ball_info,
+                me,
+                targets
+            )
+            if (
+                priority_result.get("found") == 1
+                and int(priority_result.get("shot_type", -1)) == 1
+                and useful_non_aerial_shot(
+                    agent,
+                    priority_location,
+                    priority_slice.physics.velocity,
+                    priority_result,
+                    priority_time
+                )
+            ):
+                priority_jump_shot = {
+                    "shot": priority_result,
+                    "time": priority_time,
+                    "location": Vector(*priority_location)
+                }
+                print(
+                    f"[AERIAL JUMP SHOT PRIORITY] targeted "
+                    f"T={priority_remaining:.2f}",
+                    flush=True
+                )
+                break
+
     # Compare the whole available prediction horizon. The score still values
     # urgency, but it can now select a substantially cleaner later intercept.
     for ball_slice in slices:
@@ -1652,6 +1714,20 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                         f"height={grid_ball_location.z:.0f}",
                         flush=True
                     )
+    # A reachable single-jump shot within three seconds outranks double
+    # jumps and aerials, while preserving a valid ground-shot choice.
+    if (
+        priority_jump_shot is not None
+        and (
+            best_shot is None
+            or int(best_shot.get("shot_type", -1)) in (2, 3)
+        )
+    ):
+        best_shot = priority_jump_shot["shot"]
+        best_intercept_time = priority_jump_shot["time"]
+        best_ball_location = priority_jump_shot["location"]
+        best_ball_z = best_ball_location.z
+
     # The loop has ended; construct the best nearby feasible shot.
     if best_shot is None:
         return None
@@ -1869,6 +1945,66 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
             targets=None,
             horizon=cap_
         )
+    # Untargeted single-jump priority scan for the first three seconds.
+    priority_jump_shot = None
+    if can_jump and (
+        agent.boost_amount == "unlimited" or agent.me.boost > 0
+    ):
+        for priority_slice in slices:
+            priority_time = priority_slice.game_seconds
+            priority_remaining = priority_time - agent.time - (1 / 120)
+            if priority_remaining <= 0:
+                continue
+            if priority_remaining > 3.0:
+                break
+            priority_location = (
+                priority_slice.physics.location.x,
+                priority_slice.physics.location.y,
+                priority_slice.physics.location.z
+            )
+            if abs(priority_location[1]) > 5212.75:
+                break
+            priority_ball_info = (
+                priority_location,
+                (
+                    priority_slice.physics.velocity.x,
+                    priority_slice.physics.velocity.y,
+                    priority_slice.physics.velocity.z
+                )
+            )
+            priority_result = _parse_shot_with_boost_budget(
+                agent,
+                virxrlcu.parse_slice_for_shot,
+                (False, True, False, False),
+                priority_remaining,
+                game_info,
+                gravity,
+                priority_ball_info,
+                me
+            )
+            if (
+                priority_result.get("found") == 1
+                and int(priority_result.get("shot_type", -1)) == 1
+                and useful_non_aerial_shot(
+                    agent,
+                    priority_location,
+                    priority_slice.physics.velocity,
+                    priority_result,
+                    priority_time
+                )
+            ):
+                priority_jump_shot = {
+                    "shot": priority_result,
+                    "time": priority_time,
+                    "location": Vector(*priority_location)
+                }
+                print(
+                    f"[AERIAL JUMP SHOT PRIORITY] untargeted "
+                    f"T={priority_remaining:.2f}",
+                    flush=True
+                )
+                break
+
     # Search all sampled slices rather than locking onto the first valid touch.
     for ball_slice in slices:
         intercept_time = ball_slice.game_seconds
@@ -2124,6 +2260,20 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
                         f"height={grid_ball_location.z:.0f}",
                         flush=True
                     )
+    # Keep valid ground shots ahead, but let a reachable AerialJumpShot
+    # replace the selected double-jump or aerial candidate.
+    if (
+        priority_jump_shot is not None
+        and (
+            best_shot is None
+            or int(best_shot.get("shot_type", -1)) in (2, 3)
+        )
+    ):
+        best_shot = priority_jump_shot["shot"]
+        best_intercept_time = priority_jump_shot["time"]
+        best_ball_location = priority_jump_shot["location"]
+        best_ball_z = best_ball_location.z
+
     if best_shot is None:
         return None
     time_to_intercept = best_intercept_time - agent.time
