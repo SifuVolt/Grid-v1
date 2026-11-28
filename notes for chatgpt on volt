@@ -1028,3 +1028,11 @@ This file is the project handoff and change checklist. Read it before every code
 - The prior custom Volt jump-shot side-mode/contact-face/shot-patience logic was removed from this routine. Ground shot, double jump, aerial, wall approach selection, and teamplay decision paths were not intentionally changed.
 - Commits: `70b11c16e2de677f76e63a9afb8f89959ed9a713` (replacement), `b7b5ed9604d291fdc375835878e11810a3b1c410` (live-gravity and axis compatibility), `c7e99f3d5dcfdc395d72edbe986e0dfa7c0d2ff8` (lock approach vector/state), and `a4f3621e12b89067a1a762b37d036612a9cf6268` (scope lock to jump_shot only), and `01452c88a9c02e0857d159198b59d678ba95de5c` (match King's jump-angle timing equation).
 - Static source inspection only. No Python compile or in-game test has been run. The first test should specifically check ground jump-shot approach timing, wall-adjacent jump shots, contact rate, and whether the dodge fires only after the hitbox reaches the ball.
+
+
+## 18. Missing side_shot routine import (2026-11-29)
+
+- The live `routines of volt` file does not define a `side_shot` class, while `tools for volt` had imported and selected `side_shot`. This caused `ImportError: cannot import name 'side_shot'` at startup.
+- Fixed the shot planner to stop importing/calling the nonexistent routine. Where its old side-shot setup heuristic triggers, it now falls back to the available King-derived `jump_shot` routine. This is a startup/runtime compatibility fallback, not a true side-shot implementation; restore a dedicated side-shot class only when one is implemented in `routines of volt`.
+- Commits: `d9bc6e463fdd86ef7b3b5f042ac6963f6457f9af` (remove missing import/use jump-shot fallback), `7ffce810c8ee74ccbc56470e6c91171fb8312d4b` (clarify diagnostics).
+- Not compiled or tested in-game; user must pull the branch before testing.
