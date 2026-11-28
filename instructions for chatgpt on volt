@@ -252,7 +252,7 @@ class Bot(VirxERLU):
         active_shot_names = {
             "ground_shot",
             "ground_carry_cut",
-            "jump_shot",
+            "jump_shot", "AerialJumpShot",
             "elevated_shot",
             "double_jump",
             "Aerial",
@@ -1555,7 +1555,7 @@ class Bot(VirxERLU):
         shot_names = {
             "ground_shot",
             "ground_carry_cut",
-            "jump_shot",
+            "jump_shot", "AerialJumpShot",
             "double_jump",
             "Aerial",
             "Redirect",
@@ -1977,7 +1977,7 @@ class Bot(VirxERLU):
                 ordinary_shots = {
                     "ground_shot",
                     "ground_carry_cut",
-                    "jump_shot",
+                    "jump_shot", "AerialJumpShot",
                     "double_jump",
                     "short_shot"
                 }
@@ -2230,7 +2230,7 @@ class Bot(VirxERLU):
                 "Redirect",
                 "ground_shot",
                 "ground_carry_cut",
-                "jump_shot",
+                "jump_shot", "AerialJumpShot",
                 "elevated_shot",
                 "double_jump",
                 "side_shot",
@@ -2260,7 +2260,7 @@ class Bot(VirxERLU):
             active_routine = self.stack[0]
             committed_active_shot = active_routine.__class__.__name__ in {
                 "ground_shot",
-                "ground_carry_cut", "jump_shot", "elevated_shot", "double_jump",
+                "ground_carry_cut", "jump_shot", "AerialJumpShot", "elevated_shot", "double_jump",
                 "Aerial", "Redirect", "side_shot"
             }
 
@@ -2296,7 +2296,7 @@ class Bot(VirxERLU):
         ordinary_ground_shots = {
             "ground_shot",
             "ground_carry_cut",
-            "jump_shot",
+            "jump_shot", "AerialJumpShot",
             "double_jump",
             "Aerial",
             "Redirect"
@@ -2347,7 +2347,7 @@ class Bot(VirxERLU):
 
                     ordinary_shots = {
                         "double_jump",
-                        "jump_shot",
+                        "jump_shot", "AerialJumpShot",
                         "elevated_shot",
                         "ground_shot",
                         "ground_carry_cut",
@@ -2392,7 +2392,7 @@ class Bot(VirxERLU):
                             ordinary_shots = {
                                 "ground_shot",
                                 "ground_carry_cut",
-                                "jump_shot",
+                                "jump_shot", "AerialJumpShot",
                                 "elevated_shot",
                                 "double_jump",
                                 "side_shot",
@@ -2533,7 +2533,7 @@ class Bot(VirxERLU):
                         ordinary_shots = {
                             "ground_shot",
                             "ground_carry_cut",
-                            "jump_shot",
+                            "jump_shot", "AerialJumpShot",
                             "elevated_shot",
                             "double_jump",
                             "side_shot",
@@ -2580,7 +2580,7 @@ class Bot(VirxERLU):
             # the shot action and fall through into ordinary driving/defence.
             active_shot_names = {
                 "ground_shot",
-                "ground_carry_cut", "jump_shot", "elevated_shot",
+                "ground_carry_cut", "jump_shot", "AerialJumpShot", "elevated_shot",
                 "double_jump", "Aerial", "Redirect", "side_shot"
             }
             if (
