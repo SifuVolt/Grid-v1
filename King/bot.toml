@@ -1,0 +1,13 @@
+[settings]
+agent_id = "SifuVolt/King"
+name = "king."
+loadout_file = "loadout.toml"
+root_dir = ""
+run_command = ".\\Bot\\bin\\Release\\net8.0\\Bot.exe"
+
+[details]
+description = "King — RedBot with team play, ported to RLBot v5"
+fun_fact = "A v5 port of CodeRed's King bot."
+developer = "SifuVolt"
+language = "C#"
+tags = ["1v1", "teamplay"]
