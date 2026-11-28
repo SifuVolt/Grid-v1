@@ -1754,6 +1754,60 @@ class Aerial:
             agent.shooting = False
             return False
 
+        if self.single_jump_shot:
+            # Face the predicted ball/contact lane before takeoff. Do not
+            # launch merely because the car is slow; the corner approach
+            # needs a deliberate heading first.
+            drive_target = self.target.flatten()
+            local_target = car.local_location(drive_target)
+            heading_error = abs(math.atan2(
+                local_target.y, local_target.x
+            ))
+            drive_time = max(
+                dt, time_remaining - turn_candidate["turn_time"] - 0.20
+            )
+            distance = car.location.flatten().dist(drive_target)
+            required_speed = cap(
+                distance / drive_time, 650.0, 1450.0
+            )
+            if heading_error > 1.20:
+                required_speed = min(required_speed, 850.0)
+            elif heading_error > 0.65:
+                required_speed = min(required_speed, 1100.0)
+
+            defaultDrive(agent, required_speed, local_target)
+            agent.controller.boost = False
+
+            launch_aligned = (
+                heading_error <= 0.22
+                or (time_remaining <= 0.30 and heading_error <= 0.45)
+            )
+            if launch_aligned:
+                aligned_candidate = self._launch_candidate(
+                    agent, time_remaining, turn_first=False
+                )
+                if aligned_candidate is not None:
+                    self._commit_aerial_launch(agent, aligned_candidate)
+                    print(
+                        f"[AERIAL JUMP SHOT] launch aligned "
+                        f"heading={heading_error:.2f} "
+                        f"speed={car.velocity.magnitude():.0f} "
+                        f"T={time_remaining:.2f}",
+                        flush=True
+                    )
+                    return True
+
+            if agent.time - self.aerial_launch_debug_time >= 0.4:
+                self.aerial_launch_debug_time = agent.time
+                print(
+                    f"[AERIAL JUMP SHOT TURN] heading={heading_error:.2f} "
+                    f"steer={agent.controller.steer:.2f} "
+                    f"speed={car.velocity.magnitude():.0f}/"
+                    f"{required_speed:.0f} T={time_remaining:.2f}",
+                    flush=True
+                )
+            return False
+
         drive_target = self.target.flatten()
         local_target = car.local_location(drive_target)
         drive_time = max(
@@ -2370,9 +2424,10 @@ class Aerial:
             ) == 4:
                 defaultPD(agent, local_aim, upside_down=True)
             else:
-                if self.jumping:
-                    # During the jump sequence, keep the car's roof oriented
-                    # to world-up while the nose tracks the contact offset.
+                if self.single_jump_shot or self.jumping:
+                    # Keep the roof near world-up during this compact
+                    # single-jump flight. The contact direction supplies the
+                    # nose/yaw correction; a small bank helps the A/D turn.
                     local_up = agent.me.local(Vector(z=1))
                 else:
                     # Once launched, roll relative to the ball just as
@@ -2383,9 +2438,6 @@ class Aerial:
                     local_up = agent.me.local(ball_direction)
                 defaultPD(agent, local_aim, up=local_up)
                 if fast_pitchback:
-                    # Positive pitch is Volt's nose-up / tilt-back input.
-                    # defaultPD still supplies the lateral yaw and roll
-                    # corrections needed to stay on the predicted contact line.
                     agent.controller.pitch = 1
                     if not self.fast_pitchback_logged:
                         self.fast_pitchback_logged = True
@@ -2394,6 +2446,19 @@ class Aerial:
                             f"vertical_error={delta_x.z:.0f} "
                             f"boost={agent.me.boost:.0f}",
                             flush=True
+                        )
+                if self.single_jump_shot:
+                    # Light A/D steering with a restrained E-style bank.
+                    agent.controller.yaw = cap(
+                        agent.controller.yaw, -0.65, 0.65
+                    )
+                    bank = cap(-local_aim.y * 0.12, -0.18, 0.18)
+                    agent.controller.roll = cap(
+                        agent.controller.roll + bank, -0.35, 0.35
+                    )
+                    if not fast_pitchback:
+                        agent.controller.pitch = cap(
+                            agent.controller.pitch, -0.85, 0.85
                         )
 
         if self.dodging:
@@ -2435,10 +2500,27 @@ class Aerial:
         # when the nose is aligned with the full 3D contact offset and the
         # required forward acceleration is high enough to justify it.
         if self.single_jump_shot:
-            # This shot is deliberately a continuous-boost, single-jump
-            # aerial. Do not feather boost based on forward projection.
-            agent.controller.boost = (
-                T > 0 and agent.me.boost > 0 and not self.dodging
+            # Boost through the pitch-back launch, then only while the nose
+            # is reasonably aligned and projected closing speed is below the
+            # speed actually needed for this intercept.
+            contact_direction = delta_x.normalize()
+            forward_alignment = agent.me.forward.dot(contact_direction)
+            closing_speed = agent.me.velocity.dot(contact_direction)
+            required_speed = min(
+                max_speed,
+                delta_x.magnitude() / max(T, 0.12)
+            )
+            boost_needed = closing_speed < min(
+                2100.0, required_speed + 160.0
+            )
+            agent.controller.boost = bool(
+                T > 0.12
+                and agent.me.boost > 0
+                and not self.dodging
+                and (
+                    fast_pitchback
+                    or (forward_alignment > 0.72 and boost_needed)
+                )
             )
             agent.controller.throttle = 1
         elif fast_pitchback and agent.me.boost > 0:
@@ -2513,8 +2595,9 @@ class AerialJumpShot(Aerial):
             fast_aerial=False,
             single_jump_shot=True
         )
-        # Do not spend the short intercept window on a ground-turn setup.
-        self.immediate_launch = True
+        # The single-jump shot must turn toward its ball/contact lane before
+        # takeoff; slow speed alone is not a reason to skip that alignment.
+        self.immediate_launch = False
 
 
 class half_flip:
@@ -3612,6 +3695,10 @@ class fast_intercept_finder:
                 location = physics.location
                 if abs(location.y) > 5212.75:
                     break
+                if not (120.0 < location.z <= 850.0):
+                    continue
+                if agent.ball.location.z <= 120.0:
+                    continue
                 ball_info = (
                     (location.x, location.y, location.z),
                     (
