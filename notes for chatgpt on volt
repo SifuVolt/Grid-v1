@@ -980,3 +980,13 @@ This file is the project handoff and change checklist. Read it before every code
 - This selection applies only to single-jump shot candidates (`shot_type == 1`) with `T <= 3.0` in the goal-targeted finder, untargeted finder, and shallow-zone `fast_intercept_finder`. Ground shots and true Aerial (`shot_type == 3`) candidates retain their existing routines.
 - The routine is included in the agent's ordinary-shot and committed-shot tracking sets so it can refresh/lock consistently with other shots.
 - No compile or in-game test has been run. Confirm the active RLBot launcher: the checked-in root config currently loads Noob Black through `src/bot.toml`, not this separate Volt agent.
+
+
+## AerialJumpShot priority over aerials and double-jumps (2026-11-28)
+
+- Both `find_shot` and `find_any_shot` now run an independent single-jump-only C reachability scan over the first 3.0 seconds of prediction slices.
+- If the single-jump parser confirms a reachable `shot_type == 1` candidate and `useful_non_aerial_shot` accepts it, that candidate replaces a selected double-jump (`shot_type == 2`) or aerial (`shot_type == 3`) candidate, regardless of the normal candidate score.
+- A valid ground shot remains ahead; this priority change is specifically over double-jumps and aerials. Candidates outside 3.0 seconds retain the prior selection/scoring behaviour.
+- The shallow-zone `fast_intercept_finder` now performs a single-jump-only scan through the same 3-second window before searching normal/fast aerial candidates.
+- The parser still determines reachability; no extra jump height or reachability is fabricated. Requires boost (or unlimited boost) because the aerial jump-shot controller continuously boosts.
+- Not compiled or tested in Rocket League yet.
