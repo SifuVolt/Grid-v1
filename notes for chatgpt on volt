@@ -953,9 +953,9 @@ This file is the project handoff and change checklist. Read it before every code
 - This deliberately spends the remaining boost during the follow-up; it does not reserve boost once the rebound chase is committed. The ordinary Aerial controller and its contact/aim calculations remain responsible for steering to the second touch.
 - This is a first implementation and has not been compiled or tested in Rocket League. Confirm the ball-contact detection, backboard/corner classification, and boost continuity in-game before tuning.
 
-## 21. Jump-shot post-contact flip commitment (2026-11-28)
+## 22. Jump-shot dodge follow-through commitment (2026-11-28)
 
-- When jump_shot (including its side_shot subclass) triggers its forward dodge, it starts a 0.60-second post-contact lock.
+- When jump_shot (including its side_shot subclass) commits to its dodge at the close-contact window, it starts a 0.60-second follow-through lock. This is a dodge-commit signal, not a separately verified ball-velocity contact detector.
 - During that lock, the routine keeps the controller neutral for pitch/yaw/roll/steer, allowing the already-triggered dodge impulse to finish without a later steering decision redirecting the car.
 - The agent decision path must not cancel this follow-through because a refreshed opponent-distance check rejects the shot, a teammate opportunity asks it to yield, or a defensive aerial is suggested. Normal opponent-distance and teammate-yield decisions still apply before the dodge is committed.
 - Once the follow-through expires, the existing recovery routine resumes. No changes are made to pre-contact jump-shot launch timing, shot vector, or dodge direction.
