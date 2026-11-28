@@ -4890,49 +4890,15 @@ class jump_shot:
         self.wall_shot_active = wall_normal is not None
         self.wall_shot_normal = wall_normal
 
-        # Port ground_shot's contact geometry: start from its best-shot
-        # standoff and selected surface normal, then compensate for Volt's
-        # actual hitbox centre offset so the same physical face reaches the
-        # 92.75-unit ball surface.
-        hitbox = agent.me.hitbox
-        contact_standoff = 92.75 + float(
-            getattr(hitbox, "length", 118.01)
-        ) * 0.5
-        hitbox_target = self._contact_aim._party_cannon_hitbox_target(
+        # Preserve the original hitbox-aware contact calculation. This chooses
+        # the car-centre position from the actual rotated hitbox offset and
+        # the intended ball-surface contact point; ground_shot's staging
+        # approach is applied separately below and must not replace this.
+        self.offset_target = self._contact_aim._party_cannon_hitbox_target(
             agent, self.ball_location, self.shot_vector
         )
-        nominal_hitbox_target = (
-            self.ball_location - self.shot_vector * contact_standoff
-        )
-        hitbox_offset_correction = hitbox_target - nominal_hitbox_target
-
-        ground_contact_target = (
-            self.ball_location
-            - self.shot_vector * agent.best_shot_value
-        )
-        self.offset_target = (
-            ground_contact_target + hitbox_offset_correction
-        )
-
-        contact_label = getattr(self, "contact_label", None)
-        refreshed_contact = _contact_approach_from_label(
-            self.ball_location,
-            self.shot_vector,
-            contact_label,
-            agent.best_shot_value
-        )
-        if refreshed_contact is not None:
-            self.offset_target = (
-                refreshed_contact + hitbox_offset_correction
-            )
-
         self.contact_approach_target = self.offset_target.copy()
-        self.contact_normal = (
-            self.offset_target - self.ball_location
-        ).normalize()
-        self.contact_point = (
-            self.ball_location + self.contact_normal * 92.75
-        )
+        self.contact_point = self.ball_location - self.shot_vector * 92.75
 
         local_ball = agent.me.local_location(self.ball_location).flatten()
         local_target = agent.me.local_location(self.offset_target).flatten()
