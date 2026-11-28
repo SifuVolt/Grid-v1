@@ -1380,6 +1380,12 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             )
             if abs(priority_location[1]) > 5212.75:
                 break
+            if _enemy_backwall_rebound(
+                agent,
+                priority_location,
+                priority_slice.physics.velocity
+            ):
+                continue
             priority_ball_info = (
                 priority_location,
                 (
@@ -1964,6 +1970,12 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
             )
             if abs(priority_location[1]) > 5212.75:
                 break
+            if _enemy_backwall_rebound(
+                agent,
+                priority_location,
+                priority_slice.physics.velocity
+            ):
+                continue
             priority_ball_info = (
                 priority_location,
                 (
