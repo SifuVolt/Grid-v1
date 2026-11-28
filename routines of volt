@@ -710,9 +710,6 @@ class double_jump:
         self.prev_jump = False
         self.counter = 0
         self.should_chip = False
-        self.last_live_ball_velocity = None
-        self.last_live_ball_location = None
-        self.followup_contact_seen = False
 
     def update(self, shot):
         self.base_intercept_time = shot.intercept_time
@@ -843,49 +840,6 @@ class double_jump:
 
         offset_target = ball_location - shot_vector * agent.best_shot_value
         return agent.me.local_location(offset_target).x < 0
-
-    def _followup_rebound_route(self, agent, ball):
-        """Return backboard/corner only when the planned shot ray reaches it."""
-        direction = self.shot_vector.flatten().normalize()
-        if direction.magnitude() < 0.001:
-            return None
-
-        team_side = side(agent.team)
-        direction_depth = direction.y * team_side
-        ball_depth = ball.y * team_side
-
-        # The ball must be sent toward the opponent's end of the arena.
-        if direction_depth >= -0.20:
-            return None
-
-        backwall_depth = -6000.0
-        backwall_distance = (
-            (backwall_depth - ball_depth) / direction_depth
-        )
-        if backwall_distance <= 0:
-            return None
-
-        backwall_x = ball.x + direction.x * backwall_distance
-
-        sidewall_distance = float("inf")
-        if direction.x > 0.001:
-            sidewall_distance = (4096.0 - ball.x) / direction.x
-        elif direction.x < -0.001:
-            sidewall_distance = (-4096.0 - ball.x) / direction.x
-
-        if (
-            sidewall_distance > 0
-            and sidewall_distance < backwall_distance
-        ):
-            sidewall_depth = (
-                ball_depth + direction_depth * sidewall_distance
-            )
-            if sidewall_depth < -1400.0:
-                return "corner"
-
-        if abs(backwall_x) > 3500.0:
-            return "corner"
-        return "backboard"
 
     def _finish(self, agent):
         agent.pop()
@@ -1066,17 +1020,6 @@ class double_jump:
                 self.jump_frames = 0
                 self.second_jump_sent = False
                 self.prev_jump = False
-                self.last_live_ball_velocity = Vector(
-                    agent.ball.velocity.x,
-                    agent.ball.velocity.y,
-                    agent.ball.velocity.z
-                )
-                self.last_live_ball_location = Vector(
-                    agent.ball.location.x,
-                    agent.ball.location.y,
-                    agent.ball.location.z
-                )
-                self.followup_contact_seen = False
 
             elif agent.me.airborne:
                 agent.push(recovery(final_target if Tj > 0 else None))
@@ -1185,72 +1128,6 @@ class double_jump:
                     1
                 )
 
-        # A double-jump touch aimed into the opponent's backboard/corner is
-        # a setup for a second aerial touch, not the end of the attack.
-        live_ball_velocity = Vector(
-            agent.ball.velocity.x,
-            agent.ball.velocity.y,
-            agent.ball.velocity.z
-        )
-        live_ball_location = Vector(
-            agent.ball.location.x,
-            agent.ball.location.y,
-            agent.ball.location.z
-        )
-        if (
-            self.second_jump_sent
-            and bool(getattr(agent.me, "doublejumped", False))
-            and not self.followup_contact_seen
-            and self.last_live_ball_velocity is not None
-        ):
-            velocity_change = (
-                live_ball_velocity - self.last_live_ball_velocity
-            ).magnitude()
-            car_ball_distance = agent.me.location.dist(live_ball_location)
-            if velocity_change > 350 and car_ball_distance < 600:
-                self.followup_contact_seen = True
-                followup_route = self._followup_rebound_route(
-                    agent, live_ball_location
-                )
-                enough_boost = (
-                    agent.boost_amount == "unlimited"
-                    or agent.me.boost >= 12
-                )
-                if followup_route is not None and enough_boost:
-                    followup = fast_intercept_finder().find(
-                        agent,
-                        earliest_time=agent.time + 0.04,
-                        cap_=3.0
-                    )
-                    if followup is not None:
-                        followup.followup_boost_lock = True
-                        followup.followup_route = followup_route
-                        agent.pop()
-                        agent.shooting = False
-                        agent.push(followup)
-                        print(
-                            f"[DOUBLE JUMP FOLLOWUP] route={followup_route} "
-                            f"velocity_change={velocity_change:.0f} "
-                            f"boost={agent.me.boost:.1f} "
-                            f"aerial_T={followup.intercept_time - agent.time:.2f}",
-                            flush=True
-                        )
-                        return
-                    print(
-                        f"[DOUBLE JUMP FOLLOWUP] no reachable aerial "
-                        f"route={followup_route} boost={agent.me.boost:.1f}",
-                        flush=True
-                    )
-                elif followup_route is not None:
-                    print(
-                        f"[DOUBLE JUMP FOLLOWUP] skipped low boost "
-                        f"route={followup_route} boost={agent.me.boost:.1f}",
-                        flush=True
-                    )
-
-        self.last_live_ball_velocity = live_ball_velocity
-        self.last_live_ball_location = live_ball_location
-
         # End the routine after the contact window has passed.
         if T <= -0.4 or (
             not agent.me.airborne and self.jump_frames >= 30
@@ -1286,9 +1163,6 @@ class Aerial:
         self.aerial_committed = False
         self.immediate_launch = None
         self.aerial_launch_debug_time = -1.0
-        self.followup_boost_lock = False
-        self.followup_route = None
-        self.followup_boost_debug_time = -1.0
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -2561,29 +2435,6 @@ class Aerial:
         else:
             agent.controller.boost = False
             agent.controller.throttle = 0
-
-        # Keep thrust through the rebound chase. The ordinary contact
-        # controller may briefly drop boost while it re-aligns; that would
-        # throw away the momentum created by the double-jump launch.
-        if (
-            self.followup_boost_lock
-            and T > 0
-            and agent.me.boost > 0
-            and not self.dodging
-        ):
-            agent.controller.boost = True
-            agent.controller.throttle = 1
-            if (
-                self.followup_boost_debug_time < 0
-                or agent.time - self.followup_boost_debug_time >= 0.4
-            ):
-                self.followup_boost_debug_time = agent.time
-                print(
-                    f"[AERIAL FOLLOWUP BOOST] route={self.followup_route} "
-                    f"boost={agent.me.boost:.1f} T={T:.2f} "
-                    f"speed={agent.me.velocity.magnitude():.0f}",
-                    flush=True
-                )
 
 
         if T <= -0.4 or (not self.jumping and T > 1.5 and not virxrlcu.aerial_shot_is_viable(T, agent.boost_accel, tuple(agent.gravity), agent.me.get_raw(agent), tuple(self.target))):
@@ -4730,10 +4581,6 @@ class jump_shot:
         self.wall_shot_normal = None
         self.contact_face_label = None
         self._last_air_prediction_debug = -1.0
-        # Once the forward dodge is triggered, keep the jump-shot action
-        # alive long enough for the flip animation to finish. Strategy-level
-        # opponent checks must not replace its direction during this window.
-        self.post_contact_lock_until = -1.0
 
     def _predict_air_orientation(self, agent, horizon, controls):
         """Integrate Rocket League's measured aerial-control model at 120 Hz."""
@@ -4819,44 +4666,18 @@ class jump_shot:
 
         if hold_s:
             agent.controller.pitch = 1
+            yaw_command = agent.controller.yaw
+            if abs(yaw_command) > 0.08:
+                agent.controller.roll = -0.20 * sign(yaw_command)
+            else:
+                agent.controller.roll = 0
 
-        # Jump shots use yaw (A/D) and pitch only. Never add air-roll
-        # corrections; they rotate the hitbox away from the selected face.
-        agent.controller.roll = 0.0
         controls = (
-            0.0,
+            agent.controller.roll,
             agent.controller.pitch,
             agent.controller.yaw
         )
         return local_shot_direction, hold_s, controls
-
-    def _set_jump_shot_aerial_orientation(self, agent):
-        """
-        Aerial-style 3D nose tracking for elevated single-jump contacts.
-
-        Aim the front hitbox at the selected ball-surface contact point while
-        keeping world-up as the roll reference. Roll is disabled deliberately;
-        yaw (A/D) and pitch do the full alignment.
-        """
-        contact_point = getattr(self, "contact_point", None)
-        if contact_point is None:
-            contact_point = (
-                self.ball_location - self.shot_vector * 92.75
-            )
-
-        contact_direction = contact_point - agent.me.location
-        if contact_direction.magnitude() < 1.0:
-            contact_direction = self.ball_location - agent.me.location
-
-        local_contact_direction = agent.me.local(contact_direction)
-        local_world_up = agent.me.local(Vector(z=1))
-        defaultPD(
-            agent,
-            local_contact_direction,
-            up=local_world_up
-        )
-        agent.controller.roll = 0.0
-        return local_contact_direction
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -5249,7 +5070,6 @@ class jump_shot:
                 self.dodge_direction = dodge_direction
                 self.counter = 4
                 agent.last_flip_time = agent.time
-                self.post_contact_lock_until = agent.time + 0.60
                 print(
                     f"[RUST JUMP SHOT] forward dodge "
                     f"elapsed={jump_elapsed:.3f} "
@@ -5279,18 +5099,6 @@ class jump_shot:
 
         elif self.counter == 4:
             self.dodging = True
-            # The dodge impulse is already committed. Keep the controller
-            # neutral so a later steering/retreat action cannot turn it into
-            # a backflip or redirect the ongoing flip.
-            agent.controller.jump = False
-            agent.controller.pitch = 0.0
-            agent.controller.yaw = 0.0
-            agent.controller.roll = 0.0
-            agent.controller.steer = 0.0
-            agent.controller.boost = False
-            agent.controller.throttle = 1.0
-            if agent.time >= self.post_contact_lock_until:
-                self.counter = 5
         elif self.counter == 5:
             agent.pop()
             agent.shooting = False
@@ -5334,35 +5142,7 @@ class side_shot(jump_shot):
         self.side_mode = True
         self.side_lateral_distance = None
         self.approach_side = approach_side
-        self.side_setup_target = None
-        self.side_forward_world = None
-        self.side_forward_sign = None
-        self.side_flip_y = 1
-        self.side_last_debug_time = -1.0
 
-
-    def update(self, shot):
-        super().update(shot)
-        previous_normal = getattr(self, "contact_normal", None)
-        self.contact_label = getattr(
-            shot, "contact_label", getattr(self, "contact_label", None)
-        )
-        self.contact_normal = getattr(
-            shot, "contact_normal", getattr(self, "contact_normal", None)
-        )
-        self.contact_point = getattr(
-            shot, "contact_point", getattr(self, "contact_point", None)
-        )
-        self.contact_approach_target = getattr(
-            shot, "contact_approach_target",
-            getattr(self, "contact_approach_target", None)
-        )
-        if (
-            previous_normal is not None
-            and self.contact_normal is not None
-            and previous_normal.dot(self.contact_normal) < 0.95
-        ):
-            self.side_forward_sign = None
 
     def run(self, agent: VirxERLU):
         print(
@@ -5509,84 +5289,39 @@ class side_shot(jump_shot):
             )
 
         if self.side_mode:
-            # Plan a side-face hit. The selected contact normal identifies
-            # which side of the ball the car can reach; the car's forward axis
-            # is then made perpendicular to the car-to-ball approach vector.
-            normal = getattr(self, "contact_normal", None)
-            if normal is None or normal.flatten().magnitude() < 0.001:
-                left_of_shot = Vector(
-                    -self.shot_vector.y, self.shot_vector.x, 0
-                ).normalize()
-                side_sign = 1 if self.approach_side == "right" else -1
-                normal = -left_of_shot * side_sign
-            else:
-                normal = normal.copy().flatten().normalize()
-
-            approach_direction = -normal
-            perpendicular = Vector(
-                -approach_direction.y, approach_direction.x, 0
-            ).normalize()
-
-            if self.side_forward_sign is None:
-                self.side_forward_sign = (
-                    1 if agent.me.forward.flatten().dot(perpendicular) >=
-                    agent.me.forward.flatten().dot(-perpendicular) else -1
-                )
-            self.side_forward_world = perpendicular * self.side_forward_sign
-            side_right = Vector(
-                -self.side_forward_world.y,
-                self.side_forward_world.x,
+            # Rebuild the lateral setup from the latest predicted intercept
+            # every frame. The car approaches from the side opposite the goal.
+            left_of_shot = Vector(
+                -self.shot_vector.y,
+                self.shot_vector.x,
                 0
             ).normalize()
-            self.side_flip_y = (
-                1 if side_right.dot(approach_direction) >= 0 else -1
+            intercept_length = agent.me.location.flat_dist(
+                self.ball_location
             )
-
-            hitbox = agent.me.hitbox
-            half_width = float(getattr(hitbox, "width", 84.2)) * 0.5
-            local_offset = getattr(agent.me, "hitbox_offset", None)
-            if local_offset is None:
-                local_offset = getattr(hitbox, "offset", None)
-            world_offset = Vector()
-            if local_offset is not None:
-                world_offset = (
-                    self.side_forward_world * float(
-                        getattr(local_offset, "x", 0.0)
-                    )
-                    + side_right * float(getattr(local_offset, "y", 0.0))
-                    + Vector(z=float(getattr(local_offset, "z", 0.0)))
-                )
-
-            # Car-centre contact target and farther staging target are
-            # separate: the first is the actual side-hit geometry; the
-            # second gives the car runway to turn perpendicular before launch.
+            if self.side_lateral_distance is None:
+                self.side_lateral_distance = intercept_length * 0.5
+            lateral_distance = self.side_lateral_distance
+            side_sign = 1 if self.approach_side == "right" else -1
             self.offset_target = (
                 self.ball_location
-                + normal * (92.75 + half_width)
-                - world_offset
+                - left_of_shot * lateral_distance * side_sign
             )
-            self.contact_point = self.ball_location + normal * 92.75
-            self.side_setup_target = (
-                self.offset_target + normal * 420.0
+            self.contact_point = (
+                self.ball_location
+                - left_of_shot * 92.75 * side_sign
             )
-            self.contact_approach_target = self.side_setup_target.copy()
-
+            self.contact_approach_target = self.offset_target.copy()
             if (
-                self.side_last_debug_time < 0
-                or agent.time - self.side_last_debug_time >= 0.35
+                self.last_side_debug_time < 0
+                or agent.time - self.last_side_debug_time >= 0.35
             ):
-                self.side_last_debug_time = agent.time
+                self.last_side_debug_time = agent.time
                 print(
-                    f"[SIDE FLIP PLAN] label={self.contact_label} "
-                    f"approach=({approach_direction.x:.2f},"
-                    f"{approach_direction.y:.2f}) "
-                    f"forward=({self.side_forward_world.x:.2f},"
-                    f"{self.side_forward_world.y:.2f}) "
-                    f"flip_y={self.side_flip_y:+d} "
-                    f"contact=({self.offset_target.x:.0f},"
-                    f"{self.offset_target.y:.0f}) "
-                    f"setup=({self.side_setup_target.x:.0f},"
-                    f"{self.side_setup_target.y:.0f})",
+                    f"[SIDE SHOT SETUP] intercept_distance={intercept_length:.0f} "
+                    f"lateral_distance={lateral_distance:.0f} "
+                    f"ball=({self.ball_location.x:.0f},{self.ball_location.y:.0f}) "
+                    f"setup=({self.offset_target.x:.0f},{self.offset_target.y:.0f})",
                     flush=True
                 )
 
@@ -5802,11 +5537,7 @@ class side_shot(jump_shot):
 
         car_to_ball = self.ball_location - agent.me.location
         final_target = self.offset_target.copy().flatten()
-        drive_target = (
-            self.side_setup_target.copy().flatten()
-            if self.side_mode and self.side_setup_target is not None
-            else final_target.copy()
-        )
+        drive_target = final_target.copy()
         drive_distance_remaining = drive_target.flat_dist(agent.me.location)
         Tj = T - self.needed_jump_time * 1.15
         agent.dbg_2d(f"Needed jump time: {round(self.needed_jump_time, 2)}")
@@ -5900,51 +5631,17 @@ class side_shot(jump_shot):
             if velocity == 0:
                 velocity = 1
 
-            if self.side_mode and self.side_forward_world is not None:
-                # Use the runway to get to the selected side, then rotate the
-                # chassis perpendicular to the approach for a true side flip.
-                side_setup_distance = agent.me.location.flat_dist(
-                    self.side_setup_target
-                )
-                if side_setup_distance < 160 or T < (
-                    self.needed_jump_time * 1.15 + 0.30
-                ):
-                    defaultPD(
-                        agent,
-                        agent.me.local(self.side_forward_world).flatten()
-                    )
-                    # Stop adding drive force once the perpendicular turn
-                    # begins; keep the approach momentum and let the side
-                    # dodge provide the final impulse.
-                    agent.controller.throttle = 0
-                    agent.controller.boost = False
-
             local_offset_target = agent.me.local_location(self.offset_target.flatten())
             local_vf = agent.me.local(vf.flatten())
             time = speed_distance_remaining / (velocity + dodge_impulse(agent))
 
 
-            side_ready = False
-            if self.side_mode and self.side_forward_world is not None:
-                forward_alignment = (
-                    agent.me.forward.flatten().normalize().dot(
-                        self.side_forward_world.normalize()
-                    )
-                )
-                side_contact_distance = agent.me.location.flat_dist(
-                    self.offset_target
-                )
-                side_setup_distance = agent.me.location.flat_dist(
-                    self.side_setup_target
-                )
-                side_ready = (
-                    side_contact_distance < 520
-                    and forward_alignment > 0.90
-                    and T <= self.needed_jump_time * 1.08 + 0.18
-                )
-
             if (
-                side_ready
+                (
+                    self.side_mode
+                    and distance_remaining < 180
+                    and T <= self.needed_jump_time * 1.08
+                )
                 or (
                     (
                         abs(velocity) < 100
@@ -6033,42 +5730,23 @@ class side_shot(jump_shot):
             d_direction = delta_x.normalize()
 
             # ORIENT THE NOSE DURING THE EXISTING JUMP WINDOW.
-            # Elevated contacts switch to the same 3D target-tracking style
-            # used by Aerial after the first jump impulse. This lets the car
-            # pitch/yaw onto a higher contact before the final power flip.
-            # All jump-shot paths keep roll at zero.
+            # First steer toward the ball's horizontal position, then use S
+            # (positive pitch) to raise the nose when the ball is airborne
+            # and above the car. This adds no waiting phase and leaves the
+            # existing counter-3 dodge trigger intact.
             if self.counter < 3 and not self.dodging:
-                hold_s = False
-                if self.side_mode and self.side_forward_world is not None:
-                    # Keep the chassis perpendicular through takeoff.
-                    local_side_forward = agent.me.local(
-                        self.side_forward_world
-                    ).flatten()
-                    defaultPD(agent, local_side_forward)
-                    hold_s = (
-                        self.ball_location.z > 130
-                        and self.ball_location.z > agent.me.location.z + 65
-                        and not self.quick_shot
-                    )
-                    if hold_s:
-                        agent.controller.pitch = 1
-                    local_shot_direction = local_side_forward
-                elif (
-                    not self.quick_shot
-                    and jump_elapsed >= 0.04
-                    and self.ball_location.z > agent.me.location.z + 65
-                ):
-                    local_shot_direction = (
-                        self._set_jump_shot_aerial_orientation(agent)
-                    )
-                    hold_s = True
-                else:
-                    local_shot_direction, hold_s, _ = (
-                        self._set_jump_shot_orientation(agent)
-                    )
-
-                # No Q/E or roll-axis correction during a jump shot.
-                agent.controller.roll = 0.0
+                # Keep the original jump-shot power posture: pitch back (S)
+                # while the car rises, then let the existing forward/directional
+                # dodge drive the hitbox through the ball.
+                #
+                # Yaw toward the planned outgoing shot direction, not the
+                # instantaneous car-to-ball vector. The approach target was
+                # already built from the hitbox-aware centre contact, so this
+                # keeps the car behind that contact line without flattening
+                # the nose-up pitch that creates the power shot.
+                local_shot_direction, hold_s, _ = (
+                    self._set_jump_shot_orientation(agent)
+                )
 
                 if not self._orientation_logged:
                     print(
@@ -6077,8 +5755,7 @@ class side_shot(jump_shot):
                         f"car_z={agent.me.location.z:.0f} "
                         f"shot_yaw=({local_shot_direction.x:.2f},"
                         f"{local_shot_direction.y:.2f}) "
-                        f"hold_S={hold_s} counter={self.counter} "
-                        f"side_mode={self.side_mode}",
+                        f"hold_S={hold_s} counter={self.counter}",
                         flush=True
                     )
                     self._orientation_logged = True
@@ -6122,17 +5799,9 @@ class side_shot(jump_shot):
 
                 # Only dodge if the target is still in front and close enough
                 # for the dodge to have a realistic chance of making contact.
-                contact_extent = float(getattr(
-                    agent.me.hitbox,
-                    "width" if self.side_mode else "length",
-                    84.2 if self.side_mode else 118.01
-                ))
                 close_enough = (
                     agent.me.location.dist(self.offset_target)
-                    < (
-                        92.75 + contact_extent
-                        + (300.0 if self.side_mode else 0.0)
-                    ) * 1.02
+                    < (92.75 + agent.me.hitbox.length) * 1.02
                 )
 
                 if close_enough and (local_target.x > 0 or self.side_mode):
@@ -6145,61 +5814,22 @@ class side_shot(jump_shot):
                         self.ball_location
                     ).flatten()
 
-                    if self.side_mode:
-                        # Force a lateral dodge along the selected contact
-                        # normal; don't let local-x error turn it into a
-                        # frontflip or backflip.
-                        dodge_side = sign(local_ball_for_dodge.y)
-                        if dodge_side == 0:
-                            dodge_side = self.side_flip_y
-                        dodge_direction = Vector(y=dodge_side)
+                    if local_ball_for_dodge.magnitude() > 1:
+                        dodge_direction = local_ball_for_dodge.normalize()
                     else:
-                        local_shot_for_dodge = agent.me.local(
-                            self.shot_vector
-                        ).flatten()
-                        if (
-                            local_shot_for_dodge.magnitude() > 0.001
-                            and local_shot_for_dodge.x > 0.05
-                        ):
-                            # Use the planned outgoing shot direction for the
-                            # final dodge. This puts the flip impulse behind
-                            # the intended ball trajectory instead of merely
-                            # chasing the ball's current screen-space offset.
-                            dodge_direction = (
-                                local_shot_for_dodge.normalize()
-                            )
-                        elif local_ball_for_dodge.magnitude() > 1:
-                            dodge_direction = (
-                                local_ball_for_dodge.normalize()
-                            )
-                        else:
-                            dodge_direction = Vector(x=1)
-
-                        print(
-                            f"[JUMP SHOT POWER FLIP] "
-                            f"shot_local=({local_shot_for_dodge.x:.2f},"
-                            f"{local_shot_for_dodge.y:.2f}) "
-                            f"dodge=({dodge_direction.x:.2f},"
-                            f"{dodge_direction.y:.2f})",
-                            flush=True
-                        )
+                        dodge_direction = Vector(x=1)
 
                     agent.controller.pitch = -dodge_direction.x
                     agent.controller.yaw = dodge_direction.y
                     agent.controller.jump = True
 
                     agent.last_flip_time = agent.time
-                    self.post_contact_lock_until = agent.time + 0.60
                     self.dodging = True
                     self.counter = 4
 
-                elif (not self.side_mode and local_target.x <= 0) or (
+                elif local_target.x <= 0 or (
                     agent.me.location.dist(self.offset_target)
-                    > (
-                        92.75
-                        + contact_extent
-                        + (300.0 if self.side_mode else 0.0)
-                    ) * 1.02 + 150
+                    > (92.75 + agent.me.hitbox.length) * 1.02 + 150
                     and T < 0.12
                 ):
                     print(
@@ -6213,19 +5843,9 @@ class side_shot(jump_shot):
                     self.counter = 5
 
             elif self.counter == 4:
-                # The dodge impulse is committed. Keep steering neutral until
-                # its animation has finished so the next strategy decision
-                # cannot turn this side/front flip into a retreating flip.
+                # The dodge has started. Let the existing recovery/timeout
+                # logic take over instead of repeatedly initiating a new dodge.
                 self.dodging = True
-                agent.controller.jump = False
-                agent.controller.pitch = 0.0
-                agent.controller.yaw = 0.0
-                agent.controller.roll = 0.0
-                agent.controller.steer = 0.0
-                agent.controller.boost = False
-                agent.controller.throttle = 1.0
-                if agent.time >= self.post_contact_lock_until:
-                    self.counter = 5
 
             elif self.counter == 5:
                 print(
