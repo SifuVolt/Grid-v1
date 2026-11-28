@@ -1672,7 +1672,7 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
     )
 
     side_contact_routine = None
-    if best_shot["shot_type"] == 1 and can_jump:
+    if best_shot["shot_type"] in (0, 1) and can_jump:
         if best_targets is not None:
             side_goal_center = Vector(
                 (best_targets[0][0] + best_targets[1][0]) * 0.5,
@@ -1693,9 +1693,11 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             if side_shot_direction.magnitude() > 0.001 else 1.0
         )
 
-        # This is a fast alternative only when the normal nose-first
-        # approach is materially misaligned and there is enough time to drive.
-        if normal_alignment < 0.72:
+        # Any selected lateral ball contact uses the side-flip controller.
+        # A poor nose-first approach also qualifies even if the generic
+        # contact scorer happened to label its front quadrant as centre.
+        needs_lateral_contact = contact["label"] in ("left", "right")
+        if normal_alignment < 0.72 or needs_lateral_contact:
             left_of_shot = Vector(
                 -side_shot_direction.y,
                 side_shot_direction.x,
