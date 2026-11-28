@@ -301,6 +301,19 @@ namespace RedUtils
 			return Location + (Velocity + Velocity.FlatNorm() * 500).Cap(0, Car.MaxSpeed) * 1.3f;
 		}
 
+		/// <summary>Estimates the car position after a speed-flip, optionally including boost acceleration.</summary>
+		public Vec3 LocationAfterSpeedFlip(bool isBoosting = false)
+		{
+			if (isBoosting)
+			{
+				float boostTime = MathF.Min(Boost / Car.BoostConsumption, 1.3f);
+				Vec3 forward = Velocity.FlatNorm();
+				return Location + (Velocity + forward * 500f + forward * Car.BoostAccel * boostTime * (1.3f - 0.5f * boostTime)).Cap(0f, Car.MaxSpeed) * 1.3f;
+			}
+			return Location + (Velocity + Velocity.FlatNorm() * 500f).Cap(0f, Car.MaxSpeed) * 1.3f;
+		}
+
+
 		/// <summary>Predicts the location of the car after jumping</summary>
 		/// <param name="elapsed">The amount of time we have already been jumping. 0 if we haven't started jumping</param>
 		public Vec3 LocationAfterJump(float time, float elapsed)
