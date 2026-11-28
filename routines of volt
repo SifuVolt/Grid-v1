@@ -5024,7 +5024,7 @@ class jump_shot:
                 tuple(agent.gravity),
                 agent.me.get_raw(agent),
                 self.offset_target.z,
-                tuple((final_target - agent.me.location).normalize()),
+                tuple((self.offset_target - agent.me.location).normalize()),
                 distance_remaining
             )
 
