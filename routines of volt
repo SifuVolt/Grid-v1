@@ -5884,10 +5884,10 @@ class side_shot(jump_shot):
 
 class side_contact_jump_shot:
     """
-    Jump shot for poor nose-first approach angles.
+    Fast side-contact jump shot.
 
-    The car stages beside the ball with its side hitbox facing the goalward
-    contact direction, then jumps and side-dodges through the ball.
+    Drive directly at the side-contact position at full pace, jump on the
+    approach, then release and side-dodge through the ball toward goal.
     """
 
     def __init__(self, intercept_time, targets=None):
@@ -5902,16 +5902,14 @@ class side_contact_jump_shot:
         self.ball_velocity = Vector()
         self.goal_aim_point = None
         self.planned_shot_direction = None
-        self.shot_vector = None
         self.car_target = None
-        self.approach_waypoint = None
         self.desired_forward = None
         self.flip_direction = -1
-        self.contact_point = None
-        self.contact_normal = None
+        self.side_standoff = 0.0
+        self.half_height = 0.0
+        self.hitbox_offset_z = 0.0
         self.phase = "approach"
         self.jump_start = None
-        self.jump_released = False
         self.dodge_start = None
         self.last_debug = -1.0
 
@@ -5968,15 +5966,11 @@ class side_contact_jump_shot:
         goal_direction = (
             self.planned_shot_direction
             if self.planned_shot_direction is not None
-            else (
-                self.goal_aim_point - ball
-            ).flatten().normalize()
+            else (self.goal_aim_point - ball).flatten().normalize()
         )
         if goal_direction.magnitude() < 0.001:
             return False
 
-        # Two equivalent orientations are possible. Choose the one requiring
-        # the smaller turn, then side-flip in the direction of the goal.
         left_of_shot = Vector(
             -goal_direction.y, goal_direction.x, 0
         ).normalize()
@@ -5995,9 +5989,7 @@ class side_contact_jump_shot:
             self.desired_forward.x,
             0
         ).normalize()
-        # The chosen left/right dodge vector must point goalward.
-        side_dodge_world = right * self.flip_direction
-        if side_dodge_world.dot(goal_direction) < 0:
+        if (right * self.flip_direction).dot(goal_direction) < 0:
             return False
 
         hitbox = agent.me.hitbox
@@ -6014,18 +6006,10 @@ class side_contact_jump_shot:
                 + Vector(z=float(getattr(local_offset, "z", 0.0)))
             )
 
-        # Side face contact: ball surface radius plus the car's half-width.
-        side_standoff = 92.75 + half_width
+        self.side_standoff = 92.75 + half_width
         self.car_target = (
-            ball - goal_direction * side_standoff - world_offset
+            ball - goal_direction * self.side_standoff - world_offset
         ).flatten()
-        self.approach_waypoint = (
-            self.car_target - self.desired_forward * 300
-        )
-        self.contact_point = ball - goal_direction * 92.75
-        self.contact_normal = -goal_direction
-        self.shot_vector = goal_direction
-        self.side_standoff = side_standoff
         self.half_height = float(
             getattr(hitbox, "height", 36.16)
         ) * 0.5
@@ -6084,28 +6068,19 @@ class side_contact_jump_shot:
                 self._finish(agent, "invalid_side_geometry")
                 return
 
-            distance_to_waypoint = car.location.flat_dist(
-                self.approach_waypoint
-            )
-            distance_to_final = car.location.flat_dist(self.car_target)
-            target = (
-                self.approach_waypoint
-                if distance_to_waypoint > 180
-                else self.car_target
-            )
-            local_target = car.local_location(target)
+            local_target = car.local_location(self.car_target)
             target_angle = abs(math.atan2(local_target.y, local_target.x))
-            required_speed = max(
-                850.0,
-                min(1850.0, max(0.0, distance_to_final) / max(T, 0.12))
-            )
-            defaultDrive(agent, required_speed, local_target)
+            speed = car.velocity.flatten().magnitude()
+
+            # No waypoint or slow final crawl: attack the calculated contact
+            # point at full driving speed and use boost to get there.
+            defaultDrive(agent, 2300, local_target)
             agent.controller.boost = bool(
                 agent.boost_amount != "unlimited"
-                and car.boost > 1
+                and car.boost > 0
                 and local_target.x > 0
-                and target_angle < 0.42
-                and car.velocity.flatten().magnitude() < required_speed - 100
+                and target_angle < 1.05
+                and speed < 2200
             )
             agent.controller.handbrake = False
 
@@ -6113,70 +6088,56 @@ class side_contact_jump_shot:
             forward_alignment = car.forward.flatten().normalize().dot(
                 self.desired_forward
             )
-            position_ready = (
-                distance_to_final < 72
-                and forward_alignment > 0.91
-                and abs(local_ball.x) < 85
-                and local_ball.y * self.flip_direction > 0
-                and abs(
-                    abs(local_ball.y) - self.side_standoff
-                ) < 75
-            )
-            needed_jump_time = virxrlcu.get_jump_time(
-                self.ball_location.z - car.location.z,
-                car.velocity.z,
-                agent.gravity.z
-            )
-            jump_window = T <= max(
-                0.12, needed_jump_time * 1.12
-            )
+            distance_to_target = car.location.flat_dist(self.car_target)
+            jump_distance = max(450.0, min(750.0, speed * 0.24 + 220.0))
+            side_is_correct = local_ball.y * self.flip_direction > 0
 
-            if position_ready and jump_window:
+            # Start the jump while still moving toward the contact point;
+            # don't wait until the car is parked precisely on it.
+            if (
+                distance_to_target <= jump_distance
+                and forward_alignment > 0.50
+                and side_is_correct
+                and abs(local_ball.x) < jump_distance + 180
+            ):
                 self.phase = "jump"
                 self.jump_start = agent.time
-                self.jump_released = False
+                agent.controller.jump = True
+                agent.controller.boost = False
                 print(
-                    f"[SIDE CONTACT SHOT] launch "
-                    f"flip={'left' if self.flip_direction < 0 else 'right'} "
-                    f"T={T:.3f} jump={needed_jump_time:.3f} "
-                    f"local_ball=({local_ball.x:.0f},{local_ball.y:.0f},"
-                    f"{local_ball.z:.0f})",
+                    f"[SIDE CONTACT SHOT] jump "
+                    f"T={T:.3f} distance={distance_to_target:.0f} "
+                    f"speed={speed:.0f} "
+                    f"flip={'left' if self.flip_direction < 0 else 'right'}",
                     flush=True
                 )
                 return
 
-            if (
-                self.last_debug < 0
-                or agent.time - self.last_debug >= 0.30
-            ):
+            if self.last_debug < 0 or agent.time - self.last_debug >= 0.35:
                 self.last_debug = agent.time
                 print(
-                    f"[SIDE CONTACT SETUP] T={T:.2f} "
-                    f"distance={distance_to_final:.0f} "
-                    f"heading={forward_alignment:.2f} "
-                    f"local_ball=({local_ball.x:.0f},{local_ball.y:.0f}) "
-                    f"flip={'L' if self.flip_direction < 0 else 'R'} "
-                    f"speed={car.velocity.flatten().magnitude():.0f}",
+                    f"[SIDE CONTACT DRIVE] T={T:.2f} "
+                    f"distance={distance_to_target:.0f} "
+                    f"speed={speed:.0f} boost={car.boost:.0f} "
+                    f"heading={forward_alignment:.2f}",
                     flush=True
                 )
 
-            if T <= needed_jump_time and not position_ready:
+            if T <= 0.12 and distance_to_target > jump_distance:
                 self._finish(agent, "side_setup_too_late")
             return
 
         local_ball = car.local_location(self.ball_location)
         local_forward = car.local(self.desired_forward)
         defaultPD(agent, local_forward.flatten())
-
         elapsed = max(0.0, agent.time - self.jump_start)
+
         if self.phase == "jump":
             if elapsed <= jump_max_duration:
                 agent.controller.jump = True
             else:
                 agent.controller.jump = False
-                self.jump_released = True
 
-            # Release the first jump before issuing the directional side dodge.
             side_distance = local_ball.y * self.flip_direction
             side_error = abs(side_distance - self.side_standoff)
             longitudinal_error = abs(local_ball.x)
@@ -6185,14 +6146,17 @@ class side_contact_jump_shot:
                 - car.location.z
                 - self.hitbox_offset_z
             )
+
+            # The dodge is driven by actual side-contact geometry, not a
+            # narrow intercept-time gate. The wider window tolerates a fast
+            # approach and normal packet-to-packet movement.
             contact_window = (
-                self.jump_released
-                and elapsed <= 1.20
-                and longitudinal_error <= 78
+                elapsed > jump_max_duration
+                and elapsed <= 0.95
+                and longitudinal_error <= 190
                 and side_distance > 0
-                and side_error <= 62
-                and vertical_error <= self.half_height + 92.75
-                and T <= 0.22
+                and side_error <= 115
+                and vertical_error <= self.half_height + 115
             )
             if contact_window:
                 self.phase = "dodge"
@@ -6204,15 +6168,13 @@ class side_contact_jump_shot:
                 agent.controller.roll = 0.0
                 agent.controller.boost = False
                 print(
-                    f"[SIDE CONTACT DODGE] direction="
-                    f"{'left' if self.flip_direction < 0 else 'right'} "
+                    f"[SIDE CONTACT DODGE] "
+                    f"direction={'left' if self.flip_direction < 0 else 'right'} "
                     f"local_ball=({local_ball.x:.0f},{local_ball.y:.0f},"
-                    f"{local_ball.z:.0f}) "
-                    f"side_error={side_error:.0f} "
-                    f"vertical_error={vertical_error:.0f}",
+                    f"{local_ball.z:.0f}) side_error={side_error:.0f}",
                     flush=True
                 )
-            elif elapsed > 1.20 or T < -0.25:
+            elif elapsed > 0.95 or T < -0.25:
                 self._finish(agent, "missed_side_contact", recover=True)
             return
 
@@ -6225,7 +6187,6 @@ class side_contact_jump_shot:
             if agent.time - self.dodge_start >= 0.32:
                 self._finish(agent, "side_dodge_complete", recover=True)
             return
-
 
 class ground_shot:
     # Hits a target point at a target time towards a target direction
