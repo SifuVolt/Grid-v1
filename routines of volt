@@ -1137,6 +1137,125 @@ class double_jump:
 
 
 
+
+def _predict_car_orientation(agent, horizon, controls):
+    """Predict short-horizon car orientation using Rocket League's aerial-control model."""
+    forward = agent.me.forward.normalize()
+    up = agent.me.up.normalize()
+    right = up.cross(forward).normalize()
+    up = forward.cross(right).normalize()
+
+    local_omega = agent.me.angular_velocity
+    omega = (
+        forward * local_omega.x
+        + right * local_omega.y
+        + up * local_omega.z
+    )
+    roll, pitch, yaw = controls
+    torque = (-36.07956616966136, -12.14599781908070, 8.91962804287785)
+    damping = (-4.47166302201591, -2.798194258050845, -1.886491900437232)
+    steps = max(0, int(math.ceil(max(0.0, horizon) / dt)))
+    step_dt = max(0.0, horizon) / steps if steps else 0.0
+
+    for _ in range(steps):
+        local = Vector(
+            omega.dot(forward),
+            omega.dot(right),
+            omega.dot(up)
+        )
+        local_acceleration = Vector(
+            torque[0] * roll + damping[0] * local.x,
+            torque[1] * pitch + damping[1] * (1 - abs(pitch)) * local.y,
+            torque[2] * yaw + damping[2] * (1 - abs(yaw)) * local.z
+        )
+        world_acceleration = (
+            forward * local_acceleration.x
+            + right * local_acceleration.y
+            + up * local_acceleration.z
+        )
+        next_omega = omega + world_acceleration * step_dt
+        next_speed = next_omega.magnitude()
+        if next_speed > 5.5:
+            next_omega *= 5.5 / next_speed
+
+        average_omega = (omega + next_omega) * 0.5
+        angle = average_omega.magnitude() * step_dt
+        if angle > 0.000001:
+            axis = average_omega.normalize()
+            cosine = math.cos(angle)
+            sine = math.sin(angle)
+            one_minus_cosine = 1 - cosine
+            forward = (
+                forward * cosine
+                + axis.cross(forward) * sine
+                + axis * (axis.dot(forward) * one_minus_cosine)
+            ).normalize()
+            up = (
+                up * cosine
+                + axis.cross(up) * sine
+                + axis * (axis.dot(up) * one_minus_cosine)
+            ).normalize()
+            right = up.cross(forward).normalize()
+            up = forward.cross(right).normalize()
+        omega = next_omega
+
+    return forward, right, up
+
+
+def _predicted_hitbox_ball_gap(agent, car_location, ball_location,
+                               forward, right, up):
+    """Distance from the predicted ball centre to the predicted oriented car hitbox."""
+    hitbox = agent.me.hitbox
+    half_length = float(hitbox.length) * 0.5
+    half_width = float(hitbox.width) * 0.5
+    half_height = float(hitbox.height) * 0.5
+
+    forward = forward.normalize()
+    right = right.normalize()
+    up = up.normalize()
+    if forward.magnitude() < 0.001 or right.magnitude() < 0.001 or up.magnitude() < 0.001:
+        forward = agent.me.forward.normalize()
+        up = agent.me.up.normalize()
+        right = up.cross(forward).normalize()
+        up = forward.cross(right).normalize()
+
+    offset = getattr(agent.me, "hitbox_offset", None)
+    if offset is None:
+        offset = getattr(hitbox, "offset", None)
+
+    ox = oy = oz = 0.0
+    if offset is not None:
+        if hasattr(offset, "x"):
+            ox, oy, oz = float(offset.x), float(offset.y), float(offset.z)
+        elif hasattr(offset, "__getitem__") and len(offset) >= 3:
+            ox, oy, oz = float(offset[0]), float(offset[1]), float(offset[2])
+
+    centre = (
+        car_location
+        + forward * ox
+        + right * oy
+        + up * oz
+    )
+    relative = ball_location - centre
+    local = Vector(
+        relative.dot(forward),
+        relative.dot(right),
+        relative.dot(up)
+    )
+    nearest = Vector(
+        cap(local.x, -half_length, half_length),
+        cap(local.y, -half_width, half_width),
+        cap(local.z, -half_height, half_height)
+    )
+    closest_world = (
+        centre
+        + forward * nearest.x
+        + right * nearest.y
+        + up * nearest.z
+    )
+    return closest_world.dist(ball_location)
+
+
 class Aerial:
     def __init__(self, intercept_time, targets=None, fast_aerial=True):
         self.intercept_time = intercept_time
@@ -2437,11 +2556,36 @@ class Aerial:
             agent.controller.throttle = 0
 
 
+        # Kamael's contact search and Molten's oriented-hitbox test both
+        # distinguish a reachable touch from merely reaching the intercept time.
+        contact_ready = False
+        if 0.0 <= T <= 0.15:
+            predicted_forward, predicted_right, predicted_up = (
+                _predict_car_orientation(
+                    agent,
+                    T,
+                    (
+                        agent.controller.roll,
+                        agent.controller.pitch,
+                        agent.controller.yaw
+                    )
+                )
+            )
+            contact_gap = _predicted_hitbox_ball_gap(
+                agent,
+                xf,
+                self.ball,
+                predicted_forward,
+                predicted_right,
+                predicted_up
+            )
+            contact_ready = contact_gap <= 117.75
+
         if T <= -0.4 or (not self.jumping and T > 1.5 and not virxrlcu.aerial_shot_is_viable(T, agent.boost_accel, tuple(agent.gravity), agent.me.get_raw(agent), tuple(self.target))):
             agent.pop()
             agent.shooting = False
             agent.push(ball_recovery())
-        elif (self.ceiling and self.target.dist(agent.me.location) < 92 + agent.me.hitbox.length and not agent.me.doublejumped and agent.me.location.z < agent.ball.location.z + 92 and self.target.y * side(agent.team) > -4240) or (not self.ceiling and not agent.me.doublejumped and T < 0.1):
+        elif contact_ready and ((self.ceiling and self.target.dist(agent.me.location) < 92 + agent.me.hitbox.length and not agent.me.doublejumped and agent.me.location.z < agent.ball.location.z + 92 and self.target.y * side(agent.team) > -4240) or (not self.ceiling and not agent.me.doublejumped and T < 0.1)):
             agent.dbg_2d("Flipping")
             local_target = agent.me.local_location(self.target).flatten().normalize()
             agent.controller.pitch = -local_target.x
@@ -4583,67 +4727,7 @@ class jump_shot:
         self._last_air_prediction_debug = -1.0
 
     def _predict_air_orientation(self, agent, horizon, controls):
-        """Integrate Rocket League's measured aerial-control model at 120 Hz."""
-        forward = agent.me.forward.normalize()
-        up = agent.me.up.normalize()
-        right = up.cross(forward).normalize()
-        up = forward.cross(right).normalize()
-
-        local_omega = agent.me.angular_velocity
-        omega = (
-            forward * local_omega.x
-            + right * local_omega.y
-            + up * local_omega.z
-        )
-        roll, pitch, yaw = controls
-        torque = (-36.07956616966136, -12.14599781908070, 8.91962804287785)
-        damping = (-4.47166302201591, -2.798194258050845, -1.886491900437232)
-        steps = max(0, int(math.ceil(max(0.0, horizon) / dt)))
-        step_dt = max(0.0, horizon) / steps if steps else 0.0
-
-        for _ in range(steps):
-            local = Vector(
-                omega.dot(forward),
-                omega.dot(right),
-                omega.dot(up)
-            )
-            local_acceleration = Vector(
-                torque[0] * roll + damping[0] * local.x,
-                torque[1] * pitch + damping[1] * (1 - abs(pitch)) * local.y,
-                torque[2] * yaw + damping[2] * (1 - abs(yaw)) * local.z
-            )
-            world_acceleration = (
-                forward * local_acceleration.x
-                + right * local_acceleration.y
-                + up * local_acceleration.z
-            )
-            next_omega = omega + world_acceleration * step_dt
-            next_speed = next_omega.magnitude()
-            if next_speed > 5.5:
-                next_omega *= 5.5 / next_speed
-
-            average_omega = (omega + next_omega) * 0.5
-            angle = average_omega.magnitude() * step_dt
-            if angle > 0.000001:
-                axis = average_omega.normalize()
-                cosine = math.cos(angle)
-                sine = math.sin(angle)
-                one_minus_cosine = 1 - cosine
-                forward = (
-                    forward * cosine
-                    + axis.cross(forward) * sine
-                    + axis * (axis.dot(forward) * one_minus_cosine)
-                ).normalize()
-                up = (
-                    up * cosine
-                    + axis.cross(up) * sine
-                    + axis * (axis.dot(up) * one_minus_cosine)
-                ).normalize()
-                right = up.cross(forward).normalize()
-                up = forward.cross(right).normalize()
-            omega = next_omega
-
-        return forward, right, up
+        return _predict_car_orientation(agent, horizon, controls)
 
     def _set_jump_shot_orientation(self, agent):
         local_shot_direction = agent.me.local(
@@ -5045,14 +5129,34 @@ class jump_shot:
             )
 
         if self.counter == 3:
-            shot_alignment = (
-                agent.me.forward.flatten().normalize().dot(
-                    self.shot_vector.flatten().normalize()
+            predicted_forward, predicted_right, predicted_up = (
+                self._predict_air_orientation(
+                    agent,
+                    max(0.0, T),
+                    (
+                        agent.controller.roll,
+                        agent.controller.pitch,
+                        agent.controller.yaw
+                    )
                 )
             )
-            close_contact = contact_distance < contact_limit
+            # Molten's hitbox-intersection approach, evaluated with the
+            # predicted orientation rather than car-centre distance alone.
+            contact_distance = _predicted_hitbox_ball_gap(
+                agent,
+                xf,
+                self.ball_location,
+                predicted_forward,
+                predicted_right,
+                predicted_up
+            )
+            shot_alignment = predicted_forward.flatten().normalize().dot(
+                self.shot_vector.flatten().normalize()
+            )
+            contact_limit = 92.75 + 18.0
+            close_contact = contact_distance <= contact_limit
             aligned_contact = (
-                contact_distance < contact_limit + 65
+                contact_distance <= contact_limit + 25.0
                 and shot_alignment > 0.985
             )
             dodge_window_open = jump_elapsed <= 1.25
