@@ -975,7 +975,7 @@ This file is the project handoff and change checklist. Read it before every code
 
 - Added a separate `AerialJumpShot` routine for C-parser single-jump shot candidates whose predicted contact is within 3.0 seconds.
 - It reuses the existing Aerial 3D shot-direction and hitbox-aware contact-target calculations, but forces the launch candidate to a single jump (never a second jump).
-- Launch sequence: single jump, short pitch-back window, then continuous boost while the controller tracks the predicted contact target. The normal forward-projection boost feathering is bypassed for this routine.
+- Launch sequence: commit immediately without a ground-turn setup, single jump, short pitch-back window, then continuous boost while the controller tracks the predicted contact target. The normal forward-projection boost feathering is bypassed for this routine.
 - At the contact window, the dodge impulse is aligned with the predicted outgoing shot vector so the nose/front hitbox drives through the selected contact face toward goal.
 - This selection applies only to single-jump shot candidates (`shot_type == 1`) with `T <= 3.0` in both goal-targeted and untargeted finders. Ground shots and true Aerial (`shot_type == 3`) candidates retain their existing routines.
 - The routine is included in the agent's ordinary-shot and committed-shot tracking sets so it can refresh/lock consistently with other shots.
