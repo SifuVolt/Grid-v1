@@ -5154,9 +5154,13 @@ class jump_shot:
                 self.shot_vector.flatten().normalize()
             )
             contact_limit = 92.75 + 18.0
-            close_contact = contact_distance <= contact_limit
+            close_contact = (
+                T <= 0.15
+                and contact_distance <= contact_limit
+            )
             aligned_contact = (
-                contact_distance <= contact_limit + 25.0
+                T <= 0.15
+                and contact_distance <= contact_limit + 25.0
                 and shot_alignment > 0.985
             )
             dodge_window_open = jump_elapsed <= 1.25
