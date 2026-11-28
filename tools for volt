@@ -1456,7 +1456,7 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
         # At zero boost, select the jump type from the predicted ball height:
         # airborne ball -> double jump; grounded ball -> regular jump shot.
         slice_can_ground = can_ground
-        slice_can_jump = can_jump
+        slice_can_jump = can_jump and ball_location[2] <= 850.0
         slice_can_double_jump = can_double_jump
         slice_can_aerial = can_aerial and (
             min_aerial_height < ball_location[2] < max_aerial_height
@@ -2062,7 +2062,7 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
         # At zero boost, airborne contacts must use a double jump;
         # grounded contacts may use a regular jump shot instead.
         slice_can_ground = can_ground
-        slice_can_jump = can_jump
+        slice_can_jump = can_jump and ball_location[2] <= 850.0
         slice_can_double_jump = can_double_jump
         slice_can_aerial = can_aerial and (
             min_aerial_height
