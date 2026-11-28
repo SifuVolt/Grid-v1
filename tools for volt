@@ -1,4 +1,4 @@
-from util.routines import Aerial, double_jump, ground_shot, jump_shot, side_shot, virxrlcu, wall_approach
+from util.routines import Aerial, AerialJumpShot, double_jump, ground_shot, jump_shot, side_shot, virxrlcu, wall_approach
 from util.utils import Vector, math, side, cap
 from util.grid_double_jump import find_double_jump as grid_find_double_jump
 
@@ -1677,6 +1677,16 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             best_targets,
             best_shot["fast"],
         )
+    elif (
+        best_shot["shot_type"] == 1
+        and can_jump
+        and time_to_intercept <= 3.0
+    ):
+        routine = AerialJumpShot(best_intercept_time, best_targets)
+        print(
+            f"[SHOT PLANNER] AerialJumpShot selected T={time_to_intercept:.2f}",
+            flush=True
+        )
     elif best_shot["shot_type"] in (0, 1) and can_jump:
         # A side shot is a goal-line correction, not a half-field choice.
         # Project the rolling ball to the opponent goal line and only use
@@ -2131,6 +2141,28 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
         routine.contact_point = contact["contact_point"]
         routine.contact_normal = contact["normal"]
         routine.contact_approach_target = contact["approach_target"]
+        return routine
+
+    if (
+        best_shot['shot_type'] == 1
+        and can_jump
+        and time_to_intercept <= 3.0
+    ):
+        routine = AerialJumpShot(best_intercept_time)
+        contact = select_ball_contact(
+            agent,
+            best_ball_location,
+            None
+        )
+        routine.contact_label = contact["label"]
+        routine.contact_point = contact["contact_point"]
+        routine.contact_normal = contact["normal"]
+        routine.contact_approach_target = contact["approach_target"]
+        print(
+            f"[SHOT PLANNER] AerialJumpShot selected untargeted "
+            f"T={time_to_intercept:.2f}",
+            flush=True
+        )
         return routine
 
     if best_shot['shot_type'] in (0, 1) and can_jump:
