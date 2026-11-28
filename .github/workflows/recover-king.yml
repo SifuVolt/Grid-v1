@@ -27,6 +27,8 @@ jobs:
           mkdir -p King/Recovered
           curl -fL "https://raw.githubusercontent.com/RLBot/RLBotPack/master/RLBotPack/King/Bot.dll" -o /tmp/Bot.dll
           curl -fL "https://raw.githubusercontent.com/RLBot/RLBotPack/master/RLBotPack/King/RedUtils.dll" -o /tmp/RedUtils.dll
+          curl -fL "https://raw.githubusercontent.com/RLBot/RLBotPack/master/RLBotPack/RedBot/RLBotDotNet.dll" -o /tmp/RLBotDotNet.dll
+          curl -fL "https://raw.githubusercontent.com/RLBot/RLBotPack/master/RLBotPack/RedBot/FlatBuffers.dll" -o /tmp/FlatBuffers.dll
 
       - name: Decompile King strategy assembly
         run: |
@@ -38,7 +40,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add King/Recovered/King.decompiled.cs
+          git add King/Recovered/*.decompiled.cs
           if ! git diff --cached --quiet; then
             git commit -m "Recover King bot logic from published assembly"
             git push origin HEAD:king-v5
