@@ -891,3 +891,11 @@ This file is the project handoff and change checklist. Read it before every code
 - Registered `side_contact_jump_shot` in the agent's ordinary-shot/commit locks so teamplay does not treat it as an untracked routine.
 - This change has only been statically reviewed. It has not been compiled or tested in Rocket League. Watch first for setup ETA accuracy, the final perpendicular orientation, local-left/right sign, and whether the side-face contact window is too strict.
 
+
+
+## 16. Fast side-contact shot correction (2026-11-28)
+
+- The first `side_contact_jump_shot` implementation was too slow and too strict: it staged at a waypoint, capped drive speed below max, gated boost tightly, waited for near-perfect stationary alignment, and required a narrow intercept-time contact window. User reported it was not working and was being selected with almost no boost.
+- The corrected routine drives directly to the calculated side-contact car-centre target at 2300 target speed, uses available boost during the approach, starts the jump while still moving toward the target, then side-dodges using a wider geometric contact window. It no longer has a staging waypoint or slow final positioning phase.
+- The selector only considers this alternative for a poor-angle single-jump shot when boost is at least 12 (unless boost is unlimited), and uses a faster travel-time estimate. Normal jump shots remain the fallback.
+- This correction is committed only after static verification; compile and in-game testing remain outstanding.
