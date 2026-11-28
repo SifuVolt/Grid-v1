@@ -162,7 +162,7 @@ public class King(string botName, int botTeam, int botIndex) : RUBot(botName, bo
 			foreach (Car teammate in Teammates)
 			{
 				float num2 = teammate.Location.Dist(Ball.Location);
-				bool flag2 = MathF.Sign(Me.Location.x) != Field.Side(((Bot)this).Team);
+				bool flag2 = MathF.Sign(Me.Location.x) != Field.Side(Team);
 				flag = flag && (num < num2 || ((num == num2) & flag2));
 			}
 			IAction action2;
@@ -207,7 +207,7 @@ public class King(string botName, int botTeam, int botIndex) : RUBot(botName, bo
 		}
 		Vec3 location = ((possesionProperties.intercept != null) ? possesionProperties.intercept.Location : Ball.Location);
 		Vec3 location2 = ((theirPossesion.intercept != null) ? theirPossesion.intercept.Location : Ball.Location);
-		new Vec3(-MathF.Sign(location.x) * 3500, -Field.Side(((Bot)this).Team) * 4500);
+		new Vec3(-MathF.Sign(location.x) * 3500, -Field.Side(Team) * 4500);
 		bool flag3 = ImportantBall(possesionProperties, theirPossesion);
 		bool flag4 = MathF.Abs(possesionProperties.eta - theirPossesion.eta) < 0.25f && possesionProperties.intercept != null && possesionProperties.intercept.Location.z < 300f;
 		if (!flag3 && !flag4 && CanDefend(Me, theirPossesion, OurGoal.Location) && Me.Boost < 20 && !possesionProperties.hasPossesion && (!theirPossesion.hasPossesion || ShotAngle(location2, new Target(OurGoal)) < 0.4f))
@@ -235,7 +235,7 @@ public class King(string botName, int botTeam, int botIndex) : RUBot(botName, bo
 		}
 		if (theirPossesion.hasPossesion && (Ball.Location + Ball.Velocity).Dist(OurGoal.Location) > 1400f && (!AnyTeammatesBack() || IsBack()) && !flag4 && ShotAngle(location2, new Target(OurGoal)) > 0.4f)
 		{
-			Vec3 location3 = new Vec3(800 * -MathF.Sign(Ball.Location.x), 4900 * Field.Side(((Bot)this).Team));
+			Vec3 location3 = new Vec3(800 * -MathF.Sign(Ball.Location.x), 4900 * Field.Side(Team));
 			extraStratInfo = "Rotating Back Post";
 			SetAction(new ParkAt(Me, location3), lookForBoost: false);
 		}
@@ -252,7 +252,7 @@ public class King(string botName, int botTeam, int botIndex) : RUBot(botName, bo
 		else if (AnyOpponentsBack() && (location.Dist(TheirGoal.Location) > 2500f || ShotAngle(location, new Target(TheirGoal)) < 0.2f))
 		{
 			extraStratInfo = "Clearing";
-			SetAction(RUBot.FindShot(ClearShotCheck, new Target(new Vec3(1200 * -Field.Side(((Bot)this).Team), 5200 * -Field.Side(((Bot)this).Team), 1800f), new Vec3(1200 * Field.Side(((Bot)this).Team), 5200 * -Field.Side(((Bot)this).Team), 800f))));
+			SetAction(RUBot.FindShot(ClearShotCheck, new Target(new Vec3(1200 * -Field.Side(Team), 5200 * -Field.Side(Team), 1800f), new Vec3(1200 * Field.Side(Team), 5200 * -Field.Side(Team), 800f))));
 		}
 		else
 		{
@@ -349,7 +349,7 @@ public class King(string botName, int botTeam, int botIndex) : RUBot(botName, bo
 			{
 				num2 = num3;
 			}
-			if (num3 < num && car.Team != ((Bot)this).Team && car.Location.Direction(TheirGoal.Location).Dot(vec.Direction(car.Location)) > 0f)
+			if (num3 < num && car.Team != Team && car.Location.Direction(TheirGoal.Location).Dot(vec.Direction(car.Location)) > 0f)
 			{
 				num = num3;
 				intercept = ballSlice;
@@ -470,10 +470,10 @@ internal class Program
 {
 	private static void Main(string[] args)
 	{
-		int num;
+		int port;
 		try
 		{
-			num = int.Parse(args[0]);
+			port = int.Parse(args[0]);
 		}
 		catch (Exception)
 		{
@@ -484,6 +484,6 @@ internal class Program
 			Console.ReadKey();
 			throw;
 		}
-		new BotManager<King>(0).Start(num);
+		new BotManager<King>(0).Start(port);
 	}
 }
