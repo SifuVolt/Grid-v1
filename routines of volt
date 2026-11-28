@@ -3594,9 +3594,58 @@ class fast_intercept_finder:
             slices[-1].game_seconds
         )
 
+        # Give the dedicated single-jump aerial shot first refusal inside
+        # its three-second window, before normal/fast aerial candidates.
+        if can_jump and (
+            agent.boost_amount == "unlimited" or agent.me.boost > 0
+        ):
+            for ball_slice in slices:
+                intercept_time = ball_slice.game_seconds
+                if intercept_time < first_time:
+                    continue
+                if intercept_time > min(end_time, agent.time + 3.0):
+                    break
+                T = intercept_time - agent.time - (1 / 120)
+                if T <= 0:
+                    continue
+                physics = ball_slice.physics
+                location = physics.location
+                if abs(location.y) > 5212.75:
+                    break
+                ball_info = (
+                    (location.x, location.y, location.z),
+                    (
+                        physics.velocity.x,
+                        physics.velocity.y,
+                        physics.velocity.z
+                    )
+                )
+                jump_result = virxrlcu.parse_slice_for_shot(
+                    False,
+                    True,
+                    False,
+                    False,
+                    T,
+                    *game_info,
+                    gravity,
+                    ball_info,
+                    me
+                )
+                if (
+                    jump_result.get("found") == 1
+                    and int(jump_result.get("shot_type", -1)) == 1
+                ):
+                    print(
+                        f"[FAST INTERCEPT] AerialJumpShot priority "
+                        f"T={T:.2f}",
+                        flush=True
+                    )
+                    return AerialJumpShot(intercept_time)
+
         # Search the whole window for both aerial types. A reachable
-        # normal aerial always takes priority; fast aerials are only a
-        # fallback for predicted ball contacts above 350 units.
+        # normal aerial always has priority only when no eligible
+        # AerialJumpShot exists; fast aerials are only a fallback for
+        # predicted ball contacts above 350 units.
         fast_aerial_candidate = None
         normal_aerial_candidate = None
         fast_aerial_available = (
