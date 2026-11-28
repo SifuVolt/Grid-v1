@@ -4831,8 +4831,8 @@ class jump_shot:
         return 0.55 + (0.3 - 0.55) * ((value - 2300) / 4600)
 
     @staticmethod
-    def _time_to_jump(normal, height):
-        gravity = normal.dot(Vector(z=-650))
+    def _time_to_jump(normal, height, world_gravity):
+        gravity = normal.dot(world_gravity)
         if abs(gravity) < 0.001:
             gravity = -0.001
         base_height = 84.65631 + gravity * 0.2 * 0.2 / 2
@@ -5000,7 +5000,7 @@ class jump_shot:
         target_height = (target - projected_target).dot(normal)
         shot_angle = math.asin(cap(self.shot_direction.dot(normal), -1, 1))
         jump_height = cap(target_height - 17, 1, 270)
-        jump_time = max(self._time_to_jump(normal, jump_height), 0.15)
+        jump_time = max(self._time_to_jump(normal, jump_height, agent.gravity), 0.15)
 
         dodge_angle = min(
             shot_angle + 0.25,
@@ -5072,7 +5072,7 @@ class jump_shot:
             )[0]
         ).dot(normal)
         jump_time = self._time_to_jump(
-            normal, max(target_height, 30) - 17
+            normal, max(target_height, 30) - 17, agent.gravity
         )
 
         if normal.dot(Vector(z=1)) < 0.95:
@@ -5162,7 +5162,7 @@ class jump_shot:
         if self.shot_target is None:
             self.shot_target = _relative_goal_aim_point(agent, self.targets)
 
-        if not self._read_intercept(agent, time_remaining):
+        if not self.jumped and not self._read_intercept(agent, time_remaining):
             self._finish(agent, recover=agent.me.airborne)
             return
 
@@ -5193,7 +5193,7 @@ class jump_shot:
                 1,
                 270
             )
-            time_to_jump = max(self._time_to_jump(normal, height), 0.15)
+            time_to_jump = max(self._time_to_jump(normal, height, agent.gravity), 0.15)
 
             self._drive_to_arrive_target(agent, time_remaining)
             self.left_ground = self.left_ground or agent.me.airborne
@@ -5258,7 +5258,7 @@ class jump_shot:
                     contact_car,
                     contact_ball,
                     agent.me.forward,
-                    agent.me.right,
+                    agent.me.up.cross(agent.me.forward).normalize(),
                     agent.me.up
                 ) <= 92.75
             )
