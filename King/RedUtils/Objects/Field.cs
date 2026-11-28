@@ -153,6 +153,25 @@ namespace RedUtils
 		/// <summary>Returns the closest drivable surface to a given point 
 		/// <para>Excludes the ceiling, since it isn't a drivable surface. If you want to include the ceiling, use the overload where you can exclude surfaces, and pass in an empty surfaces array</para>
 		/// </summary>
+		/// <summary>Returns whether a position is close to the intersection between two drivable surfaces.</summary>
+		public static bool OnSeam(Vec3 pos, float radius)
+		{
+			Surface surface = NearestSurface(pos);
+			Surface otherSurface = NearestSurface(pos, new Surface[1] { surface });
+			if (surface.Limit(pos).Dist(otherSurface.Limit(pos)) < radius)
+			{
+				return surface.Normal.Dot(otherSurface.Normal) < 0.95f;
+			}
+			return false;
+		}
+
+		/// <summary>Chooses the surface from which the car should jump toward a target.</summary>
+		public static Surface BestJumpingSurface(Vec3 carPos, Vec3 targetPos)
+		{
+			Surface carSurface = NearestSurface(carPos);
+			return carSurface.Limit(targetPos).Dist(targetPos) < 300f ? carSurface : NearestSurface(targetPos);
+		}
+
 		public static Surface NearestSurface(Vec3 pos)
 		{
 			Surface closestSurface = DrivableSurfaces.First().Value;
