@@ -15,6 +15,8 @@ namespace RedUtils
 		public Vec3 Direction { get; set; }
 		/// <summary>How much time we spend jumping before dodging, if we start on the ground</summary>
 		public float JumpTime { get; set; }
+		/// <summary>Whether this dodge should perform a jump before flipping.</summary>
+		public bool WillJump { get; set; } = true;
 		/// <summary>How long this dodge should last</summary>
 		public float Duration { get { return JumpTime + 1.15f; } }
 
@@ -29,13 +31,14 @@ namespace RedUtils
 
 		/// <summary>Initialize a new dodge action</summary>
 		/// <param name="jumpTime">How much time we spend jumping before dodging, if we start on the ground</param>
-		public Dodge(Vec3 direction, float jumpTime = 0.1f)
+		public Dodge(Vec3 direction, float jumpTime = 0.1f, bool willJump = true)
 		{
 			Interruptible = false;
 			Finished = false;
 
 			Direction = direction;
 			JumpTime = jumpTime;
+			WillJump = willJump;
 		}
 
 		/// <summary>Runs this dodge action</summary>
@@ -46,7 +49,7 @@ namespace RedUtils
 			{
 				// Set start time, and whether or not we should jump
 				_startTime = Game.Time;
-				_jumping = bot.Me.IsGrounded;
+				_jumping = bot.Me.IsGrounded && WillJump;
 			}
 			float elapsed = Game.Time - _startTime;
 
