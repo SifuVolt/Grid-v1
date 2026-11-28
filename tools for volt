@@ -1837,8 +1837,8 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                 and abs(side_setup.x) < 3900
                 and abs(side_setup.y) < 4900
             ):
-                routine = side_shot(
-                    best_intercept_time, best_targets, approach_side
+                routine = side_contact_jump_shot(
+                    best_intercept_time, best_targets
                 )
                 side_shot_selected = True
                 print(
@@ -2296,8 +2296,8 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
                 and abs(side_setup.x) < 3900
                 and abs(side_setup.y) < 4900
             ):
-                routine = side_shot(
-                    best_intercept_time, approach_side=approach_side
+                routine = side_contact_jump_shot(
+                    best_intercept_time
                 )
                 print(
                     f"[SHOT PLANNER] selected untargeted {approach_side} "
