@@ -1138,9 +1138,13 @@ class double_jump:
 
 
 class Aerial:
-    def __init__(self, intercept_time, targets=None, fast_aerial=True):
+    def __init__(
+        self, intercept_time, targets=None, fast_aerial=True,
+        single_jump_shot=False
+    ):
         self.intercept_time = intercept_time
         self.fast_aerial = fast_aerial
+        self.single_jump_shot = bool(single_jump_shot)
         self.targets = targets
         self.shot_vector = None
         self.target = None
@@ -1167,6 +1171,9 @@ class Aerial:
     def update(self, shot):
         self.intercept_time = shot.intercept_time
         self.fast_aerial = shot.fast_aerial
+        self.single_jump_shot = getattr(
+            shot, "single_jump_shot", self.single_jump_shot
+        )
         self.targets = shot.targets
 
     @staticmethod
@@ -1624,9 +1631,24 @@ class Aerial:
         )
         return best
 
+    def _launch_candidate(self, agent, time_remaining, turn_first=False):
+        if self.single_jump_shot:
+            return self._party_cannon_aerial_candidate(
+                agent,
+                self.target,
+                time_remaining,
+                False,
+                turn_first=turn_first
+            )
+        return self._party_cannon_best_aerial_candidate(
+            agent, self.target, time_remaining, turn_first=turn_first
+        )
+
     def _commit_aerial_launch(self, agent, candidate):
         self.aerial_committed = True
-        self.jump_type_fast = candidate["double_jump"]
+        self.jump_type_fast = (
+            False if self.single_jump_shot else candidate["double_jump"]
+        )
         self.double_jump_time = None
         self.counter = 0
         self.double_jump_complete = False
@@ -1660,7 +1682,9 @@ class Aerial:
         if self.aerial_committed:
             return True
 
-        if self.target is None or self.target.z <= 300.0:
+        if self.target is None or (
+            self.target.z <= 300.0 and not self.single_jump_shot
+        ):
             target_z = 0.0 if self.target is None else self.target.z
             print(
                 f"[AERIAL REJECT] contact target too low z={target_z:.0f} "
@@ -1673,8 +1697,8 @@ class Aerial:
 
         car = agent.me
         if car.airborne:
-            candidate = self._party_cannon_best_aerial_candidate(
-                agent, self.target, time_remaining, turn_first=False
+            candidate = self._launch_candidate(
+                agent, time_remaining, turn_first=False
             )
             if candidate is None:
                 print(
@@ -1702,8 +1726,8 @@ class Aerial:
             )
 
         if self.immediate_launch:
-            candidate = self._party_cannon_best_aerial_candidate(
-                agent, self.target, time_remaining, turn_first=False
+            candidate = self._launch_candidate(
+                agent, time_remaining, turn_first=False
             )
             if candidate is None:
                 print(
@@ -1717,8 +1741,8 @@ class Aerial:
             self._commit_aerial_launch(agent, candidate)
             return True
 
-        turn_candidate = self._party_cannon_best_aerial_candidate(
-            agent, self.target, time_remaining, turn_first=True
+        turn_candidate = self._launch_candidate(
+            agent, time_remaining, turn_first=True
         )
         if turn_candidate is None:
             print(
@@ -2168,7 +2192,11 @@ class Aerial:
 
         # Side-wall setup is part of Aerial itself. It can drive up from the
         # floor or continue climbing when already attached to that side wall.
-        if not self.jumping and not self.aerial_committed:
+        if (
+            not self.single_jump_shot
+            and not self.jumping
+            and not self.aerial_committed
+        ):
             if self._run_side_wall_takeoff(agent, T):
                 return
 
@@ -2263,7 +2291,7 @@ class Aerial:
 
         fast_pitchback = False
         if (
-            self.jump_type_fast
+            (self.jump_type_fast or self.single_jump_shot)
             and self.jumping
             and 0.02 <= jump_elapsed <= 0.16
             and T > 0.30
@@ -2406,7 +2434,14 @@ class Aerial:
         # Party Cannon's forward-projection boost controller. Boost only
         # when the nose is aligned with the full 3D contact offset and the
         # required forward acceleration is high enough to justify it.
-        if fast_pitchback and agent.me.boost > 0:
+        if self.single_jump_shot:
+            # This shot is deliberately a continuous-boost, single-jump
+            # aerial. Do not feather boost based on forward projection.
+            agent.controller.boost = (
+                T > 0 and agent.me.boost > 0 and not self.dodging
+            )
+            agent.controller.throttle = 1
+        elif fast_pitchback and agent.me.boost > 0:
             agent.controller.boost = True
             agent.controller.throttle = 1
         elif T > 0 and delta_x.magnitude() > 1:
@@ -2444,9 +2479,41 @@ class Aerial:
         elif (self.ceiling and self.target.dist(agent.me.location) < 92 + agent.me.hitbox.length and not agent.me.doublejumped and agent.me.location.z < agent.ball.location.z + 92 and self.target.y * side(agent.team) > -4240) or (not self.ceiling and not agent.me.doublejumped and T < 0.1):
             agent.dbg_2d("Flipping")
             local_target = agent.me.local_location(self.target).flatten().normalize()
+            if self.single_jump_shot:
+                # Align the dodge impulse with the predicted outgoing shot
+                # vector so the front flip drives through the selected face.
+                local_shot = agent.me.local(
+                    self.shot_vector
+                ).flatten().normalize()
+                if local_shot.magnitude() > 0.001:
+                    local_target = local_shot
+                agent.controller.roll = 0.0
+                if not getattr(self, "_shot_flip_logged", False):
+                    self._shot_flip_logged = True
+                    print(
+                        f"[AERIAL JUMP SHOT FLIP] "
+                        f"local=({local_target.x:.2f},"
+                        f"{local_target.y:.2f}) T={T:.3f}",
+                        flush=True
+                    )
             agent.controller.pitch = -local_target.x
             agent.controller.yaw = local_target.y
             agent.controller.jump = True
+
+class AerialJumpShot(Aerial):
+    """
+    Fast aerial-style goal shot using one jump, a pitch-back launch,
+    continuous boost, 3D contact tracking, and a forward shot-vector dodge.
+    """
+
+    def __init__(self, intercept_time, targets=None):
+        super().__init__(
+            intercept_time,
+            targets=targets,
+            fast_aerial=False,
+            single_jump_shot=True
+        )
+
 
 class half_flip:
     """
