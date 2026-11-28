@@ -4679,6 +4679,95 @@ class jump_shot:
         )
         return local_shot_direction, hold_s, controls
 
+    def _calculate_dodge_direction(self, agent, local_ball, T):
+        """
+        Choose the dodge impulse from the actual ball/car centreline offset.
+
+        A front flip is legal only when the ball is genuinely on the car's
+        centreline. Otherwise compare a diagonal and a pure lateral dodge by
+        predicting the post-impact shot direction with each dodge impulse.
+        """
+        local_xy = Vector(local_ball.x, local_ball.y, 0)
+        if local_xy.magnitude() < 1:
+            return Vector(x=1), "front", 0.0, 0.0
+
+        lateral_error = abs(local_xy.y)
+        longitudinal = max(abs(local_xy.x), 1.0)
+        lateral_ratio = lateral_error / longitudinal
+        side_sign = 1 if local_xy.y >= 0 else -1
+
+        centreline_tolerance = max(32.0, longitudinal * 0.10)
+        genuinely_centred = lateral_error <= centreline_tolerance
+
+        candidates = []
+        if genuinely_centred:
+            candidates.append((Vector(x=1), "front"))
+        else:
+            # A diagonal dodge carries both forward and lateral impulse.
+            diagonal = Vector(
+                longitudinal,
+                side_sign * lateral_error,
+                0
+            ).normalize()
+            candidates.append((diagonal, "diagonal"))
+
+            # A pure side dodge is considered when the ball is more beside
+            # the car than ahead of it. It is not used for a small offset.
+            if lateral_ratio >= 0.70:
+                candidates.append((
+                    Vector(0, side_sign, 0),
+                    "side"
+                ))
+
+        forward = agent.me.forward.normalize()
+        right = agent.me.up.cross(forward).normalize()
+        impulse = float(dodge_impulse(agent))
+        desired_direction = self.shot_vector.flatten().normalize()
+        current_speed = agent.me.velocity
+
+        best = None
+        for local_direction, label in candidates:
+            world_direction = (
+                forward * local_direction.x
+                + right * local_direction.y
+            ).normalize()
+            predicted_car_velocity = (
+                current_speed + world_direction * impulse
+            )
+
+            predicted_shot = self._contact_aim._party_cannon_shot_direction(
+                agent,
+                self.ball_location,
+                self.ball_velocity,
+                T,
+                car_final_velocity=predicted_car_velocity,
+                shot_target_override=self.goal_aim_point
+            ).flatten().normalize()
+
+            shot_alignment = (
+                predicted_shot.dot(desired_direction)
+                if predicted_shot.magnitude() > 0.001
+                else -1.0
+            )
+            contact_alignment = local_direction.dot(
+                local_xy.normalize()
+            )
+
+            # The shot path is the main objective; the second term ensures
+            # the dodge impulse actually drives through the ball's side.
+            score = shot_alignment * 0.85 + contact_alignment * 0.15
+            if best is None or score > best[0]:
+                best = (
+                    score,
+                    local_direction,
+                    label,
+                    shot_alignment,
+                    contact_alignment
+                )
+
+        _, direction, label, shot_alignment, contact_alignment = best
+        return direction, label, shot_alignment, contact_alignment
+
     def update(self, shot):
         self.intercept_time = shot.intercept_time
         self.targets = shot.targets
@@ -5062,16 +5151,24 @@ class jump_shot:
                 and dodge_window_open
                 and local_target.x > 0
             ):
-                dodge_direction = (
-                    local_ball.normalize()
-                    if local_ball.magnitude() > 1
-                    else Vector(x=1)
+                (
+                    dodge_direction,
+                    dodge_type,
+                    predicted_alignment,
+                    contact_alignment
+                ) = self._calculate_dodge_direction(
+                    agent, local_ball, T
                 )
                 self.dodge_direction = dodge_direction
                 self.counter = 4
                 agent.last_flip_time = agent.time
                 print(
-                    f"[RUST JUMP SHOT] forward dodge "
+                    f"[JUMP SHOT DODGE] type={dodge_type} "
+                    f"impulse=({dodge_direction.x:.2f},"
+                    f"{dodge_direction.y:.2f}) "
+                    f"ball_local=({local_ball.x:.1f},{local_ball.y:.1f}) "
+                    f"shot_alignment={predicted_alignment:.3f} "
+                    f"contact_alignment={contact_alignment:.3f} "
                     f"elapsed={jump_elapsed:.3f} "
                     f"distance={contact_distance:.1f} T={T:.3f}",
                     flush=True
