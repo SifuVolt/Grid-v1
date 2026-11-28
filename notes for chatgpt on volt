@@ -1015,3 +1015,16 @@ This file is the project handoff and change checklist. Read it before every code
 - Source commits: `9c772aedd5a4c58094d5822428bc89e2a0ee20a5`, `5ac2fef6db65d347929963efa16f1761fa6e7346`, and `e5a15f189c86a2b726f41aeb3cbbc16d208945b6`.
 - No local compile or in-game test has been run for this change. Treat the contact margin as an initial value to validate from actual misses/touches.
 - Launcher caveat remains: root `rlbot.toml` loads `src/bot.toml`, which runs Noob Black. These edits are in Volt's separate `instructions for chatgpt on volt` / `routines of volt` code path and will not be exercised by the root launcher unless the user selects the Volt config/entrypoint.
+
+
+## 17. King JumpShot replacement in Volt — 2026-11-29
+
+- User reported that the previous aerial change made wall aerial takeoffs noticeably faster; preserve that aerial work.
+- Replaced Volt's former `jump_shot` routine body with a Python/VirxERLU adaptation of King's `RedUtils/Actions/JumpShot.cs` from the `king-v5` port.
+- Ported King's shot-direction/impact prediction, 165-unit approach target, surface-aware shot-angle and dodge-angle correction, jump-time equation, seam avoidance, pre-jump reachability gate, 0.2-second target refresh, jump hold/release sequence, hitbox-touch test, and directional dodge choice.
+- Kept the routine class name and constructor/update interface as `jump_shot(intercept_time, targets)`, so Volt's existing `tools.find_shot` selection and teamplay ownership paths still select it without a separate routing change.
+- RedUtils `Arrive` and `Drive` are not direct VirxERLU equivalents. The approach controller is adapted to Volt's `defaultDrive` and a local ETA estimate; drivable surface selection is a compact ground/four-wall plane model, not RedUtils' full arena mesh. Do not describe this as a byte-for-byte or fully exact RedUtils port.
+- The jump sequence now uses King's first-jump hold timing, 3-frame release, hitbox-based contact readiness, and direction selection before invoking Volt's existing `flip` routine. Once launched, the intercept is locked against refreshed shot updates.
+- The prior custom Volt jump-shot side-mode/contact-face/shot-patience logic was removed from this routine. Ground shot, double jump, aerial, wall approach selection, and teamplay decision paths were not intentionally changed.
+- Commits: `70b11c16e2de677f76e63a9afb8f89959ed9a713` (replacement), `b7b5ed9604d291fdc375835878e11810a3b1c410` (live-gravity and axis compatibility), `c7e99f3d5dcfdc395d72edbe986e0dfa7c0d2ff8` (lock approach vector/state), and `a4f3621e12b89067a1a762b37d036612a9cf6268` (scope lock to jump_shot only).
+- Static source inspection only. No Python compile or in-game test has been run. The first test should specifically check ground jump-shot approach timing, wall-adjacent jump shots, contact rate, and whether the dodge fires only after the hitbox reaches the ball.
