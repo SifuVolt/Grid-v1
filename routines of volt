@@ -4679,95 +4679,6 @@ class jump_shot:
         )
         return local_shot_direction, hold_s, controls
 
-    def _calculate_dodge_direction(self, agent, local_ball, T):
-        """
-        Choose the dodge impulse from the actual ball/car centreline offset.
-
-        A front flip is legal only when the ball is genuinely on the car's
-        centreline. Otherwise compare a diagonal and a pure lateral dodge by
-        predicting the post-impact shot direction with each dodge impulse.
-        """
-        local_xy = Vector(local_ball.x, local_ball.y, 0)
-        if local_xy.magnitude() < 1:
-            return Vector(x=1), "front", 0.0, 0.0
-
-        lateral_error = abs(local_xy.y)
-        longitudinal = max(abs(local_xy.x), 1.0)
-        lateral_ratio = lateral_error / longitudinal
-        side_sign = 1 if local_xy.y >= 0 else -1
-
-        centreline_tolerance = max(32.0, longitudinal * 0.10)
-        genuinely_centred = lateral_error <= centreline_tolerance
-
-        candidates = []
-        if genuinely_centred:
-            candidates.append((Vector(x=1), "front"))
-        else:
-            # A diagonal dodge carries both forward and lateral impulse.
-            diagonal = Vector(
-                longitudinal,
-                side_sign * lateral_error,
-                0
-            ).normalize()
-            candidates.append((diagonal, "diagonal"))
-
-            # A pure side dodge is considered when the ball is more beside
-            # the car than ahead of it. It is not used for a small offset.
-            if lateral_ratio >= 0.70:
-                candidates.append((
-                    Vector(0, side_sign, 0),
-                    "side"
-                ))
-
-        forward = agent.me.forward.normalize()
-        right = agent.me.up.cross(forward).normalize()
-        impulse = float(dodge_impulse(agent))
-        desired_direction = self.shot_vector.flatten().normalize()
-        current_speed = agent.me.velocity
-
-        best = None
-        for local_direction, label in candidates:
-            world_direction = (
-                forward * local_direction.x
-                + right * local_direction.y
-            ).normalize()
-            predicted_car_velocity = (
-                current_speed + world_direction * impulse
-            )
-
-            predicted_shot = self._contact_aim._party_cannon_shot_direction(
-                agent,
-                self.ball_location,
-                self.ball_velocity,
-                T,
-                car_final_velocity=predicted_car_velocity,
-                shot_target_override=self.goal_aim_point
-            ).flatten().normalize()
-
-            shot_alignment = (
-                predicted_shot.dot(desired_direction)
-                if predicted_shot.magnitude() > 0.001
-                else -1.0
-            )
-            contact_alignment = local_direction.dot(
-                local_xy.normalize()
-            )
-
-            # The shot path is the main objective; the second term ensures
-            # the dodge impulse actually drives through the ball's side.
-            score = shot_alignment * 0.85 + contact_alignment * 0.15
-            if best is None or score > best[0]:
-                best = (
-                    score,
-                    local_direction,
-                    label,
-                    shot_alignment,
-                    contact_alignment
-                )
-
-        _, direction, label, shot_alignment, contact_alignment = best
-        return direction, label, shot_alignment, contact_alignment
-
     def update(self, shot):
         self.intercept_time = shot.intercept_time
         self.targets = shot.targets
@@ -4890,10 +4801,9 @@ class jump_shot:
         self.wall_shot_active = wall_normal is not None
         self.wall_shot_normal = wall_normal
 
-        # Preserve the original hitbox-aware contact calculation. This chooses
-        # the car-centre position from the actual rotated hitbox offset and
-        # the intended ball-surface contact point; ground_shot's staging
-        # approach is applied separately below and must not replace this.
+        # Use the actual hitbox length and rotated local hitbox offset.
+        # The car reference point is placed behind the ball so the front of
+        # the hitbox reaches the 92.75-unit ball contact surface.
         self.offset_target = self._contact_aim._party_cannon_hitbox_target(
             agent, self.ball_location, self.shot_vector
         )
@@ -4910,38 +4820,20 @@ class jump_shot:
         # ------------------------- GROUND APPROACH -------------------------
         if not self.jumping:
             t_j = T - self.needed_jump_time * 1.15
-
-            # Use the same temporary flank approach as ground_shot. This is
-            # only a drive/setup point: the true contact target above remains
-            # fixed, and the flank offset fades out as jump time approaches.
-            drive_target = self.offset_target.copy().flatten()
-            if self.targets is not None and t_j > 0:
-                drive_target = _shot_approach_target(
-                    agent,
-                    self.ball_location,
-                    drive_target,
-                    self.shot_vector,
-                    t_j
-                )
-
-            final_target = cap_in_field(agent, drive_target)
+            final_target = self.offset_target.copy().flatten()
+            distance_remaining = agent.me.location.flat_dist(final_target)
+            final_target = cap_in_field(agent, final_target)
             local_final_target = agent.me.local_location(final_target)
             angle_to_target = abs(
                 math.atan2(local_final_target.y, local_final_target.x)
             )
 
-            contact_distance_remaining = (
-                self.offset_target.flat_dist(agent.me.location)
-            )
-            drive_distance_remaining = (
-                final_target.flat_dist(agent.me.location)
-            )
-            distance_remaining = (
-                max(contact_distance_remaining, drive_distance_remaining)
-                - agent.me.hitbox.length / 3
-            )
-
             vf = agent.me.velocity + agent.gravity * T
+            if agent.me.airborne:
+                distance_remaining = agent.me.local_location(
+                    self.offset_target.flatten()
+                ).x
+            distance_remaining -= agent.me.hitbox.length / 3
             speed_required = distance_remaining / time_remaining
             ball_speed_toward_shot = agent.ball.velocity.dot(self.shot_vector)
 
@@ -4990,7 +4882,7 @@ class jump_shot:
                 tuple(agent.gravity),
                 agent.me.get_raw(agent),
                 self.offset_target.z,
-                tuple((self.offset_target - agent.me.location).normalize()),
+                tuple((final_target - agent.me.location).normalize()),
                 distance_remaining
             )
 
@@ -5170,24 +5062,16 @@ class jump_shot:
                 and dodge_window_open
                 and local_target.x > 0
             ):
-                (
-                    dodge_direction,
-                    dodge_type,
-                    predicted_alignment,
-                    contact_alignment
-                ) = self._calculate_dodge_direction(
-                    agent, local_ball, T
+                dodge_direction = (
+                    local_ball.normalize()
+                    if local_ball.magnitude() > 1
+                    else Vector(x=1)
                 )
                 self.dodge_direction = dodge_direction
                 self.counter = 4
                 agent.last_flip_time = agent.time
                 print(
-                    f"[JUMP SHOT DODGE] type={dodge_type} "
-                    f"impulse=({dodge_direction.x:.2f},"
-                    f"{dodge_direction.y:.2f}) "
-                    f"ball_local=({local_ball.x:.1f},{local_ball.y:.1f}) "
-                    f"shot_alignment={predicted_alignment:.3f} "
-                    f"contact_alignment={contact_alignment:.3f} "
+                    f"[RUST JUMP SHOT] forward dodge "
                     f"elapsed={jump_elapsed:.3f} "
                     f"distance={contact_distance:.1f} T={T:.3f}",
                     flush=True
