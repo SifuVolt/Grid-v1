@@ -9,3 +9,5 @@ This is a standalone RLBot v5 C# port of CodeRed's King bot.
 - RLBot v5 entrypoint: `bot.toml`.
 
 The `Recovered` folder is reference-only decompilation output. The runnable v5 bot is in `Bot`, with the utility project in `RedUtils`.
+
+CI compiles the v5 project with .NET 8 on branch updates.
