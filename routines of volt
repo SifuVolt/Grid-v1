@@ -4819,18 +4819,44 @@ class jump_shot:
 
         if hold_s:
             agent.controller.pitch = 1
-            yaw_command = agent.controller.yaw
-            if abs(yaw_command) > 0.08:
-                agent.controller.roll = -0.20 * sign(yaw_command)
-            else:
-                agent.controller.roll = 0
 
+        # Jump shots use yaw (A/D) and pitch only. Never add air-roll
+        # corrections; they rotate the hitbox away from the selected face.
+        agent.controller.roll = 0.0
         controls = (
-            agent.controller.roll,
+            0.0,
             agent.controller.pitch,
             agent.controller.yaw
         )
         return local_shot_direction, hold_s, controls
+
+    def _set_jump_shot_aerial_orientation(self, agent):
+        """
+        Aerial-style 3D nose tracking for elevated single-jump contacts.
+
+        Aim the front hitbox at the selected ball-surface contact point while
+        keeping world-up as the roll reference. Roll is disabled deliberately;
+        yaw (A/D) and pitch do the full alignment.
+        """
+        contact_point = getattr(self, "contact_point", None)
+        if contact_point is None:
+            contact_point = (
+                self.ball_location - self.shot_vector * 92.75
+            )
+
+        contact_direction = contact_point - agent.me.location
+        if contact_direction.magnitude() < 1.0:
+            contact_direction = self.ball_location - agent.me.location
+
+        local_contact_direction = agent.me.local(contact_direction)
+        local_world_up = agent.me.local(Vector(z=1))
+        defaultPD(
+            agent,
+            local_contact_direction,
+            up=local_world_up
+        )
+        agent.controller.roll = 0.0
+        return local_contact_direction
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -6007,14 +6033,14 @@ class side_shot(jump_shot):
             d_direction = delta_x.normalize()
 
             # ORIENT THE NOSE DURING THE EXISTING JUMP WINDOW.
-            # First steer toward the ball's horizontal position, then use S
-            # (positive pitch) to raise the nose when the ball is airborne
-            # and above the car. This adds no waiting phase and leaves the
-            # existing counter-3 dodge trigger intact.
+            # Elevated contacts switch to the same 3D target-tracking style
+            # used by Aerial after the first jump impulse. This lets the car
+            # pitch/yaw onto a higher contact before the final power flip.
+            # All jump-shot paths keep roll at zero.
             if self.counter < 3 and not self.dodging:
+                hold_s = False
                 if self.side_mode and self.side_forward_world is not None:
-                    # Keep the chassis perpendicular through takeoff; the
-                    # existing S-tilt is retained for an airborne ball.
+                    # Keep the chassis perpendicular through takeoff.
                     local_side_forward = agent.me.local(
                         self.side_forward_world
                     ).flatten()
@@ -6026,17 +6052,23 @@ class side_shot(jump_shot):
                     )
                     if hold_s:
                         agent.controller.pitch = 1
-                        agent.controller.roll = (
-                            -0.20 * sign(agent.controller.yaw)
-                            if abs(agent.controller.yaw) > 0.08 else 0.0
-                        )
                     local_shot_direction = local_side_forward
+                elif (
+                    not self.quick_shot
+                    and jump_elapsed >= 0.04
+                    and self.ball_location.z > agent.me.location.z + 65
+                ):
+                    local_shot_direction = (
+                        self._set_jump_shot_aerial_orientation(agent)
+                    )
+                    hold_s = True
                 else:
-                    # Ordinary nose-first jump shots retain their exact
-                    # existing orientation controller.
                     local_shot_direction, hold_s, _ = (
                         self._set_jump_shot_orientation(agent)
                     )
+
+                # No Q/E or roll-axis correction during a jump shot.
+                agent.controller.roll = 0.0
 
                 if not self._orientation_logged:
                     print(
@@ -6121,10 +6153,36 @@ class side_shot(jump_shot):
                         if dodge_side == 0:
                             dodge_side = self.side_flip_y
                         dodge_direction = Vector(y=dodge_side)
-                    elif local_ball_for_dodge.magnitude() > 1:
-                        dodge_direction = local_ball_for_dodge.normalize()
                     else:
-                        dodge_direction = Vector(x=1)
+                        local_shot_for_dodge = agent.me.local(
+                            self.shot_vector
+                        ).flatten()
+                        if (
+                            local_shot_for_dodge.magnitude() > 0.001
+                            and local_shot_for_dodge.x > 0.05
+                        ):
+                            # Use the planned outgoing shot direction for the
+                            # final dodge. This puts the flip impulse behind
+                            # the intended ball trajectory instead of merely
+                            # chasing the ball's current screen-space offset.
+                            dodge_direction = (
+                                local_shot_for_dodge.normalize()
+                            )
+                        elif local_ball_for_dodge.magnitude() > 1:
+                            dodge_direction = (
+                                local_ball_for_dodge.normalize()
+                            )
+                        else:
+                            dodge_direction = Vector(x=1)
+
+                        print(
+                            f"[JUMP SHOT POWER FLIP] "
+                            f"shot_local=({local_shot_for_dodge.x:.2f},"
+                            f"{local_shot_for_dodge.y:.2f}) "
+                            f"dodge=({dodge_direction.x:.2f},"
+                            f"{dodge_direction.y:.2f})",
+                            flush=True
+                        )
 
                     agent.controller.pitch = -dodge_direction.x
                     agent.controller.yaw = dodge_direction.y
