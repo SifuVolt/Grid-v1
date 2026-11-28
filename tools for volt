@@ -1675,10 +1675,9 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
     if (
         best_shot["shot_type"] == 1
         and can_jump
-        and agent.boost_amount == "unlimited" or (
-            best_shot["shot_type"] == 1
-            and can_jump
-            and agent.me.boost >= 12
+        and (
+            agent.boost_amount == "unlimited"
+            or agent.me.boost >= 12
         )
     ):
         if best_targets is not None:
