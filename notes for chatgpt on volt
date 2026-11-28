@@ -960,3 +960,12 @@ This file is the project handoff and change checklist. Read it before every code
 - The agent decision path must not cancel this follow-through because a refreshed opponent-distance check rejects the shot, a teammate opportunity asks it to yield, or a defensive aerial is suggested. Normal opponent-distance and teammate-yield decisions still apply before the dodge is committed.
 - Once the follow-through expires, the existing recovery routine resumes. No changes are made to pre-contact jump-shot launch timing, shot vector, or dodge direction.
 - This is a code-level timing guard and has not yet been compiled or tested in Rocket League. Tune the 0.60-second window only from in-game evidence.
+
+
+## 23. Jump-shot roll removal and elevated 3D alignment (2026-11-28)
+
+- Jump-shot and side-shot steering no longer commands air roll. Roll is forced to zero throughout the pre-dodge jump controller; yaw (A/D) and pitch remain active.
+- For elevated non-quick jump shots, after the first jump impulse the controller switches to Aerial-style 3D PD tracking toward the selected ball-surface contact point, using world-up as the orientation reference. This is intended to improve vertical contact alignment without rolling the hitbox.
+- At the final normal jump-shot dodge, the directional flip is calculated from the planned outgoing shot vector in car-local coordinates when that direction is in the forward hemisphere; otherwise it falls back to the ball direction. Side-shot lateral flips remain unchanged.
+- The shot finder now sparsely tests high slices (above 350 uu, within 3 s) with the single-jump-only C reachability parser when its combined parser selected an aerial. It may choose the jump shot when the jump-only candidate is reachable and its score is within 0.05 of the aerial candidate. The C parser remains the reachability authority; this does not invent extra jump height.
+- No compile, simulation, or in-game test has been run.
