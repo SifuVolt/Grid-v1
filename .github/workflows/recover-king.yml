@@ -1,0 +1,47 @@
+name: Recover King CSharp source
+
+on:
+  push:
+    branches:
+      - king-v5
+    paths:
+      - ".github/workflows/recover-king.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  decompile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout King v5 branch
+        uses: actions/checkout@v4
+        with:
+          ref: king-v5
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Download original King assemblies
+        run: |
+          mkdir -p King/Recovered
+          curl -fL "https://raw.githubusercontent.com/RLBot/RLBotPack/master/RLBotPack/King/Bot.dll" -o /tmp/King.Bot.dll
+          curl -fL "https://raw.githubusercontent.com/RLBot/RLBotPack/master/RLBotPack/King/RedUtils.dll" -o /tmp/King.RedUtils.dll
+
+      - name: Decompile King strategy assembly
+        run: |
+          dotnet tool install ilspycmd --tool-path /tmp/ilspy
+          /tmp/ilspy/ilspycmd /tmp/King.Bot.dll > King/Recovered/King.decompiled.cs
+          test -s King/Recovered/King.decompiled.cs
+
+      - name: Commit recovered source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add King/Recovered/King.decompiled.cs
+          if ! git diff --cached --quiet; then
+            git commit -m "Recover King bot logic from published assembly"
+            git push origin HEAD:king-v5
+          fi
