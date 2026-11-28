@@ -5968,13 +5968,14 @@ class side_contact_jump_shot:
 
         # The car's nose is perpendicular to the desired ball impulse.
         left_of_shot = Vector(-direction.y, direction.x, 0).normalize()
-        current_forward = agent.me.forward.flatten().normalize()
-        if current_forward.dot(left_of_shot) >= current_forward.dot(-left_of_shot):
-            self.desired_forward = left_of_shot
-            self.flip_direction = -1
-        else:
-            self.desired_forward = -left_of_shot
-            self.flip_direction = 1
+        if self.desired_forward is None:
+            current_forward = agent.me.forward.flatten().normalize()
+            if current_forward.dot(left_of_shot) >= current_forward.dot(-left_of_shot):
+                self.desired_forward = left_of_shot
+                self.flip_direction = -1
+            else:
+                self.desired_forward = -left_of_shot
+                self.flip_direction = 1
 
         car_right = Vector(
             -self.desired_forward.y, self.desired_forward.x, 0
@@ -6039,20 +6040,21 @@ class side_contact_jump_shot:
             if self.goal_aim_point is None:
                 self.goal_aim_point = _relative_goal_aim_point(agent, self.targets)
 
-            goal_direction = (
-                self.goal_aim_point - self.ball_location
-            ).flatten().normalize()
-            predicted_direction = (
-                self.contact_aim._party_cannon_shot_direction(
-                    agent, self.ball_location, self.ball_velocity, T
-                )
-            ).flatten().normalize()
-            if goal_direction.magnitude() > 0.001 and predicted_direction.magnitude() > 0.001:
-                self.planned_shot_direction = (
-                    goal_direction * 0.70 + predicted_direction * 0.30
-                ).normalize()
-            else:
-                self.planned_shot_direction = goal_direction
+            if self.planned_shot_direction is None:
+                goal_direction = (
+                    self.goal_aim_point - self.ball_location
+                ).flatten().normalize()
+                predicted_direction = (
+                    self.contact_aim._party_cannon_shot_direction(
+                        agent, self.ball_location, self.ball_velocity, T
+                    )
+                ).flatten().normalize()
+                if goal_direction.magnitude() > 0.001 and predicted_direction.magnitude() > 0.001:
+                    self.planned_shot_direction = (
+                        goal_direction * 0.70 + predicted_direction * 0.30
+                    ).normalize()
+                else:
+                    self.planned_shot_direction = goal_direction
 
             if not self._build_side_geometry(agent):
                 self._finish(agent, "invalid_side_geometry")
