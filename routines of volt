@@ -4890,14 +4890,49 @@ class jump_shot:
         self.wall_shot_active = wall_normal is not None
         self.wall_shot_normal = wall_normal
 
-        # Use the actual hitbox length and rotated local hitbox offset.
-        # The car reference point is placed behind the ball so the front of
-        # the hitbox reaches the 92.75-unit ball contact surface.
-        self.offset_target = self._contact_aim._party_cannon_hitbox_target(
+        # Port ground_shot's contact geometry: start from its best-shot
+        # standoff and selected surface normal, then compensate for Volt's
+        # actual hitbox centre offset so the same physical face reaches the
+        # 92.75-unit ball surface.
+        hitbox = agent.me.hitbox
+        contact_standoff = 92.75 + float(
+            getattr(hitbox, "length", 118.01)
+        ) * 0.5
+        hitbox_target = self._contact_aim._party_cannon_hitbox_target(
             agent, self.ball_location, self.shot_vector
         )
+        nominal_hitbox_target = (
+            self.ball_location - self.shot_vector * contact_standoff
+        )
+        hitbox_offset_correction = hitbox_target - nominal_hitbox_target
+
+        ground_contact_target = (
+            self.ball_location
+            - self.shot_vector * agent.best_shot_value
+        )
+        self.offset_target = (
+            ground_contact_target + hitbox_offset_correction
+        )
+
+        contact_label = getattr(self, "contact_label", None)
+        refreshed_contact = _contact_approach_from_label(
+            self.ball_location,
+            self.shot_vector,
+            contact_label,
+            agent.best_shot_value
+        )
+        if refreshed_contact is not None:
+            self.offset_target = (
+                refreshed_contact + hitbox_offset_correction
+            )
+
         self.contact_approach_target = self.offset_target.copy()
-        self.contact_point = self.ball_location - self.shot_vector * 92.75
+        self.contact_normal = (
+            self.offset_target - self.ball_location
+        ).normalize()
+        self.contact_point = (
+            self.ball_location + self.contact_normal * 92.75
+        )
 
         local_ball = agent.me.local_location(self.ball_location).flatten()
         local_target = agent.me.local_location(self.offset_target).flatten()
@@ -4909,20 +4944,38 @@ class jump_shot:
         # ------------------------- GROUND APPROACH -------------------------
         if not self.jumping:
             t_j = T - self.needed_jump_time * 1.15
-            final_target = self.offset_target.copy().flatten()
-            distance_remaining = agent.me.location.flat_dist(final_target)
-            final_target = cap_in_field(agent, final_target)
+
+            # Use the same temporary flank approach as ground_shot. This is
+            # only a drive/setup point: the true contact target above remains
+            # fixed, and the flank offset fades out as jump time approaches.
+            drive_target = self.offset_target.copy().flatten()
+            if self.targets is not None and t_j > 0:
+                drive_target = _shot_approach_target(
+                    agent,
+                    self.ball_location,
+                    drive_target,
+                    self.shot_vector,
+                    t_j
+                )
+
+            final_target = cap_in_field(agent, drive_target)
             local_final_target = agent.me.local_location(final_target)
             angle_to_target = abs(
                 math.atan2(local_final_target.y, local_final_target.x)
             )
 
+            contact_distance_remaining = (
+                self.offset_target.flat_dist(agent.me.location)
+            )
+            drive_distance_remaining = (
+                final_target.flat_dist(agent.me.location)
+            )
+            distance_remaining = (
+                max(contact_distance_remaining, drive_distance_remaining)
+                - agent.me.hitbox.length / 3
+            )
+
             vf = agent.me.velocity + agent.gravity * T
-            if agent.me.airborne:
-                distance_remaining = agent.me.local_location(
-                    self.offset_target.flatten()
-                ).x
-            distance_remaining -= agent.me.hitbox.length / 3
             speed_required = distance_remaining / time_remaining
             ball_speed_toward_shot = agent.ball.velocity.dot(self.shot_vector)
 
