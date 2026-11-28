@@ -1672,7 +1672,15 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
     )
 
     side_contact_routine = None
-    if best_shot["shot_type"] == 1 and can_jump:
+    if (
+        best_shot["shot_type"] == 1
+        and can_jump
+        and agent.boost_amount == "unlimited" or (
+            best_shot["shot_type"] == 1
+            and can_jump
+            and agent.me.boost >= 12
+        )
+    ):
         if best_targets is not None:
             side_goal_center = Vector(
                 (best_targets[0][0] + best_targets[1][0]) * 0.5,
@@ -1693,8 +1701,8 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             if side_shot_direction.magnitude() > 0.001 else 1.0
         )
 
-        # Only replace a jump shot when its nose-first behind-the-ball
-        # approach is materially misaligned.
+        # This is a fast alternative only when the normal nose-first
+        # approach is materially misaligned and there is enough time to drive.
         if normal_alignment < 0.72:
             left_of_shot = Vector(
                 -side_shot_direction.y,
@@ -1716,35 +1724,18 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                 best_ball_location
                 - side_shot_direction * side_standoff
             ).flatten()
-            side_waypoint = side_target - desired_forward * 300
-            setup_distance = agent.me.location.flat_dist(side_waypoint)
-            local_waypoint = agent.me.local_location(side_waypoint)
+            setup_distance = agent.me.location.flat_dist(side_target)
+            local_target = agent.me.local_location(side_target)
             travel_angle = abs(math.atan2(
-                local_waypoint.y, local_waypoint.x
+                local_target.y, local_target.x
             ))
-            orientation_angle = math.acos(max(
-                -1.0, min(1.0, current_forward.dot(desired_forward))
-            ))
-            setup_speed = max(
-                900.0,
-                min(
-                    1800.0,
-                    agent.me.velocity.flatten().magnitude() + 500.0
-                )
-            )
+            current_speed = agent.me.velocity.flatten().magnitude()
+            setup_speed = max(1400.0, min(2100.0, current_speed + 700.0))
             setup_time = (
                 setup_distance / setup_speed
-                + travel_angle * 0.30
-                + orientation_angle * 0.18
+                + travel_angle * 0.20
             )
-            needed_jump = virxrlcu.get_jump_time(
-                best_ball_location.z - agent.me.location.z,
-                agent.me.velocity.z,
-                agent.gravity.z
-            )
-            required_time = (
-                setup_time + max(0.22, needed_jump * 0.70) + 0.10
-            )
+            required_time = setup_time + 0.30
             if (
                 time_to_intercept > required_time
                 and abs(side_target.x) < 3900
@@ -1754,9 +1745,10 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                     best_intercept_time, best_targets
                 )
                 print(
-                    f"[SHOT PLANNER] selected side_contact_jump_shot "
-                    f"normal_alignment={normal_alignment:.2f} "
-                    f"setup={setup_time:.2f} required={required_time:.2f} "
+                    f"[SHOT PLANNER] selected FAST side-contact shot "
+                    f"boost={agent.me.boost:.0f} "
+                    f"alignment={normal_alignment:.2f} "
+                    f"drive_eta={setup_time:.2f} "
                     f"T={time_to_intercept:.2f}",
                     flush=True
                 )
