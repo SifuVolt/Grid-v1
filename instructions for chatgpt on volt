@@ -1920,6 +1920,15 @@ class Bot(VirxERLU):
                 "speedflip_kickoff"
             }
 
+            post_contact_lock = (
+                not self.is_clear()
+                and getattr(
+                    self.stack[0], "post_contact_lock_until", -1.0
+                ) > self.time
+            )
+            if post_contact_lock:
+                return
+
             if current_name not in protected:
                 left_post = self.friend_goal.left_post
                 right_post = self.friend_goal.right_post
@@ -2358,6 +2367,14 @@ class Bot(VirxERLU):
                     }
 
                     if current_name in ordinary_shots:
+                        if (
+                            getattr(
+                                self.stack[0],
+                                "post_contact_lock_until",
+                                -1.0
+                            ) > self.time
+                        ):
+                            return
                         self.clear()
 
                         # Announce once when an active routine is actually
@@ -2588,6 +2605,9 @@ class Bot(VirxERLU):
                 and getattr(self, "_opponent_rejected_shot", False)
                 and not self.is_clear()
                 and self.stack[0].__class__.__name__ in active_shot_names
+                and getattr(
+                    self.stack[0], "post_contact_lock_until", -1.0
+                ) <= self.time
             ):
                 print(
                     f"[SHOT CANCEL] opponent reaches first; "
