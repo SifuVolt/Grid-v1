@@ -5743,7 +5743,7 @@ class side_shot(jump_shot):
                 side_ready = (
                     side_setup_distance < 150
                     and forward_alignment > 0.90
-                    and T <= self.needed_jump_time * 1.08
+                    and T <= self.needed_jump_time * 1.08 + 0.18
                 )
 
             if (
