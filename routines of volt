@@ -5908,6 +5908,7 @@ class side_contact_jump_shot:
         self.flip_direction = -1
         self.side_standoff = 0.0
         self.half_height = 0.0
+        self.hitbox_offset_z = 0.0
         self.phase = "approach"
         self.jump_start = None
         self.dodge_start = None
@@ -6007,6 +6008,10 @@ class side_contact_jump_shot:
             self.car_target - self.desired_forward * self.runway
         ).flatten()
         self.half_height = float(getattr(hitbox, "height", 36.16)) * 0.5
+        self.hitbox_offset_z = (
+            float(getattr(local_offset, "z", 0.0))
+            if local_offset is not None else 0.0
+        )
         return True
 
     def run(self, agent: VirxERLU):
@@ -6137,10 +6142,7 @@ class side_contact_jump_shot:
         side_error = abs(side_distance - self.side_standoff)
         longitudinal_error = abs(local_ball.x)
         vertical_error = abs(
-            self.ball_location.z - car.location.z
-            - float(getattr(getattr(car, "hitbox", None), "offset", Vector()).z
-                    if getattr(getattr(car, "hitbox", None), "offset", None) is not None
-                    else 0.0)
+            self.ball_location.z - car.location.z - self.hitbox_offset_z
         )
 
         if self.phase == "jump":
