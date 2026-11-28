@@ -7,7 +7,7 @@ public class AerialShot : Shot
 	{
 		private readonly bool _startedOnGround;
 
-		private readonly int _startBoostAmount;
+		private readonly float _startBoostAmount;
 
 		private bool _currentlyDoubleJumping;
 
