@@ -1286,6 +1286,10 @@ class Aerial:
         self.aerial_launch_debug_time = -1.0
 
     def update(self, shot):
+        # King commits to the jump once launched; do not let a refreshed
+        # candidate reset the locked slice or target during flight.
+        if self.jumped:
+            return
         self.intercept_time = shot.intercept_time
         self.fast_aerial = shot.fast_aerial
         self.targets = shot.targets
