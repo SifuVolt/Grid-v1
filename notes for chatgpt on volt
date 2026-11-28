@@ -910,3 +910,15 @@ This file is the project handoff and change checklist. Read it before every code
 - The shot selector now allows side-contact for both ground-shot and single-jump candidates when the contact selector requests a left/right contact or the normal nose-first approach is materially misaligned. Goal-line side-shot selections in both targeted and untargeted finders now use the same perpendicular side-contact routine instead of the legacy `side_shot` controller.
 - The existing `WallShot.adjust_jump` correction and `wall_approach` / wall-drive systems were deliberately left intact. Normal jump shots still retain the wall-contact correction; side-contact shots bypass it because their side-hit geometry is computed independently.
 - No Python compile, RLBot simulation, or Rocket League in-game test has been run for this correction. Static source checks only; do not describe this as proven in-game.
+
+
+## 17. Jump-shot directional dodge impulse (2026-11-28)
+
+- User reverted the separate perpendicular side-contact routine experiment and requested that the existing jump-shot contact geometry be retained.
+- The base `jump_shot` now chooses its dodge from the actual ball centre's local lateral offset relative to the car. A pure front flip is permitted only when the ball is within a 10% longitudinal centreline tolerance (with a 32 uu minimum tolerance).
+- When the ball is not centred, the controller evaluates a diagonal dodge toward the ball's lateral side. When the ball is substantially beside the car (lateral/longitudinal ratio >= 0.70), it also evaluates a pure left/right side dodge.
+- Candidate dodge directions are transformed from car-local forward/right axes into world space. The existing `dodge_impulse(agent)` magnitude is applied to current car velocity, and Party Cannon's predicted post-contact shot-direction model is run for each candidate. The chosen dodge maximizes predicted alignment with the planned shot vector while also favouring an impulse that drives through the actual ball offset.
+- Controller inputs are derived directly from the selected local impulse: `pitch = -local_x`, `yaw = local_y`. Thus a pure side flip has zero pitch and signed yaw; a diagonal flip has both forward pitch and signed lateral yaw.
+- Existing jump timing, launch reachability, hitbox standoff/contact target, wall correction, and normal aerial orientation remain unchanged. This is a dodge-selection change, not a new side-shot approach routine.
+- Added `[JUMP SHOT DODGE]` diagnostics reporting selected dodge type, local impulse, ball-local offset, predicted shot alignment, and contact alignment.
+- Static GitHub re-fetch verified the method and call site. No Python compile, simulation, or Rocket League in-game test has been run. The local launcher caveat in section 2 still applies.
