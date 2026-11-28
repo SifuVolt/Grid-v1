@@ -1672,14 +1672,7 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
     )
 
     side_contact_routine = None
-    if (
-        best_shot["shot_type"] == 1
-        and can_jump
-        and (
-            agent.boost_amount == "unlimited"
-            or agent.me.boost >= 12
-        )
-    ):
+    if best_shot["shot_type"] == 1 and can_jump:
         if best_targets is not None:
             side_goal_center = Vector(
                 (best_targets[0][0] + best_targets[1][0]) * 0.5,
@@ -1723,22 +1716,24 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                 best_ball_location
                 - side_shot_direction * side_standoff
             ).flatten()
-            setup_distance = agent.me.location.flat_dist(side_target)
-            local_target = agent.me.local_location(side_target)
+            staging_target = (
+                side_target - desired_forward * 650.0
+            ).flatten()
+            setup_distance = agent.me.location.flat_dist(staging_target)
+            local_target = agent.me.local_location(staging_target)
             travel_angle = abs(math.atan2(
                 local_target.y, local_target.x
             ))
             current_speed = agent.me.velocity.flatten().magnitude()
-            setup_speed = max(1400.0, min(2100.0, current_speed + 700.0))
-            setup_time = (
-                setup_distance / setup_speed
-                + travel_angle * 0.20
-            )
-            required_time = setup_time + 0.30
+            setup_speed = max(900.0, min(2300.0, current_speed + 700.0))
+            setup_time = setup_distance / setup_speed + travel_angle * 0.22
+            required_time = setup_time + 0.25
             if (
                 time_to_intercept > required_time
                 and abs(side_target.x) < 3900
                 and abs(side_target.y) < 4900
+                and abs(staging_target.x) < 3900
+                and abs(staging_target.y) < 4900
             ):
                 side_contact_routine = side_contact_jump_shot(
                     best_intercept_time, best_targets
