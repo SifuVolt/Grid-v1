@@ -257,7 +257,7 @@ class Bot(VirxERLU):
             "double_jump",
             "Aerial",
             "Redirect",
-            "side_shot", "side_contact_jump_shot"
+            "side_shot"
         }
         if not self.is_clear() and any(
             routine.__class__.__name__ in active_shot_names
@@ -633,41 +633,35 @@ class Bot(VirxERLU):
         ) < distance and self.ball.velocity.y * side > 250
     def _maybe_ground_carry_cut(self, shot, shot_type):
         """
-        Select a controlled carry after a teammate bump, when only an
-        untargeted ground touch exists, or to catch a reachable descending ball
-        when no direct/untargeted shot candidate is available.
+        Convert a suitable low ground-shot candidate into a short carry/cut.
+
+        Trigger either shortly after a teammate's defender bump, or for a
+        targetless general ground touch when no directional shot was found.
         """
-        if self.me.airborne:
+        if (
+            shot is None
+            or shot.__class__.__name__ != "ground_shot"
+            or self.me.airborne
+        ):
             return shot
 
         now = self.time
         last_bump = getattr(self, "last_defender_bump_time", -999.0)
         bump_trigger = (
-            shot is not None
-            and shot.__class__.__name__ == "ground_shot"
-            and shot_type == "SHOT_FOUND"
+            shot_type == "SHOT_FOUND"
             and now - last_bump <= 1.5
             and last_bump > getattr(
                 self, "ground_carry_cut_bump_used_at", -999.0
             )
         )
         general_trigger = (
-            shot is not None
-            and shot.__class__.__name__ == "ground_shot"
-            and shot_type == "ANY_SHOT_FOUND"
+            shot_type == "ANY_SHOT_FOUND"
             and getattr(shot, "targets", None) is None
             and now >= getattr(
                 self, "ground_carry_cut_cooldown_until", -999.0
             )
         )
-        catch_trigger = (
-            shot is None
-            and shot_type == "ANY_SHOT_FOUND"
-            and now >= getattr(
-                self, "ground_carry_cut_cooldown_until", -999.0
-            )
-        )
-        if not (bump_trigger or general_trigger or catch_trigger):
+        if not (bump_trigger or general_trigger):
             return shot
 
         # In team games, only the elected challenger may turn this into
@@ -682,107 +676,23 @@ class Bot(VirxERLU):
         velocity = self.ball.velocity
         ball_speed = math.hypot(velocity.x, velocity.y)
         ball_depth = ball.y * utils.side(self.team)
-        if ball_depth > 500 or self.defensive_emergency():
+
+        # Keep the carry for a controllable, low, slow ball in the central
+        # field, not an airborne touch, fast clear, or defensive emergency.
+        if (
+            ball.z > 155
+            or abs(velocity.z) > 140
+            or ball_speed > 900
+            or ball_depth > 500
+            or self.me.location.flat_dist(ball) > 1800
+            or self.defensive_emergency()
+        ):
             return shot
 
         live_foes = [
             foe for foe in self.foes
             if not getattr(foe, "demolished", False)
         ]
-
-        if catch_trigger:
-            # Only consider a descending, moderate-speed ball with a predicted
-            # floor contact that the car can reach before it lands.
-            if (
-                ball.z < 155
-                or ball.z > 700
-                or velocity.z >= -50
-                or ball_speed > 1000
-            ):
-                return shot
-
-            prediction = getattr(self, "ball_prediction_struct", None)
-            slices = getattr(prediction, "slices", None) if prediction is not None else None
-            if not slices:
-                return shot
-
-            landing = None
-            for index in range(max(1, round(0.12 * 120)), len(slices)):
-                physics = slices[index].physics
-                if physics.location.z <= 116 and physics.velocity.z < -35:
-                    landing = (
-                        Vector(
-                            physics.location.x,
-                            physics.location.y,
-                            92.75
-                        ),
-                        index / 120.0
-                    )
-                    break
-            if landing is None:
-                return shot
-
-            landing_ball, landing_time = landing
-            goal_direction = (
-                self.foe_goal.location - landing_ball
-            ).flatten().normalize()
-            if goal_direction.magnitude() < 0.001:
-                return shot
-
-            approach_target = landing_ball - goal_direction * (
-                92.75 + float(self.me.hitbox.length) * 0.5
-            )
-            local_target = self.me.local_location(approach_target)
-            distance = self.me.location.flat_dist(approach_target)
-            angle = abs(math.atan2(local_target.y, local_target.x))
-            effective_speed = max(
-                850.0,
-                min(
-                    1900.0,
-                    self.me.velocity.flatten().magnitude() + 550.0
-                )
-            )
-            # Include a turn-in penalty instead of using straight-line ETA.
-            estimated_eta = distance / effective_speed + angle * 0.30
-            if estimated_eta > landing_time + 0.12:
-                return shot
-
-            nearest_foe = min(
-                (
-                    foe.location.flat_dist(landing_ball)
-                    for foe in live_foes
-                ),
-                default=float("inf")
-            )
-            if nearest_foe < 620:
-                return shot
-
-            self.ground_carry_cut_cooldown_until = now + 2.4
-            print(
-                f"[GROUND CARRY SELECT] reason=descending_catch "
-                f"landing_in={landing_time:.2f} eta={estimated_eta:.2f} "
-                f"ball_z={ball.z:.0f} landing=({landing_ball.x:.0f},"
-                f"{landing_ball.y:.0f}) nearest_foe={nearest_foe:.0f}",
-                flush=True
-            )
-            return routines.ground_carry_cut(
-                now + landing_time,
-                None,
-                catch_mode=True,
-                catch_location=landing_ball
-            )
-
-        # Existing carry entry remains restricted to low, slow, controllable
-        # ground contacts. A targeted shot is only replaced after a teammate
-        # defender bump; the general carry remains targetless-only.
-        if (
-            ball.z > 155
-            or abs(velocity.z) > 140
-            or ball_speed > 900
-            or self.me.location.flat_dist(ball) > 1800
-        ):
-            return shot
-
         nearest_foe = min(
             (
                 foe.location.flat_dist(ball)
@@ -824,7 +734,7 @@ class Bot(VirxERLU):
             signed_cross,
             max(-1.0, min(1.0, planned_direction.dot(goal_direction)))
         )
-        if not math.radians(8) <= abs(cut_angle) <= math.radians(100):
+        if not math.radians(12) <= abs(cut_angle) <= math.radians(100):
             return shot
 
         self.ground_carry_cut_cooldown_until = now + 2.4
@@ -833,7 +743,7 @@ class Bot(VirxERLU):
 
         reason = "post_bump" if bump_trigger else "targetless_ground_touch"
         print(
-            f"[GROUND CARRY SELECT] reason={reason} "
+            f"[GROUND CARRY CUT SELECT] reason={reason} "
             f"ball_z={ball.z:.0f} ball_speed={ball_speed:.0f} "
             f"cut={math.degrees(cut_angle):.1f} "
             f"nearest_foe={nearest_foe:.0f}",
@@ -2323,7 +2233,7 @@ class Bot(VirxERLU):
                 "jump_shot",
                 "elevated_shot",
                 "double_jump",
-                "side_shot", "side_contact_jump_shot",
+                "side_shot",
             }
 
             # Keep the existing power clear running.
@@ -2351,7 +2261,7 @@ class Bot(VirxERLU):
             committed_active_shot = active_routine.__class__.__name__ in {
                 "ground_shot",
                 "ground_carry_cut", "jump_shot", "elevated_shot", "double_jump",
-                "Aerial", "Redirect", "side_shot", "side_contact_jump_shot"
+                "Aerial", "Redirect", "side_shot"
             }
 
         # RedUtils AerialShot becomes uninterruptible as soon as its launch
@@ -2441,7 +2351,7 @@ class Bot(VirxERLU):
                         "elevated_shot",
                         "ground_shot",
                         "ground_carry_cut",
-                        "side_shot", "side_contact_jump_shot",
+                        "side_shot",
                         "Aerial",
                         "Redirect",
                         "wall_approach"
@@ -2485,7 +2395,7 @@ class Bot(VirxERLU):
                                 "jump_shot",
                                 "elevated_shot",
                                 "double_jump",
-                                "side_shot", "side_contact_jump_shot",
+                                "side_shot",
                                 "Aerial",
                                 "Redirect"
                             }
@@ -2626,7 +2536,7 @@ class Bot(VirxERLU):
                             "jump_shot",
                             "elevated_shot",
                             "double_jump",
-                            "side_shot", "side_contact_jump_shot",
+                            "side_shot",
                             "Aerial",
                             "Redirect",
                             "wall_approach"
@@ -2671,7 +2581,7 @@ class Bot(VirxERLU):
             active_shot_names = {
                 "ground_shot",
                 "ground_carry_cut", "jump_shot", "elevated_shot",
-                "double_jump", "Aerial", "Redirect", "side_shot", "side_contact_jump_shot"
+                "double_jump", "Aerial", "Redirect", "side_shot"
             }
             if (
                 shot is None
