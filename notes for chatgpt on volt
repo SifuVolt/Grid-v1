@@ -922,3 +922,14 @@ This file is the project handoff and change checklist. Read it before every code
 - Existing jump timing, launch reachability, hitbox standoff/contact target, wall correction, and normal aerial orientation remain unchanged. This is a dodge-selection change, not a new side-shot approach routine.
 - Added `[JUMP SHOT DODGE]` diagnostics reporting selected dodge type, local impulse, ball-local offset, predicted shot alignment, and contact alignment.
 - Static GitHub re-fetch verified the method and call site. No Python compile, simulation, or Rocket League in-game test has been run. The local launcher caveat in section 2 still applies.
+
+
+## 18. Ground-shot geometry ported into jump_shot (2026-11-28)
+
+- The existing jump_shot now uses the same base contact standoff as ground_shot: ball_location - shot_vector * agent.best_shot_value.
+- The base point is corrected by the difference between the actual hitbox-aware target and its nominal ball-radius-plus-half-hitbox-length target. This preserves Volt's rotated hitbox-centre offset while matching ground-shot's chosen standoff.
+- The selected contact label (centre, left, right, high, or low) is rebuilt against the predicted intercept with _contact_approach_from_label, then receives the same hitbox-offset correction. contact_point, contact_normal, and contact_approach_target are refreshed from that final geometry.
+- Before takeoff, jump_shot now uses the same _shot_approach_target flank/staging calculation as ground_shot. The temporary lateral setup point fades to the true contact target as t_j approaches zero. Speed/reachability distance accounts for whichever is farther: the actual contact target or the temporary drive target.
+- Airborne-ball contacts continue to use the predicted ball slice's full 3D location and velocity. The contact selector already scores its high/low normals against the car's 3D position, while jump timing and the in-flight target retain the predicted ball height. No separate airborne-only routine or selector was introduced.
+- The existing S-tilt, jump launch timing, flight controller, wall correction, and directional dodge selection were intentionally left unchanged. The drive/staging target is not substituted for the true in-air contact target.
+- Static re-fetch confirmed the new ground-contact standoff, hitbox correction, contact-label refresh, and shared flank approach. No Python compile, RLBot simulation, or Rocket League in-game test has been run. The local launcher caveat in section 2 still applies.
