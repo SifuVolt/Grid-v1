@@ -131,7 +131,7 @@ public class Shadow : IAction
 		return Field.LimitToNearestSurface((vec + car.Location.Direction(ourGoal) * car.Location.Dist(vec) * 0.8f).Flatten());
 	}
 }
-namespace Bot;
+
 
 public class King : RUBot
 {
