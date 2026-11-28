@@ -952,3 +952,11 @@ This file is the project handoff and change checklist. Read it before every code
 - The follow-up Aerial receives a boost-lock flag. While its follow-up intercept is still ahead and boost remains, it overrides the normal boost-demand gate and keeps boost/throttle on through alignment corrections, preserving forward thrust instead of dropping boost during the handoff.
 - This deliberately spends the remaining boost during the follow-up; it does not reserve boost once the rebound chase is committed. The ordinary Aerial controller and its contact/aim calculations remain responsible for steering to the second touch.
 - This is a first implementation and has not been compiled or tested in Rocket League. Confirm the ball-contact detection, backboard/corner classification, and boost continuity in-game before tuning.
+
+## 21. Jump-shot post-contact flip commitment (2026-11-28)
+
+- When jump_shot (including its side_shot subclass) triggers its forward dodge, it starts a 0.60-second post-contact lock.
+- During that lock, the routine keeps the controller neutral for pitch/yaw/roll/steer, allowing the already-triggered dodge impulse to finish without a later steering decision redirecting the car.
+- The agent decision path must not cancel this follow-through because a refreshed opponent-distance check rejects the shot, a teammate opportunity asks it to yield, or a defensive aerial is suggested. Normal opponent-distance and teammate-yield decisions still apply before the dodge is committed.
+- Once the follow-through expires, the existing recovery routine resumes. No changes are made to pre-contact jump-shot launch timing, shot vector, or dodge direction.
+- This is a code-level timing guard and has not yet been compiled or tested in Rocket League. Tune the 0.60-second window only from in-game evidence.
