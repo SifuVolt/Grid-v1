@@ -5721,6 +5721,11 @@ class side_shot(jump_shot):
                         agent,
                         agent.me.local(self.side_forward_world).flatten()
                     )
+                    # Stop adding drive force once the perpendicular turn
+                    # begins; keep the approach momentum and let the side
+                    # dodge provide the final impulse.
+                    agent.controller.throttle = 0
+                    agent.controller.boost = False
 
             local_offset_target = agent.me.local_location(self.offset_target.flatten())
             local_vf = agent.me.local(vf.flatten())
@@ -5741,7 +5746,7 @@ class side_shot(jump_shot):
                     self.side_setup_target
                 )
                 side_ready = (
-                    side_setup_distance < 150
+                    side_contact_distance < 520
                     and forward_alignment > 0.90
                     and T <= self.needed_jump_time * 1.08 + 0.18
                 )
