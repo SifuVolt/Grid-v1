@@ -924,12 +924,12 @@ This file is the project handoff and change checklist. Read it before every code
 - Static GitHub re-fetch verified the method and call site. No Python compile, simulation, or Rocket League in-game test has been run. The local launcher caveat in section 2 still applies.
 
 
-## 18. Ground-shot geometry ported into jump_shot (2026-11-28)
+## 18. Jump-shot staging geometry with original hitbox contact restored (2026-11-28)
 
-- The existing jump_shot now uses the same base contact standoff as ground_shot: ball_location - shot_vector * agent.best_shot_value.
-- The base point is corrected by the difference between the actual hitbox-aware target and its nominal ball-radius-plus-half-hitbox-length target. This preserves Volt's rotated hitbox-centre offset while matching ground-shot's chosen standoff.
-- The selected contact label (centre, left, right, high, or low) is rebuilt against the predicted intercept with _contact_approach_from_label, then receives the same hitbox-offset correction. contact_point, contact_normal, and contact_approach_target are refreshed from that final geometry.
-- Before takeoff, jump_shot now uses the same _shot_approach_target flank/staging calculation as ground_shot. The temporary lateral setup point fades to the true contact target as t_j approaches zero. Speed/reachability distance accounts for whichever is farther: the actual contact target or the temporary drive target.
-- Airborne-ball contacts continue to use the predicted ball slice's full 3D location and velocity. The contact selector already scores its high/low normals against the car's 3D position, while jump timing and the in-flight target retain the predicted ball height. No separate airborne-only routine or selector was introduced.
-- The existing S-tilt, jump launch timing, flight controller, wall correction, and directional dodge selection were intentionally left unchanged. The drive/staging target is not substituted for the true in-air contact target.
-- Static re-fetch confirmed the new ground-contact standoff, hitbox correction, contact-label refresh, and shared flank approach. No Python compile, RLBot simulation, or Rocket League in-game test has been run. The local launcher caveat in section 2 still applies.
+- The jump-shot ground approach uses the shared _shot_approach_target staging/flank calculation, like ground_shot. The temporary setup point is only a driving target and fades toward the real contact target as jump timing approaches.
+- Approach distance and speed planning account for the farther of the actual contact target and the temporary staging target. Runtime reachability continues to use the actual contact target, not the staging point.
+- The attempted replacement of jump-shot contact geometry with ground_shot's best_shot_value standoff and _contact_approach_from_label refresh reduced accuracy and has been reverted.
+- Restored the original jump-shot contact calculation: _party_cannon_hitbox_target(agent, ball_location, shot_vector), which accounts for the car's actual rotated hitbox-centre offset, plus the original ball surface point ball_location - shot_vector * 92.75.
+- Preserved the existing front-hitbox candidate calculation later in jump_shot. It predicts the impact orientation, evaluates centre/left/right/top/bottom front-face points, and selects the car-centre target that makes the chosen part of the hitbox meet the intended ball surface. This is the contact geometry that must remain authoritative; do not replace it with ground_shot's generic standoff.
+- Preserved the shared staging approach, S-tilt, jump launch timing, wall correction, airborne prediction, and directional dodge selection. The staging target must never overwrite the selected hitbox contact target once the jump/contact geometry is being used.
+- Static re-fetch confirmed the original hitbox-aware target call is restored and the ground-shot staging helper remains. No Python compile, RLBot simulation, or Rocket League in-game test has been run.
