@@ -5,7 +5,7 @@ namespace RedUtils
 {
 public class JumpShot : Shot
 	{
-		private int _lastBoostAmount;
+		private float _lastBoostAmount;
 
 		private readonly float _updateInterval = 0.2f;
 
@@ -144,7 +144,7 @@ public class JumpShot : Shot
 				Vec3 vec3 = location.Direction(Slice.Location);
 				if (!bot.Me.IsGrounded)
 				{
-					bot.AimAt(bot.Me.Location + DodgeDirection, DodgeDirection.Cross(DodgeDirection.Cross(-_jumpedSurface.Normal)).Normalize(), backwards: false, prioritizeForward: false);
+					bot.AimAt(bot.Me.Location + DodgeDirection, DodgeDirection.Cross(DodgeDirection.Cross(-_jumpedSurface.Normal)).Normalize(), backwards: false);
 					bot.Controller.Boost = vec2.Dot(bot.Me.Forward) / num >= 1058.334f * MathF.Max(bot.DeltaTime, 13f / 120f) && vec2.Normalize().Dot(bot.Me.Forward) > 0.25f;
 					bot.Controller.Throttle = ((vec2.Normalize().Dot(bot.Me.Forward) > 0.5f) ? 1 : 0);
 				}
