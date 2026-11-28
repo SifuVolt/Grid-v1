@@ -5003,13 +5003,17 @@ class jump_shot:
         )
         target_height = (target - projected_target).dot(normal)
         shot_angle = math.asin(cap(self.shot_direction.dot(normal), -1, 1))
-        jump_height = cap(target_height - 17, 1, 270)
-        jump_time = max(self._time_to_jump(normal, jump_height, agent.gravity), 0.15)
+        jump_time_for_angle = self._time_to_jump(
+            normal, max(target_height, 100) - 17, agent.gravity
+        )
 
         dodge_angle = min(
             shot_angle + 0.25,
             0.9424779,
-            max(self._predict_rotation(12.46, jump_time) + 0.4, 0.4)
+            max(
+                self._predict_rotation(12.46, jump_time_for_angle) + 0.4,
+                0.4
+            )
         )
         flat_direction = self._flat_norm(self.shot_direction, normal)
         self.shot_direction = (
