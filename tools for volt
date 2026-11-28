@@ -1471,6 +1471,65 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             targets
         )
 
+        # Higher slices are normally labelled as aerials by the combined
+        # parser. Also test the single-jump controller on a sparse 0.10 s
+        # cadence: if the C reachability parser says a jump shot can reach
+        # this elevated contact, prefer it over a similarly good aerial.
+        if (
+            shot.get("found") == 1
+            and int(shot.get("shot_type", -1)) == 3
+            and slice_can_jump
+            and ball_location[2] > 350
+            and time_remaining <= 3.0
+            and round(time_remaining * 60) % 6 == 0
+        ):
+            elevated_jump = _parse_shot_with_boost_budget(
+                agent,
+                virxrlcu.parse_slice_for_shot_with_target,
+                (False, True, False, False),
+                time_remaining,
+                game_info,
+                gravity,
+                ball_info,
+                me,
+                targets
+            )
+            if (
+                elevated_jump.get("found") == 1
+                and int(elevated_jump.get("shot_type", -1)) == 1
+                and useful_non_aerial_shot(
+                    agent,
+                    ball_location,
+                    ball_slice.physics.velocity,
+                    elevated_jump,
+                    intercept_time
+                )
+            ):
+                aerial_score = shot_candidate_score(
+                    agent,
+                    ball_slice,
+                    shot,
+                    time_remaining,
+                    target
+                )
+                elevated_jump_score = shot_candidate_score(
+                    agent,
+                    ball_slice,
+                    elevated_jump,
+                    time_remaining,
+                    target
+                )
+                if elevated_jump_score <= aerial_score + 0.05:
+                    shot = elevated_jump
+                    print(
+                        f"[ELEVATED JUMP SHOT CANDIDATE] "
+                        f"height={ball_location[2]:.0f} "
+                        f"T={time_remaining:.2f} "
+                        f"jump_score={elevated_jump_score:.3f} "
+                        f"aerial_score={aerial_score:.3f}",
+                        flush=True
+                    )
+
         # The threshold applies to the live ball and predicted contact. A
         # later high prediction must not make a grounded ball a fast aerial.
         if (
