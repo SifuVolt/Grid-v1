@@ -1817,27 +1817,41 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             left_of_shot = Vector(
                 -shot_direction.y, shot_direction.x, 0
             ).normalize()
-            lateral_distance = cap(agent.me.location.flat_dist(best_ball_location) * 0.22, 350, 650)
-            side_sign = 1 if approach_side == "right" else -1
-            side_setup = (
-                best_ball_location
-                - left_of_shot * lateral_distance * side_sign
+            current_forward = agent.me.forward.flatten().normalize()
+            desired_forward = (
+                left_of_shot
+                if current_forward.dot(left_of_shot)
+                >= current_forward.dot(-left_of_shot)
+                else -left_of_shot
             )
-            side_setup_distance = agent.me.location.flat_dist(side_setup)
+            side_standoff = (
+                92.75 + float(getattr(agent.me.hitbox, "width", 84.2)) * 0.5
+            )
+            side_target = (
+                best_ball_location - shot_direction * side_standoff
+            ).flatten()
+            staging_target = (
+                side_target - desired_forward * 650.0
+            ).flatten()
+            side_setup_distance = agent.me.location.flat_dist(staging_target)
+            side_setup_local = agent.me.local_location(staging_target)
+            side_turn_angle = abs(math.atan2(
+                side_setup_local.y, side_setup_local.x
+            ))
             side_setup_speed = max(
-                1000,
-                min(1700, agent.me.velocity.flatten().magnitude() + 500)
+                900.0,
+                min(2300.0, agent.me.velocity.flatten().magnitude() + 700.0)
             )
-            side_setup_local = agent.me.local_location(side_setup)
-            side_turn_angle = abs(Vector(x=1).angle2D(side_setup_local))
             side_setup_time = (
                 side_setup_distance / side_setup_speed
-                + side_turn_angle * 0.30
+                + side_turn_angle * 0.22
             )
             if (
-                time_to_intercept > side_setup_time + 0.35
-                and abs(side_setup.x) < 3900
-                and abs(side_setup.y) < 4900
+                time_to_intercept > side_setup_time + 0.25
+                and abs(side_target.x) < 3900
+                and abs(side_target.y) < 4900
+                and abs(staging_target.x) < 3900
+                and abs(staging_target.y) < 4900
             ):
                 routine = side_contact_jump_shot(
                     best_intercept_time, best_targets
@@ -2276,27 +2290,41 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
             left_of_shot = Vector(
                 -shot_direction.y, shot_direction.x, 0
             ).normalize()
-            lateral_distance = cap(agent.me.location.flat_dist(best_ball_location) * 0.22, 350, 650)
-            side_sign = 1 if approach_side == "right" else -1
-            side_setup = (
-                best_ball_location
-                - left_of_shot * lateral_distance * side_sign
+            current_forward = agent.me.forward.flatten().normalize()
+            desired_forward = (
+                left_of_shot
+                if current_forward.dot(left_of_shot)
+                >= current_forward.dot(-left_of_shot)
+                else -left_of_shot
             )
-            side_setup_distance = agent.me.location.flat_dist(side_setup)
+            side_standoff = (
+                92.75 + float(getattr(agent.me.hitbox, "width", 84.2)) * 0.5
+            )
+            side_target = (
+                best_ball_location - shot_direction * side_standoff
+            ).flatten()
+            staging_target = (
+                side_target - desired_forward * 650.0
+            ).flatten()
+            side_setup_distance = agent.me.location.flat_dist(staging_target)
+            side_setup_local = agent.me.local_location(staging_target)
+            side_turn_angle = abs(math.atan2(
+                side_setup_local.y, side_setup_local.x
+            ))
             side_setup_speed = max(
-                1000,
-                min(1700, agent.me.velocity.flatten().magnitude() + 500)
+                900.0,
+                min(2300.0, agent.me.velocity.flatten().magnitude() + 700.0)
             )
-            side_setup_local = agent.me.local_location(side_setup)
-            side_turn_angle = abs(Vector(x=1).angle2D(side_setup_local))
             side_setup_time = (
                 side_setup_distance / side_setup_speed
-                + side_turn_angle * 0.30
+                + side_turn_angle * 0.22
             )
             if (
-                time_to_intercept > side_setup_time + 0.35
-                and abs(side_setup.x) < 3900
-                and abs(side_setup.y) < 4900
+                time_to_intercept > side_setup_time + 0.25
+                and abs(side_target.x) < 3900
+                and abs(side_target.y) < 4900
+                and abs(staging_target.x) < 3900
+                and abs(staging_target.y) < 4900
             ):
                 routine = side_contact_jump_shot(
                     best_intercept_time
