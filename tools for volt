@@ -1,4 +1,4 @@
-from util.routines import Aerial, double_jump, ground_shot, jump_shot, side_shot, virxrlcu, wall_approach
+from util.routines import Aerial, double_jump, ground_shot, jump_shot, virxrlcu, wall_approach
 from util.utils import Vector, math, side, cap
 from util.grid_double_jump import find_double_jump as grid_find_double_jump
 
@@ -1759,9 +1759,7 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
                 and abs(side_setup.x) < 3900
                 and abs(side_setup.y) < 4900
             ):
-                routine = side_shot(
-                    best_intercept_time, best_targets, approach_side
-                )
+                routine = jump_shot(best_intercept_time, best_targets)
                 side_shot_selected = True
                 print(
                     f"[SHOT PLANNER] selected {approach_side} side_shot "
@@ -2218,9 +2216,7 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
                 and abs(side_setup.x) < 3900
                 and abs(side_setup.y) < 4900
             ):
-                routine = side_shot(
-                    best_intercept_time, approach_side=approach_side
-                )
+                routine = jump_shot(best_intercept_time, best_targets)
                 print(
                     f"[SHOT PLANNER] selected untargeted {approach_side} "
                     f"side_shot projected_x={projected_goal_x:.0f} "
