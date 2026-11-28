@@ -1002,3 +1002,16 @@ This file is the project handoff and change checklist. Read it before every code
 - The final dodge remains aligned to the predicted outgoing shot vector. Ordinary Aerial, double-jump, jump_shot, and side_shot controllers are otherwise unchanged.
 - Initial airborne height band is 120–850 uu; review in-game, especially crossbar-height and corner-to-crossbar approaches, before tuning it.
 - Not compiled or tested in Rocket League yet.
+
+
+## 16. Aerial and jump-shot contact validation — 2026-11-29
+
+- Reviewed RLBotPack Kamael's `Wings_Of_Justice`, `LeapOfFaith`, jump-simulation/validation helpers, and Molten's `aerial` and `shoot` mechanics before changing Volt.
+- The useful shared idea is to distinguish a predicted physical hitbox contact from merely reaching the ball's predicted centre or arriving at the planned intercept time.
+- Added shared short-horizon aerial-orientation prediction and an oriented hitbox-to-ball closest-point test in `routines of volt`. The test uses Volt's actual hitbox dimensions and local hitbox offset.
+- Jump-shot dodge now waits until the final 0.15 seconds and requires the predicted oriented hitbox to overlap the predicted ball sphere (with a small collision margin). The aligned-contact allowance also checks predicted forward alignment. This replaces the previous loose car-centre-to-approach-target distance as the dodge trigger.
+- Aerial final-flip input is now gated by the same predicted oriented hitbox contact test, rather than firing solely because the intercept time has reached 0.1 seconds. Ordinary aerial steering, boost estimation, launch selection, shot direction, and teamplay/shot-selection paths were left intact.
+- The current Volt jump-shot already shares the same Party Cannon post-impact shot-direction model used by King. I did not wholesale replace the routine with King's C# class: its `Arrive`, `Surface`, and `LocationAfterJump` runtime contracts are not drop-in equivalents for VirxERLU, and a blind rewrite would discard Volt's existing CLib reachability gate and custom wall/shot handling.
+- Source commits: `9c772aedd5a4c58094d5822428bc89e2a0ee20a5`, `5ac2fef6db65d347929963efa16f1761fa6e7346`, and `e5a15f189c86a2b726f41aeb3cbbc16d208945b6`.
+- No local compile or in-game test has been run for this change. Treat the contact margin as an initial value to validate from actual misses/touches.
+- Launcher caveat remains: root `rlbot.toml` loads `src/bot.toml`, which runs Noob Black. These edits are in Volt's separate `instructions for chatgpt on volt` / `routines of volt` code path and will not be exercised by the root launcher unless the user selects the Volt config/entrypoint.
