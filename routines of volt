@@ -5142,7 +5142,35 @@ class side_shot(jump_shot):
         self.side_mode = True
         self.side_lateral_distance = None
         self.approach_side = approach_side
+        self.side_setup_target = None
+        self.side_forward_world = None
+        self.side_forward_sign = None
+        self.side_flip_y = 1
+        self.side_last_debug_time = -1.0
 
+
+    def update(self, shot):
+        super().update(shot)
+        previous_normal = getattr(self, "contact_normal", None)
+        self.contact_label = getattr(
+            shot, "contact_label", getattr(self, "contact_label", None)
+        )
+        self.contact_normal = getattr(
+            shot, "contact_normal", getattr(self, "contact_normal", None)
+        )
+        self.contact_point = getattr(
+            shot, "contact_point", getattr(self, "contact_point", None)
+        )
+        self.contact_approach_target = getattr(
+            shot, "contact_approach_target",
+            getattr(self, "contact_approach_target", None)
+        )
+        if (
+            previous_normal is not None
+            and self.contact_normal is not None
+            and previous_normal.dot(self.contact_normal) < 0.95
+        ):
+            self.side_forward_sign = None
 
     def run(self, agent: VirxERLU):
         print(
@@ -5289,39 +5317,84 @@ class side_shot(jump_shot):
             )
 
         if self.side_mode:
-            # Rebuild the lateral setup from the latest predicted intercept
-            # every frame. The car approaches from the side opposite the goal.
-            left_of_shot = Vector(
-                -self.shot_vector.y,
-                self.shot_vector.x,
+            # Plan a side-face hit. The selected contact normal identifies
+            # which side of the ball the car can reach; the car's forward axis
+            # is then made perpendicular to the car-to-ball approach vector.
+            normal = getattr(self, "contact_normal", None)
+            if normal is None or normal.flatten().magnitude() < 0.001:
+                left_of_shot = Vector(
+                    -self.shot_vector.y, self.shot_vector.x, 0
+                ).normalize()
+                side_sign = 1 if self.approach_side == "right" else -1
+                normal = -left_of_shot * side_sign
+            else:
+                normal = normal.copy().flatten().normalize()
+
+            approach_direction = -normal
+            perpendicular = Vector(
+                -approach_direction.y, approach_direction.x, 0
+            ).normalize()
+
+            if self.side_forward_sign is None:
+                self.side_forward_sign = (
+                    1 if agent.me.forward.flatten().dot(perpendicular) >=
+                    agent.me.forward.flatten().dot(-perpendicular) else -1
+                )
+            self.side_forward_world = perpendicular * self.side_forward_sign
+            side_right = Vector(
+                -self.side_forward_world.y,
+                self.side_forward_world.x,
                 0
             ).normalize()
-            intercept_length = agent.me.location.flat_dist(
-                self.ball_location
+            self.side_flip_y = (
+                1 if side_right.dot(approach_direction) >= 0 else -1
             )
-            if self.side_lateral_distance is None:
-                self.side_lateral_distance = intercept_length * 0.5
-            lateral_distance = self.side_lateral_distance
-            side_sign = 1 if self.approach_side == "right" else -1
+
+            hitbox = agent.me.hitbox
+            half_width = float(getattr(hitbox, "width", 84.2)) * 0.5
+            local_offset = getattr(agent.me, "hitbox_offset", None)
+            if local_offset is None:
+                local_offset = getattr(hitbox, "offset", None)
+            world_offset = Vector()
+            if local_offset is not None:
+                world_offset = (
+                    self.side_forward_world * float(
+                        getattr(local_offset, "x", 0.0)
+                    )
+                    + side_right * float(getattr(local_offset, "y", 0.0))
+                    + Vector(z=float(getattr(local_offset, "z", 0.0)))
+                )
+
+            # Car-centre contact target and farther staging target are
+            # separate: the first is the actual side-hit geometry; the
+            # second gives the car runway to turn perpendicular before launch.
             self.offset_target = (
                 self.ball_location
-                - left_of_shot * lateral_distance * side_sign
+                + normal * (92.75 + half_width)
+                - world_offset
             )
-            self.contact_point = (
-                self.ball_location
-                - left_of_shot * 92.75 * side_sign
+            self.contact_point = self.ball_location + normal * 92.75
+            self.side_setup_target = (
+                self.offset_target + normal * 420.0
             )
-            self.contact_approach_target = self.offset_target.copy()
+            self.contact_approach_target = self.side_setup_target.copy()
+
             if (
-                self.last_side_debug_time < 0
-                or agent.time - self.last_side_debug_time >= 0.35
+                self.side_last_debug_time < 0
+                or agent.time - self.side_last_debug_time >= 0.35
             ):
-                self.last_side_debug_time = agent.time
+                self.side_last_debug_time = agent.time
                 print(
-                    f"[SIDE SHOT SETUP] intercept_distance={intercept_length:.0f} "
-                    f"lateral_distance={lateral_distance:.0f} "
-                    f"ball=({self.ball_location.x:.0f},{self.ball_location.y:.0f}) "
-                    f"setup=({self.offset_target.x:.0f},{self.offset_target.y:.0f})",
+                    f"[SIDE FLIP PLAN] label={self.contact_label} "
+                    f"approach=({approach_direction.x:.2f},"
+                    f"{approach_direction.y:.2f}) "
+                    f"forward=({self.side_forward_world.x:.2f},"
+                    f"{self.side_forward_world.y:.2f}) "
+                    f"flip_y={self.side_flip_y:+d} "
+                    f"contact=({self.offset_target.x:.0f},"
+                    f"{self.offset_target.y:.0f}) "
+                    f"setup=({self.side_setup_target.x:.0f},"
+                    f"{self.side_setup_target.y:.0f})",
                     flush=True
                 )
 
@@ -5537,7 +5610,11 @@ class side_shot(jump_shot):
 
         car_to_ball = self.ball_location - agent.me.location
         final_target = self.offset_target.copy().flatten()
-        drive_target = final_target.copy()
+        drive_target = (
+            self.side_setup_target.copy().flatten()
+            if self.side_mode and self.side_setup_target is not None
+            else final_target.copy()
+        )
         drive_distance_remaining = drive_target.flat_dist(agent.me.location)
         Tj = T - self.needed_jump_time * 1.15
         agent.dbg_2d(f"Needed jump time: {round(self.needed_jump_time, 2)}")
@@ -5631,17 +5708,43 @@ class side_shot(jump_shot):
             if velocity == 0:
                 velocity = 1
 
+            if self.side_mode and self.side_forward_world is not None:
+                # Use the runway to get to the selected side, then rotate the
+                # chassis perpendicular to the approach for a true side flip.
+                side_setup_distance = agent.me.location.flat_dist(
+                    self.side_setup_target
+                )
+                if side_setup_distance < 900 or T < (
+                    self.needed_jump_time * 1.15 + 0.65
+                ):
+                    defaultPD(
+                        agent,
+                        agent.me.local(self.side_forward_world).flatten()
+                    )
+
             local_offset_target = agent.me.local_location(self.offset_target.flatten())
             local_vf = agent.me.local(vf.flatten())
             time = speed_distance_remaining / (velocity + dodge_impulse(agent))
 
 
-            if (
-                (
-                    self.side_mode
-                    and distance_remaining < 180
+            side_ready = False
+            if self.side_mode and self.side_forward_world is not None:
+                forward_alignment = (
+                    agent.me.forward.flatten().normalize().dot(
+                        self.side_forward_world.normalize()
+                    )
+                )
+                side_contact_distance = agent.me.location.flat_dist(
+                    self.offset_target
+                )
+                side_ready = (
+                    side_contact_distance < 470
+                    and forward_alignment > 0.90
                     and T <= self.needed_jump_time * 1.08
                 )
+
+            if (
+                side_ready
                 or (
                     (
                         abs(velocity) < 100
@@ -5735,18 +5838,31 @@ class side_shot(jump_shot):
             # and above the car. This adds no waiting phase and leaves the
             # existing counter-3 dodge trigger intact.
             if self.counter < 3 and not self.dodging:
-                # Keep the original jump-shot power posture: pitch back (S)
-                # while the car rises, then let the existing forward/directional
-                # dodge drive the hitbox through the ball.
-                #
-                # Yaw toward the planned outgoing shot direction, not the
-                # instantaneous car-to-ball vector. The approach target was
-                # already built from the hitbox-aware centre contact, so this
-                # keeps the car behind that contact line without flattening
-                # the nose-up pitch that creates the power shot.
-                local_shot_direction, hold_s, _ = (
-                    self._set_jump_shot_orientation(agent)
-                )
+                if self.side_mode and self.side_forward_world is not None:
+                    # Keep the chassis perpendicular through takeoff; the
+                    # existing S-tilt is retained for an airborne ball.
+                    local_side_forward = agent.me.local(
+                        self.side_forward_world
+                    ).flatten()
+                    defaultPD(agent, local_side_forward)
+                    hold_s = (
+                        self.ball_location.z > 130
+                        and self.ball_location.z > agent.me.location.z + 65
+                        and not self.quick_shot
+                    )
+                    if hold_s:
+                        agent.controller.pitch = 1
+                        agent.controller.roll = (
+                            -0.20 * sign(agent.controller.yaw)
+                            if abs(agent.controller.yaw) > 0.08 else 0.0
+                        )
+                    local_shot_direction = local_side_forward
+                else:
+                    # Ordinary nose-first jump shots retain their exact
+                    # existing orientation controller.
+                    local_shot_direction, hold_s, _ = (
+                        self._set_jump_shot_orientation(agent)
+                    )
 
                 if not self._orientation_logged:
                     print(
@@ -5755,7 +5871,8 @@ class side_shot(jump_shot):
                         f"car_z={agent.me.location.z:.0f} "
                         f"shot_yaw=({local_shot_direction.x:.2f},"
                         f"{local_shot_direction.y:.2f}) "
-                        f"hold_S={hold_s} counter={self.counter}",
+                        f"hold_S={hold_s} counter={self.counter} "
+                        f"side_mode={self.side_mode}",
                         flush=True
                     )
                     self._orientation_logged = True
@@ -5799,9 +5916,14 @@ class side_shot(jump_shot):
 
                 # Only dodge if the target is still in front and close enough
                 # for the dodge to have a realistic chance of making contact.
+                contact_extent = float(getattr(
+                    agent.me.hitbox,
+                    "width" if self.side_mode else "length",
+                    84.2 if self.side_mode else 118.01
+                ))
                 close_enough = (
                     agent.me.location.dist(self.offset_target)
-                    < (92.75 + agent.me.hitbox.length) * 1.02
+                    < (92.75 + contact_extent) * 1.02
                 )
 
                 if close_enough and (local_target.x > 0 or self.side_mode):
@@ -5814,7 +5936,15 @@ class side_shot(jump_shot):
                         self.ball_location
                     ).flatten()
 
-                    if local_ball_for_dodge.magnitude() > 1:
+                    if self.side_mode:
+                        # Force a lateral dodge along the selected contact
+                        # normal; don't let local-x error turn it into a
+                        # frontflip or backflip.
+                        dodge_side = sign(local_ball_for_dodge.y)
+                        if dodge_side == 0:
+                            dodge_side = self.side_flip_y
+                        dodge_direction = Vector(y=dodge_side)
+                    elif local_ball_for_dodge.magnitude() > 1:
                         dodge_direction = local_ball_for_dodge.normalize()
                     else:
                         dodge_direction = Vector(x=1)
