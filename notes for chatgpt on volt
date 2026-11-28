@@ -990,3 +990,15 @@ This file is the project handoff and change checklist. Read it before every code
 - The shallow-zone `fast_intercept_finder` now performs a single-jump-only scan through the same 3-second window before searching normal/fast aerial candidates.
 - The parser still determines reachability; no extra jump height or reachability is fabricated. Requires boost (or unlimited boost) because the aerial jump-shot controller continuously boosts.
 - Not compiled or tested in Rocket League yet.
+
+
+## 16. AerialJumpShot correction — airborne low/mid contacts (2026-11-28)
+
+- AerialJumpShot is a dedicated single-jump aerial touch, not an unconditional-boost copy of Aerial.
+- It is eligible only when both the live ball and predicted contact are airborne (ball centre above 120 uu), the predicted contact is no higher than 850 uu, and the parser confirms a reachable single-jump shot within three seconds. The 850 uu ceiling intentionally includes crossbar-height contacts; higher balls remain with the normal aerial/double-jump planner.
+- The shot does not require a supplied goal target. The untargeted finder may select it; the routine still derives an outgoing contact direction from its existing ball/goal prediction logic.
+- On the ground, it now performs a turn-aware approach toward the predicted ball/contact lane before jumping. A low current speed no longer causes an immediate launch while the car is facing away. Ground setup uses throttle/steering without boost and caps approach speed while turning.
+- After the single jump, it retains the brief S pitch-back launch, then uses restrained A/D yaw and a small E-style bank instead of unrestricted roll corrections. It boosts during the pitch-back and thereafter only when facing the contact direction reasonably well and projected closing speed is below the estimated requirement.
+- The final dodge remains aligned to the predicted outgoing shot vector. Ordinary Aerial, double-jump, jump_shot, and side_shot controllers are otherwise unchanged.
+- Initial airborne height band is 120–850 uu; review in-game, especially crossbar-height and corner-to-crossbar approaches, before tuning it.
+- Not compiled or tested in Rocket League yet.
