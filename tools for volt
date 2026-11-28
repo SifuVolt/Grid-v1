@@ -1380,6 +1380,12 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
             )
             if abs(priority_location[1]) > 5212.75:
                 break
+            # Dedicated single-jump aerial shots are for airborne balls in
+            # a low/mid height band; 850 uu includes crossbar-height touches.
+            if not (120.0 < priority_location[2] <= 850.0):
+                continue
+            if agent.ball.location.z <= 120.0:
+                continue
             if _enemy_backwall_rebound(
                 agent,
                 priority_location,
@@ -1763,6 +1769,9 @@ def find_shot(agent, target, cap_=6, can_aerial=True, can_double_jump=True, can_
         best_shot["shot_type"] == 1
         and can_jump
         and time_to_intercept <= 3.0
+        and best_ball_z is not None
+        and 120.0 < best_ball_z <= 850.0
+        and agent.ball.location.z > 120.0
     ):
         routine = AerialJumpShot(best_intercept_time, best_targets)
         print(
@@ -1970,6 +1979,12 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
             )
             if abs(priority_location[1]) > 5212.75:
                 break
+            # Dedicated single-jump aerial shots are for airborne balls in
+            # a low/mid height band; 850 uu includes crossbar-height touches.
+            if not (120.0 < priority_location[2] <= 850.0):
+                continue
+            if agent.ball.location.z <= 120.0:
+                continue
             if _enemy_backwall_rebound(
                 agent,
                 priority_location,
@@ -2309,6 +2324,9 @@ def find_any_shot(agent, cap_=6, can_aerial=True, can_double_jump=True,
         best_shot['shot_type'] == 1
         and can_jump
         and time_to_intercept <= 3.0
+        and best_ball_z is not None
+        and 120.0 < best_ball_z <= 850.0
+        and agent.ball.location.z > 120.0
     ):
         routine = AerialJumpShot(best_intercept_time)
         contact = select_ball_contact(
