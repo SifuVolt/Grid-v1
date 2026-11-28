@@ -858,7 +858,7 @@ class double_jump:
         if direction_depth >= -0.20:
             return None
 
-        backwall_depth = -5120.0
+        backwall_depth = -6000.0
         backwall_distance = (
             (backwall_depth - ball_depth) / direction_depth
         )
