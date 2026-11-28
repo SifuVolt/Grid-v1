@@ -33,8 +33,12 @@ jobs:
       - name: Decompile King strategy assembly
         run: |
           dotnet tool install ilspycmd --tool-path /tmp/ilspy
-          /tmp/ilspy/ilspycmd /tmp/Bot.dll > King/Recovered/King.decompiled.cs
+          /tmp/ilspy/ilspycmd --referencepath /tmp /tmp/Bot.dll > King/Recovered/King.decompiled.cs
+          /tmp/ilspy/ilspycmd --referencepath /tmp /tmp/RedUtils.dll > King/Recovered/RedUtils.decompiled.cs
+          /tmp/ilspy/ilspycmd --referencepath /tmp -t RLBotDotNet.Bot /tmp/RLBotDotNet.dll > King/Recovered/RLBotDotNet.Bot.decompiled.cs
           test -s King/Recovered/King.decompiled.cs
+          test -s King/Recovered/RedUtils.decompiled.cs
+          test -s King/Recovered/RLBotDotNet.Bot.decompiled.cs
 
       - name: Commit recovered source
         run: |
