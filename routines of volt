@@ -3798,6 +3798,17 @@ class fast_intercept_finder:
                     fast_aerial=result_is_fast,
                 )
 
+            if (
+                shot_type == 1
+                and intercept_time - agent.time <= 3.0
+            ):
+                print(
+                    f"[FAST INTERCEPT] AerialJumpShot selected "
+                    f"T={intercept_time - agent.time:.2f}",
+                    flush=True
+                )
+                return AerialJumpShot(intercept_time)
+
             constructors = {
                 0: ground_shot,
                 1: jump_shot,
