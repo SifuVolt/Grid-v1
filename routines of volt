@@ -5914,6 +5914,7 @@ class side_contact_jump_shot:
         self.dodge_start = None
         self.last_debug = -1.0
         self.runway = 650.0
+        self.runup_started = False
 
     def update(self, shot):
         self.intercept_time = shot.intercept_time
@@ -6070,7 +6071,7 @@ class side_contact_jump_shot:
 
             # Fast travel to the staging point. Once there, steer only to the
             # perpendicular forward axis and keep throttle/boost on.
-            if staging_distance > 120:
+            if not self.runup_started and staging_distance > 120:
                 defaultDrive(agent, 2300, staging_local)
                 agent.controller.boost = bool(
                     agent.boost_amount != "unlimited"
@@ -6080,6 +6081,7 @@ class side_contact_jump_shot:
                     and speed < 2200
                 )
             else:
+                self.runup_started = True
                 local_forward = car.local(self.desired_forward).flatten()
                 defaultPD(agent, local_forward)
                 agent.controller.throttle = 1.0
@@ -6099,7 +6101,7 @@ class side_contact_jump_shot:
                 300.0, min(700.0, speed * (jump_max_duration + 0.10) + 90.0)
             )
             ready_to_jump = (
-                staging_distance <= 120
+                self.runup_started
                 and forward_alignment > 0.88
                 and side_distance > 0
                 and side_error <= 135
