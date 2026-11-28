@@ -899,3 +899,14 @@ This file is the project handoff and change checklist. Read it before every code
 - The corrected routine drives directly to the calculated side-contact car-centre target at 2300 target speed, uses available boost during the approach, starts the jump while still moving toward the target, then side-dodges using a wider geometric contact window. It no longer has a staging waypoint or slow final positioning phase.
 - The selector only considers this alternative for a poor-angle single-jump shot when boost is at least 12 (unless boost is unlimited), and uses a faster travel-time estimate. Normal jump shots remain the fallback.
 - This correction is committed only after static verification; compile and in-game testing remain outstanding.
+
+
+## 14. Perpendicular side-contact jump shot correction (2026-11-28)
+
+- The prior side-contact implementation calculated a perpendicular car heading but then drove directly toward the ball-side contact position. That made the steering controller point the nose toward the ball, contradicting the perpendicular side-hit geometry.
+- The corrected `side_contact_jump_shot` computes the desired outgoing impulse direction once, chooses the nearer of the two perpendicular car headings once, and locks both for the full approach and jump. It must not switch sides or rotate its nose toward the ball after takeoff.
+- The car now drives at 2300 target speed to a staging point 650 units behind the side-contact centre along its perpendicular forward axis. Within 120 units of staging, it aligns to that axis and drives straight into the side-contact window. Boost is optional for the routine; zero boost does not disable a mechanically valid side flip.
+- Jump timing uses measured forward speed, longitudinal ball position, side standoff, and hitbox height. The dodge is triggered only after the first jump hold has released and the ball is inside the side-contact window. Airborne PD steering toward the ball has been removed from this routine to preserve approach momentum.
+- The shot selector now allows side-contact for both ground-shot and single-jump candidates when the contact selector requests a left/right contact or the normal nose-first approach is materially misaligned. Goal-line side-shot selections in both targeted and untargeted finders now use the same perpendicular side-contact routine instead of the legacy `side_shot` controller.
+- The existing `WallShot.adjust_jump` correction and `wall_approach` / wall-drive systems were deliberately left intact. Normal jump shots still retain the wall-contact correction; side-contact shots bypass it because their side-hit geometry is computed independently.
+- No Python compile, RLBot simulation, or Rocket League in-game test has been run for this correction. Static source checks only; do not describe this as proven in-game.
