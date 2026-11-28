@@ -295,8 +295,8 @@ public class King : RUBot
 
 	public bool PathViable(Vec3 target, Boost boost, float maxDetour = 0.1f)
 	{
-		float eta = Drive.GetEta(Me, target, allowDodges: true);
-		float eta2 = Drive.GetEta(Me, boost.Location, Drive.ShouldDriveBackwrds(Me, boost.Location, isFlipping: true), allowDodges: true, out var boostUsed);
+		float eta = KingCompat.GetEtaAuto(Me, target, true);
+		float eta2 = KingCompat.GetEta(Me, boost.Location, KingCompat.ShouldDriveBackwards(Me, boost.Location, true), true, out var boostUsed);
 		Car car = new Car(Me)
 		{
 			Location = boost.Location,
@@ -305,7 +305,7 @@ public class King : RUBot
 			Right = -Me.Location.FlatDirection(boost.Location).Cross().Normalize(),
 			Up = Vec3.Up
 		};
-		if (eta2 + Drive.GetEta(car, target, allowDodges: true) - maxDetour < eta)
+		if (eta2 + KingCompat.GetEtaAuto(car, target, true) - maxDetour < eta)
 		{
 			return target.Dist(boost.Location) > 800f;
 		}
